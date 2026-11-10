@@ -1,0 +1,52 @@
+# 本地附件接口
+
+更新日期：2026-11-10。对应已实现的独立附件功能，政策草稿、提交及附件绑定尚未接入。
+
+## 存储和配置
+
+用户指定项目根目录 `data` 为存储根目录，本机最终位置：
+
+```text
+C:/Users/admin/Desktop/differentiated policy/data/
+  attachments/
+    <随机 UUID>/
+      content          文件原始内容，下载时恢复原文件名
+      metadata.json    上传者 ID、租户及文件展示信息
+```
+
+从项目根目录或 `backend/` 启动均定位到同一个 `data`，首次上传自动创建目录。其他工作目录或部署环境通过 `POLICY_STORAGE_ROOT` 指定绝对路径；值不含 `attachments`。Windows properties 使用正斜杠，例如 `POLICY_STORAGE_ROOT=C:/Users/admin/Desktop/differentiated policy/data`。
+
+`data/` 已加入 Git 忽略，不公开为静态资源。更新应用时保留整个目录，备份同时包含内容及元数据；不能仅复制 `content`。随机命名避免同名覆盖，原文件名不参与路径拼接。上传先写 `.upload-<UUID>`，验证和元数据写入完成后移动至最终目录；常规失败清理临时文件。强制结束进程可能遗留 `.upload-*`，不对外提供访问；管理员应在服务停止后核对清理。
+
+## 当前工程限制
+
+- 每请求一个非空文件，最大 20MiB（界面显示 20MB），multipart 总大小最大 21MiB。前端当前表单最多添加 10 个，这是页面限制，不是服务端用户总配额或未来政策业务限制。
+- 支持 `pdf/doc/docx/xls/xlsx/png/jpg/jpeg`；文件名最多 180 字符，拒绝目录分隔符、控制字符及 Windows 非法字符。
+- 后端检查扩展名和文件头；docx/xlsx 另检查 ZIP 目录中对应文档入口并拒绝 VBA 包。不执行、不解压、不在线预览文件；这些检查不等于病毒扫描或完整格式校验，旧版 doc/xls 仅检查 OLE 文件头。
+- 每次操作查询当前用户记录，拒绝停用或身份失效账号。仅上传者可下载或移除，ADMIN 也不能直接访问他人的独立附件。
+- 尚未关联 `policy_master.attachment_info`，上传不表示政策保存或提交成功；刷新后列表不自动恢复，磁盘文件仍保留。当前无独立附件列表、用户配额或自动清理，人工整理须核对元数据及附件 ID，不能按文件年龄盲删。
+- 超时或网络中断时结果可能不明，不自动重放上传。后续接入草稿时应增加附件绑定、列表恢复、幂等上传和未绑定文件清理，并按父申请校验访问与删除权限；已提交和历史附件不可沿用当前直接删除规则。
+- 链接输入仍是页面状态，不抓取远端文件、不视为已校验或持久化。
+
+## 已实现接口
+
+使用现有 HttpSession；写请求需可信 `Origin` 和 `X-Policy-Request: 1`。响应禁止缓存，不暴露磁盘路径和上传者信息。无需建表或修改 SQL。
+
+| 方法 | 路径 | 请求 | 成功 |
+| --- | --- | --- | --- |
+| POST | `/api/attachments` | multipart 字段 `file` | 201，附件信息 |
+| GET | `/api/attachments/{id}/content` | 本人附件 UUID | 200，原始字节，强制下载 |
+| DELETE | `/api/attachments/{id}` | 本人独立附件 UUID | 204 |
+
+上传返回 `id`、`originalName`、`size`（字节）、`contentType`（服务端推导）、`uploadedAt`（Instant）。下载固定返回 `application/octet-stream`、`Content-Disposition: attachment` 和 `X-Content-Type-Options: nosniff`。
+
+| HTTP | code | 含义 |
+| --- | --- | --- |
+| 400 | ATTACHMENT_INVALID | 文件为空、缺 file、文件名/类型/内容不符或 multipart 错误 |
+| 401 | LOGIN_REQUIRED | 未登录或会话失效 |
+| 403 | REQUEST_ORIGIN_DENIED / ATTACHMENT_ACCESS_DENIED | 请求来源不可信或账号不可用 |
+| 404 | ATTACHMENT_NOT_FOUND | ID 无效、不存在或非本人/跨租户，隐藏存在性 |
+| 413 | ATTACHMENT_TOO_LARGE | 文件或请求超限 |
+| 503 | ATTACHMENT_STORAGE_UNAVAILABLE | 文件存储、元数据或账号存储不可用 |
+
+自动化使用临时目录和模拟账号/会话，不写真实业务表。真实飞书客户端文件选择和下载需在后端重启后人工验证。
