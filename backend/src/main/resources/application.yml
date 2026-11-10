@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: differentiated-policy
+  config:
+    # IDEA may use the repository root; scripts use backend/ as their working directory.
+    import:
+      - optional:file:backend/.env.local.properties
+      - optional:file:.env.local.properties
+  jackson:
+    time-zone: Asia/Shanghai
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+feishu:
+  app-id: ${FEISHU_APP_ID:cli_aa64531940e15c1e}
+  app-secret: ${FEISHU_APP_SECRET:}
+  allowed-origins: ${FEISHU_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+knife4j:
+  # The documentation UI remains available at /doc.html. Disable the optional
+  # Knife4j 4.5 enhancement customizer, which is incompatible with Springdoc 2.8.
+  enable: false
+springdoc:
+  api-docs:
+    path: /v3/api-docs
