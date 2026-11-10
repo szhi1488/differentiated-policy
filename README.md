@@ -70,9 +70,11 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 所有 `/api/**` 默认需登录，只有公开配置、SDK 签名、登录 challenge/交换和退出接口放行。写请求统一校验 `Origin` 属于 `FEISHU_ALLOWED_ORIGINS` 且有 `X-Policy-Request: 1` 请求头，无跨域放行。使用 Knife4j/调试工具请求 POST 时也需这些请求头。登录 state 在 3 分钟内一次有效，成功后轮换会话 ID；前端不能自行提交姓名、open_id 或角色作为身份。登录创建用户只授予 APPLICANT，已有角色从数据库读取；管理员业务权限另行实现。
 
-## 数据库设计文档
+## 模块化文档与数据库设计
 
-四张业务表的结构、字段约定、草稿与审核历史处理方式见 [数据库设计](docs/database-design.md)。在 Navicat 新建空表时使用 [V1 建表脚本](docs/sql/V1__create_policy_tables.sql)，适用 MySQL 8.0.16 及以上，执行前先选择目标数据库并确认没有同名表。
+架构、业务规约、状态机、覆盖 SQL 草案及申请人/管理员接口设计统一见 [docs 文档索引](docs/README.md)。接口和覆盖算法文档明确区分已实现能力与待实现草案。
+
+四张业务表的结构、字段约定、草稿与审核历史处理方式见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 新建空表时使用 [完整建表入口](docs/sql/schema.sql)（[V1 版本脚本](docs/sql/V1__create_policy_tables.sql)，内容相同，二选一），适用 MySQL 8.0.16 及以上，执行前先选择目标数据库并确认没有同名表。
 
 用户最新 Navicat 截图显示四表均已存在，本次已实际回读核对 `user_info` 所需字段，未重建或改动表结构。后三张政策表未接入业务持久化，机型主数据标识、覆盖规则等待确认事项见设计文档。
 
