@@ -1,4 +1,4 @@
-# Local credentials and environment overrides
+# 本地凭证与环境覆盖配置
 .env
 .env.*
 !.env.example
@@ -6,7 +6,7 @@
 **/application-local.yml
 **/application-local.properties
 
-# Build outputs and local dependency caches
+# 构建产物与本地依赖缓存
 node_modules/
 dist/
 target/
@@ -14,7 +14,7 @@ target/
 .research/
 *.log
 
-# IDE / OS files
+# IDE 与操作系统生成的文件
 .idea/
 *.iml
 .DS_Store

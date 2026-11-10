@@ -1,37 +1,112 @@
-:root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #1e293b; background: #f5f7fb; font-synthesis: none; text-rendering: optimizeLegibility; }
-* { box-sizing: border-box; }
-body { margin: 0; }
-button, a { -webkit-tap-highlight-color: transparent; }
-.shell { min-height: 100vh; }
-.topbar { height: 76px; padding: 0 6vw; background: white; border-bottom: 1px solid #e5eaf2; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.brand { display: inline-flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; font-size: 17px; font-weight: 650; }
-.brand-mark { display: grid; place-items: center; background: #315be8; color: white; border-radius: 10px; width: 36px; height: 36px; font-size: 18px; }
-.dev-tag { border: 1px solid #dde5f4; background: #f7f9fe; color: #61708b; border-radius: 6px; padding: 5px 10px; font-size: 12px; white-space: nowrap; }
-main { max-width: 780px; padding: 64px 24px 40px; margin: 0 auto; }
-.eyebrow { color: #315be8; letter-spacing: .08em; font-size: 12px; font-weight: 600; margin: 0 0 14px; }
-h1 { margin: 0; font-size: clamp(28px, 4vw, 36px); letter-spacing: -.03em; }
-.intro { color: #66758b; font-size: 15px; line-height: 1.8; margin: 14px 0 30px; }
-.connection-card { background: white; border: 1px solid #e1e7f0; border-radius: 16px; padding: 30px; box-shadow: 0 8px 30px #253b6205; }
-.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-h2 { margin: 0; font-size: 17px; font-weight: 650; }
-.status-badge { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; background: #eef3ff; color: #315be8; border-radius: 24px; padding: 6px 11px; }
-.status-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-badge.browser { color: #886414; background: #fff6dc; }
-.status-badge.ready { color: #167a57; background: #eaf8f1; }
-.status-badge.error { color: #b33c48; background: #fff0f1; }
-.status-message { font-size: 14px; color: #5b6b80; line-height: 1.8; margin: 18px 0 24px; }
-.details { border-top: 1px solid #eef1f6; margin: 0 0 26px; padding: 12px 0 0; }
-.details div { display: flex; justify-content: space-between; gap: 20px; padding: 11px 0; font-size: 14px; }
-dt { color: #778397; flex-shrink: 0; }
-dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-.app-id { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
-button { background: #315be8; color: white; border: 0; border-radius: 8px; padding: 12px 20px; font: inherit; font-size: 14px; cursor: pointer; }
-button:hover { background: #264ac6; }
-button:disabled { opacity: .55; cursor: wait; }
-button:focus-visible, a:focus-visible { outline: 3px solid #97b2ff; outline-offset: 4px; }
-.next-step { display: flex; align-items: flex-start; gap: 18px; margin-top: 26px; padding: 8px 2px; }
-.step-number { border-radius: 6px; background: #e9edf5; color: #687991; padding: 6px 8px; font-size: 11px; white-space: nowrap; }
-.next-step h2 { font-size: 14px; line-height: 1.8; }
-.next-step p { font-size: 13px; color: #778397; line-height: 1.9; margin: 6px 0 0; }
-footer { text-align: center; color: #93a0b2; font-size: 12px; padding: 20px 24px 32px; }
-@media (max-width: 520px) { .topbar { padding: 0 20px; height: 66px; } .brand { font-size: 15px; gap: 9px; } main { padding: 38px 18px 24px; } .connection-card { padding: 22px 18px; } .details div { gap: 12px; } .next-step { gap: 12px; } }
+@import url('./workspace.css');
+:root {
+  font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  color: #25334b;
+  background: #f3f6fc;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-size: 13px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #a8c9ff;
+  outline-offset: 3px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #77a6ff;
+  box-shadow: 0 0 0 3px #347dff12;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+button.primary,
+button.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 9px 19px;
+  border-radius: 5px;
+  border: 1px solid #327dff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+button.primary {
+  background: linear-gradient(180deg, #468bff, #2875f9);
+  color: white;
+  box-shadow: 0 3px 7px #317dff1a;
+}
+button.primary:hover {
+  background: #2269e7;
+}
+button.secondary {
+  background: white;
+  border-color: #dee5f0;
+  color: #4a5870;
+}
+button.secondary:hover {
+  background: #f5f8ff;
+}
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at top, #e7efff, #f5f7fb 65%);
+}
+.login-card {
+  width: min(440px, 100%);
+  padding: 36px;
+  background: white;
+  border: 1px solid #e4ebf6;
+  border-radius: 14px;
+  box-shadow: 0 15px 60px #22478108;
+}
+.login-card .workspace-brand {
+  margin-bottom: 30px;
+  padding: 0;
+}
+.login-card h1 {
+  font-size: 23px;
+  margin-bottom: 13px;
+}
+.login-card p {
+  color: #7c879a;
+  line-height: 1.9;
+  margin-bottom: 25px;
+}
+.login-card .primary {
+  width: 100%;
+}

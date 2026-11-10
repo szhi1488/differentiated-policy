@@ -2,12 +2,26 @@ spring:
   application:
     name: differentiated-policy
   config:
-    # IDEA may use the repository root; scripts use backend/ as their working directory.
+    # 兼容 IDEA 从项目根目录启动，以及脚本从 backend/ 目录启动。
     import:
       - optional:file:backend/.env.local.properties
       - optional:file:.env.local.properties
   jackson:
     time-zone: Asia/Shanghai
+  datasource:
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/differentiated%20policy?connectionTimeZone=Asia/Shanghai&characterEncoding=UTF-8}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      connection-timeout: 5000
+      initialization-fail-timeout: -1
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    banner: false
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${SERVER_PORT:8080}
@@ -28,8 +42,8 @@ feishu:
   app-secret: ${FEISHU_APP_SECRET:}
   allowed-origins: ${FEISHU_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
 knife4j:
-  # The documentation UI remains available at /doc.html. Disable the optional
-  # Knife4j 4.5 enhancement customizer, which is incompatible with Springdoc 2.8.
+  # /doc.html 接口文档页面仍可使用；关闭与 Springdoc 2.8 不兼容的
+  # Knife4j 4.5 可选增强定制功能。
   enable: false
 springdoc:
   api-docs:

@@ -12,15 +12,15 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-@Component
-public class HttpFeishuApiTransport implements FeishuApiTransport {
+@Service
+public class FeishuApiTransportImpl implements FeishuApiTransport {
     private static final String ORIGIN = "https://open.feishu.cn";
     private final HttpClient client;
     private final ObjectMapper mapper;
 
-    public HttpFeishuApiTransport(HttpClient client, ObjectMapper mapper) {
+    public FeishuApiTransportImpl(HttpClient client, ObjectMapper mapper) {
         this.client = client;
         this.mapper = mapper;
     }
@@ -34,9 +34,14 @@ public class HttpFeishuApiTransport implements FeishuApiTransport {
         }
         try {
             String origin = path.equals("/oauth/v3/token") ? "https://accounts.feishu.cn" : ORIGIN;
-            var builder = HttpRequest.newBuilder(URI.create(origin + path))
-                    .timeout(Duration.ofSeconds(10)).header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8));
+            var builder =
+                    HttpRequest.newBuilder(URI.create(origin + path))
+                            .timeout(Duration.ofSeconds(10))
+                            .header("Content-Type", "application/json")
+                            .POST(
+                                    HttpRequest.BodyPublishers.ofString(
+                                            mapper.writeValueAsString(body),
+                                            StandardCharsets.UTF_8));
             if (bearerToken != null) {
                 builder.header("Authorization", "Bearer " + bearerToken);
             }
@@ -48,28 +53,45 @@ public class HttpFeishuApiTransport implements FeishuApiTransport {
 
     @Override
     public JsonNode getUserInfo(String bearerToken) {
-        var request = HttpRequest.newBuilder(URI.create(ORIGIN + "/open-apis/authen/v1/user_info"))
-                .timeout(Duration.ofSeconds(10)).header("Authorization", "Bearer " + bearerToken).GET().build();
+        var request =
+                HttpRequest.newBuilder(URI.create(ORIGIN + "/open-apis/authen/v1/user_info"))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Authorization", "Bearer " + bearerToken)
+                        .GET()
+                        .build();
         return send(request, false);
     }
 
     private JsonNode send(HttpRequest request, boolean oauth) {
         try {
-            var response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            var response =
+                    client.send(
+                            request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             JsonNode payload = mapper.readTree(response.body());
             if (oauth && payload != null && payload.path("code").isIntegralNumber()) {
                 int code = payload.path("code").intValue();
                 if (code == 20003 || code == 20004 || code == 20024 || code == 20065) {
-                    throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED,
-                            "FEISHU_CODE_INVALID", "飞书授权码已失效，请重新授权登录。");
+                    throw new ApiException(
+                            org.springframework.http.HttpStatus.UNAUTHORIZED,
+                            "FEISHU_CODE_INVALID",
+                            "飞书授权码已失效，请重新授权登录。");
                 }
-                if (code == 20008 || code == 20009 || code == 20010 || code == 20066 || code == 20069) {
-                    throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
-                            "FEISHU_ACCESS_DENIED", "当前用户无法使用此应用，请联系管理员检查应用状态和可用范围。");
+                if (code == 20008
+                        || code == 20009
+                        || code == 20010
+                        || code == 20066
+                        || code == 20069) {
+                    throw new ApiException(
+                            org.springframework.http.HttpStatus.FORBIDDEN,
+                            "FEISHU_ACCESS_DENIED",
+                            "当前用户无法使用此应用，请联系管理员检查应用状态和可用范围。");
                 }
             }
-            if (response.statusCode() != 200 || payload == null || !payload.path("code").isIntegralNumber()
-                    || !payload.path("code").canConvertToInt() || payload.path("code").intValue() != 0) {
+            if (response.statusCode() != 200
+                    || payload == null
+                    || !payload.path("code").isIntegralNumber()
+                    || !payload.path("code").canConvertToInt()
+                    || payload.path("code").intValue() != 0) {
                 throw ApiException.upstream();
             }
             return payload;

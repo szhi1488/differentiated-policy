@@ -1,7 +1,7 @@
 import { getJsSdkSignature } from '../api/feishu'
 import { feishuFailure } from './feishu-error'
 
-// Fixed version recommended by the Feishu H5 documentation.
+// 使用飞书 H5 官方文档推荐的固定版本。
 export const FEISHU_SDK_URL = 'https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.48.js'
 let scriptPromise
 let initializationPromise
@@ -11,13 +11,17 @@ export function isFeishuClient(userAgent = navigator.userAgent) {
 }
 
 export function getSigningUrl(href = window.location.href) {
-  // Do not decode, sort, or reconstruct the query: these exact bytes are signed.
+  // 签名使用原始 URL 字节，不得对查询参数解码、排序或重组。
   return href.split('#')[0]
 }
 
 export function loadFeishuSdk() {
-  if (window.h5sdk) return Promise.resolve(window.h5sdk)
-  if (scriptPromise) return scriptPromise
+  if (window.h5sdk) {
+    return Promise.resolve(window.h5sdk)
+  }
+  if (scriptPromise) {
+    return scriptPromise
+  }
   scriptPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script')
     const timer = setTimeout(() => fail(), 15000)
@@ -32,7 +36,9 @@ export function loadFeishuSdk() {
     script.async = true
     script.onerror = fail
     script.onload = () => {
-      if (!window.h5sdk) return fail()
+      if (!window.h5sdk) {
+        return fail()
+      }
       clearTimeout(timer)
       resolve(window.h5sdk)
     }
@@ -49,16 +55,23 @@ export function configureFeishuSdk(sdk, signature, timeoutMs = 15000) {
     let settled = false
     let configured = false
     let bridgeReady = false
-    const timer = setTimeout(() => fail('飞书初始化超时，请检查客户端和可信域名配置后重试。'), timeoutMs)
+    const timer = setTimeout(
+      () => fail('飞书初始化超时，请检查客户端和可信域名配置后重试。'),
+      timeoutMs,
+    )
     function fail(message = '飞书 JS-SDK 鉴权失败，请检查应用凭证和可信域名配置。') {
-      if (settled) return
+      if (settled) {
+        return
+      }
       settled = true
       clearTimeout(timer)
       reject(new Error(message))
     }
     function finish() {
-      // Version 1.5.48 may call ready even when config failed.
-      if (settled || !configured || !bridgeReady) return
+      // 1.5.48 版本即使 config 失败，也可能触发 ready 回调。
+      if (settled || !configured || !bridgeReady) {
+        return
+      }
       settled = true
       clearTimeout(timer)
       resolve()
@@ -71,10 +84,18 @@ export function configureFeishuSdk(sdk, signature, timeoutMs = 15000) {
         nonceStr: signature.nonceStr,
         signature: signature.signature,
         jsApiList: signature.jsApiList,
-        onSuccess() { configured = true; finish() },
-        onFail(error) { fail(feishuFailure('飞书 JS-SDK 鉴权', error).message) },
+        onSuccess() {
+          configured = true
+          finish()
+        },
+        onFail(error) {
+          fail(feishuFailure('飞书 JS-SDK 鉴权', error).message)
+        },
       })
-      sdk.ready(() => { bridgeReady = true; finish() })
+      sdk.ready(() => {
+        bridgeReady = true
+        finish()
+      })
     } catch {
       fail()
     }
@@ -82,14 +103,20 @@ export function configureFeishuSdk(sdk, signature, timeoutMs = 15000) {
 }
 
 export function initializeFeishuSdk() {
-  if (!isFeishuClient()) return Promise.reject(new Error('请在飞书客户端中打开此网页。'))
-  if (initializationPromise) return initializationPromise
-  // Always sign the actual document URL, including query and excluding fragment.
+  if (!isFeishuClient()) {
+    return Promise.reject(new Error('请在飞书客户端中打开此网页。'))
+  }
+  if (initializationPromise) {
+    return initializationPromise
+  }
+  // 始终对当前页面的真实 URL 签名，保留查询参数并去掉片段标识。
   const url = getSigningUrl()
   initializationPromise = (async () => {
     const sdk = await loadFeishuSdk()
     const signature = await getJsSdkSignature(url)
     await configureFeishuSdk(sdk, signature)
-  })().finally(() => { initializationPromise = undefined })
+  })().finally(() => {
+    initializationPromise = undefined
+  })
   return initializationPromise
 }

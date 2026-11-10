@@ -31,13 +31,20 @@ public class FeishuController {
     @GetMapping("/config")
     @Operation(summary = "读取公开应用配置", description = "sdkEnabled 仅表示后端配置完整；响应不包含 App Secret。")
     public ResponseEntity<FeishuConfigResponse> config() {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
                 .body(new FeishuConfigResponse(properties.getAppId(), properties.isConfigured()));
     }
 
     @PostMapping("/js-sdk/signature")
-    @Operation(summary = "生成当前页面的 JS-SDK 签名", description = "只接受 allowed-origins 中的页面来源；错误返回 {code,message}，包括 400 参数错误、503 未配置、502 上游不可用。")
-    public ResponseEntity<JsSdkSignatureResponse> signature(@Valid @RequestBody JsSdkSignatureRequest request) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(signatureService.sign(request.url()));
+    @Operation(
+            summary = "生成当前页面的 JS-SDK 签名",
+            description =
+                    "只接受 allowed-origins 中的页面来源；错误返回 {code,message}，包括 400 参数错误、503 未配置、502 上游不可用。")
+    public ResponseEntity<JsSdkSignatureResponse> signature(
+            @Valid @RequestBody JsSdkSignatureRequest request) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(signatureService.sign(request.url()));
     }
 }

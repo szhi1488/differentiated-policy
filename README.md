@@ -2,7 +2,15 @@
 
 已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书 JS-SDK、网页应用用户免登和服务端会话。
 
-当前范围是本地开发接入。用户身份通过飞书授权码交换与用户信息接口核验；管理员权限、业务表单和数据库尚未接入。SDK 鉴权与用户登录是两个独立步骤。
+当前范围是本地申请人页面及登录落库。飞书登录成功后默认进入申请人工作台，侧栏只有「政策提交 → 提交政策 / 我的提交」，同一个表单通过渠道切换零售、百亿；无视角页签、顶部搜索、消息或头像。已复刻基础信息、政策时间、平台机型补贴、附件与说明区域。政策提交、我的提交查询、机型库与附件上传尚未接入，页面不会伪报提交或上传成功。SDK 鉴权与用户登录是两个独立步骤。
+
+已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。管理员业务接口尚未开发。
+
+后端包结构约定：`controller` 接收请求，`dto` 定义请求对象，`vo` 定义响应对象，`entity` 映射数据库，`mapper` 执行持久化操作。服务接口放在 `service`，对应实现放在 `service.impl` 并命名为 `接口名Impl`；Controller 和服务之间通过接口注入，组件及事务注解放在实现类。`common.config` 负责配置注册，`common.interceptor` 承担登录态与请求来源校验。登录 challenge 响应独立为 `LoginChallengeResponse`。
+
+前端目录约定：`api/request.js` 负责公共请求、超时和错误处理，其他 `api/` 模块定义业务接口；`constants/` 放固定选项，`composables/` 管理表单状态与交互，`utils/` 放纯函数。申请人工作台负责布局，表单、明细表格等拆分在 `views/apply/components/`；通用组件放在 `components/`。列表使用稳定标识，组件通过 props / emit 或 v-model 交互。
+
+源码说明性注释使用中文。根目录 `.editorconfig` 统一编码和缩进；前端通过 ESLint / Prettier 检查未使用变量、控制语句、Vue 组件和格式，后端通过 Spotless 统一 Java 导入与格式。日常检查和格式修复命令见下文。
 
 ## 本地启动
 
@@ -36,7 +44,7 @@
 4. 在「安全设置 → 重定向 URL」添加 `http://127.0.0.1:5173/`。使用 localhost 时另添加 `http://localhost:5173/`。**即使 requestAccess 不跳转页面，也必须配置这一项**：飞书会验证调用页面的完整地址，H5 可信域名不能替代重定向 URL。若后续页面路径改变，也需配置实际路径；去掉查询串和 fragment。
 5. 确认应用已启用，在测试应用或版本管理中将调试用户加入可用范围；按后台要求保存，并使对应配置在当前测试版本生效。
 6. 当前免登只获取基本身份，`tt.requestAccess` 的 `scopeList` 为空；不需额外申请通讯录、手机号、邮箱或 `offline_access` 权限。首次进入如飞书显示授权提示，由用户完成授权。
-7. 重新启动本地后端，从当前电脑的飞书客户端（推荐 6.9+）打开网页应用。成功时显示「已登录」及真实姓名；刷新页面应恢复会话，点击「退出当前应用」后可再次授权登录。旧客户端缺少 requestAccess 或返回 errno 103 时，按官方指南使用 requestAuthCode 兼容；授权被拒绝或配置错误时不会降级重试。
+7. 重新启动本地后端，从当前电脑的飞书客户端（推荐 6.9+）打开网页应用。成功保存用户后直接进入申请人「提交政策」页面，刷新可恢复会话。页面按最新要求不显示头像或用户菜单；退出 API 保留。旧客户端缺少 requestAccess 或返回 errno 103 时兼容 requestAuthCode；授权被拒绝或配置错误时不会降级重试。
 
 当前使用客户端 `requestAccess` 返回 code，无需编写单独的 OAuth 回调页面，但必须把调用页面配置进飞书后台的重定向 URL 列表。普通浏览器扫码登录未实现。若后台界面拒绝本机 HTTP 地址，请使用实际可访问的 HTTPS 测试域名，并同步修改主页、H5 可信域名、重定向 URL 及 `FEISHU_ALLOWED_ORIGINS`。
 
@@ -53,34 +61,52 @@
 5. 前端注册 `h5sdk.error` 后调用 `h5sdk.config` 和 `h5sdk.ready`；仅在 config 成功且 ready 到达后继续。当前 `jsApiList` 为空；`requestAccess` 本身用于取得登录授权，后续新增需鉴权的 API 时再补充该列表。
 6. 先读取 `GET /api/auth/session` 恢复已有会话；无会话时完成 SDK 初始化，通过 `POST /api/auth/challenge` 获取绑定当前 Cookie 的随机 state，再调用 `tt.requestAccess({appID, scopeList: [], state})`。客户端授权码有效期 3 分钟且仅能使用一次。
 7. 前端将 `{code,state}` 提交至 `POST /api/auth/feishu/login`。后端消费 state，向 `https://accounts.feishu.cn/oauth/v3/token` 交换 `access_token`，再通过 `GET https://open.feishu.cn/open-apis/authen/v1/user_info` 获取真实身份。
-8. 后端轮换 Session ID，保存 `tenantKey + openId`、姓名及到期时间；前端只收到身份及会话到期时间，不接收飞书 token。刷新时恢复服务端会话；失败后重新取得 state/code，不自动重放旧 code。
-9. `POST /api/auth/logout` 使当前应用会话失效，不会退出飞书客户端。退出后本页不立即自动免登，用户可主动点击重新登录。
+8. 后端先在事务中保存飞书核验的身份至 `user_info`，再轮换 Session ID，保存本地用户 ID、角色、身份及到期时间；前端只收到身份及会话到期时间，不接收飞书 token。刷新时恢复服务端会话；失败后重新取得 state/code，不自动重放旧 code。
+9. `POST /api/auth/logout` 使当前应用会话失效，不会退出飞书客户端；当前申请人页面不显示退出入口。
 
 App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁止缓存。SDK 初始化失败支持重试。应用 token 和 ticket 在单后端进程内缓存并在过期前刷新，每次签名生成新的 nonce。用户 token 仅在本次后端调用中使用，不落库、不保留刷新令牌。
 
 应用会话使用 `POLICY_SESSION` Cookie（HttpOnly、SameSite=Lax、仅 Cookie 跟踪），闲置 30 分钟到期，最长不超过 2 小时及飞书 token 返回的有效期；后端重启会清空会话。该会话不是飞书实时登录状态订阅，用户撤销飞书授权不会即时清除既有应用会话；到期重新授权。多实例部署前需接入共享会话和缓存。
 
-所有 `/api/**` 默认需登录，只有公开配置、SDK 签名、登录 challenge/交换和退出接口放行。写请求统一校验 `Origin` 属于 `FEISHU_ALLOWED_ORIGINS` 且有 `X-Policy-Request: 1` 请求头，无跨域放行。使用 Knife4j/调试工具请求 POST 时也需这些请求头。登录 state 在 3 分钟内一次有效，成功后轮换会话 ID；前端不能自行提交姓名、open_id 或角色作为身份。当前只确定应用内身份键，不创建数据库用户，不授予任何人管理员身份；管理员名单及业务权限规则后续确认后再实现。
+所有 `/api/**` 默认需登录，只有公开配置、SDK 签名、登录 challenge/交换和退出接口放行。写请求统一校验 `Origin` 属于 `FEISHU_ALLOWED_ORIGINS` 且有 `X-Policy-Request: 1` 请求头，无跨域放行。使用 Knife4j/调试工具请求 POST 时也需这些请求头。登录 state 在 3 分钟内一次有效，成功后轮换会话 ID；前端不能自行提交姓名、open_id 或角色作为身份。登录创建用户只授予 APPLICANT，已有角色从数据库读取；管理员业务权限另行实现。
+
+## 数据库设计文档
+
+四张业务表的结构、字段约定、草稿与审核历史处理方式见 [数据库设计](docs/database-design.md)。在 Navicat 新建空表时使用 [V1 建表脚本](docs/sql/V1__create_policy_tables.sql)，适用 MySQL 8.0.16 及以上，执行前先选择目标数据库并确认没有同名表。
+
+用户最新 Navicat 截图显示四表均已存在，本次已实际回读核对 `user_info` 所需字段，未重建或改动表结构。后三张政策表未接入业务持久化，机型主数据标识、覆盖规则等待确认事项见设计文档。
+
+本机数据库为 `127.0.0.1:3306` 下的 `differentiated policy`（库名包含空格，JDBC URL 使用 `differentiated%20policy`）。连接使用 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`，真实凭证只保存在被忽略的 `backend/.env.local.properties`；新环境参考 `.env.example`。应用不自动建表、不初始化真实业务数据。修改后须重启后端，让新登录经过落库；已有旧进程内会话不代表已写入 user_info。
 
 ## 验证与依赖
 
 ```powershell
 cd frontend
 npm.cmd ci --cache ../.local-cache/npm --no-audit --no-fund
-npm.cmd test
-npm.cmd run build
+npm.cmd run check
 ```
 
 ```powershell
 cd backend
-mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' test
+mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' verify
 ```
 
 测试覆盖 SDK 时序与失败判定、签名固定向量、URL 白名单/查询串保留、票据缓存/刷新与并发，以及免登最小权限、授权失败/超时/重试、重复请求合并、state 绑定与过期/重放拦截、会话轮换/恢复/退出/到期、接口鉴权与错误脱敏。自动化测试使用虚拟凭证和模拟上游，不依赖真实飞书 API；真实免登结果单独记录如下。
 
-2026-11-10 本机验证：前端现为 17 项测试与生产构建通过，新增 SDK 错误码脱敏、内层错误码提取与旧客户端兼容验证；后端此前 33 项测试及 JAR 打包通过，包括登录流程与既有配置加载、签名和文档回归。新 JAR 独立端口 HTTP 检查确认 Cookie 含 HttpOnly/SameSite=Lax，未登录与错误 state 返回 401，非可信来源返回 403，退出返回 204，OpenAPI 含登录接口。排查时实际读取飞书页面确认 SDK 鉴权通过、requestAccess 返回 2700002，核对官方文档后纠正了遗漏重定向 URL 的配置说明；随后用户明确确认「现在已经登录上了」，真实客户端免登已由用户验证成功。远端配置未由 Agent 操作，未回读配置明细；刷新恢复、退出后重登仍仅有自动化验证，不宣称已在客户端逐项实测。
+`npm.cmd run check` 依次运行 ESLint、Prettier 格式检查、测试和生产构建；Maven `verify` 执行测试、打包及 Spotless 格式检查。自动修复格式：在 `frontend/` 运行 `npm.cmd run format`，在 `backend/` 运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' spotless:apply`；修复后检查差异。
 
-后端依赖为 Spring Boot 3.5.7、Knife4j 4.5.0、springdoc 2.8.14、Lombok。Knife4j 保留 `doc.html` 文档界面，`knife4j.enable=false` 关闭与当前 springdoc 不兼容的增强插件，避免文档接口返回 500。MyBatis-Plus 3.5.12 / MySQL Connector 放在 Maven `database` profile 中，待核对实际数据库再启用；当前启动不连接数据库。前端实际解析版本由 `frontend/package-lock.json` 固定。
+2026-11-10 本轮规范整理验证：前端静态检查、格式检查、27 项测试及生产构建通过；后端 40 项常规测试、JAR 打包及 Spotless 检查通过，另 1 项真实 MySQL 专项测试未启用、已跳过。新增测试覆盖页面拆分后的菜单切换保留填写内容、各平台独立回显、渠道字段显隐、补贴方式互斥、请求错误和超时，以及 404 / 405 / 415 状态与 500 错误脱敏。
+
+此前验证：真实 MySQL 专项检查通过（临时用户写入全部回滚），确认首次 APPLICANT、重复登录去重及资料更新、已有 ADMIN/部门保留、停用用户拒绝、存储失败不建立会话。独立临时入口已检查真实 Vue 布局，验证后已移除；独立端口 HTTP 检查确认 Cookie 标记、401 / 403 拦截、退出 204 及 OpenAPI 登录接口。用户已确认真实飞书免登成功；远端配置未由 Agent 修改或回读，刷新恢复和退出重登仍仅有自动化验证。真实飞书重新登录写入当前用户须在后端重启后由客户端触发。
+
+后端依赖为 Spring Boot 3.5.7、Knife4j 4.5.0、springdoc 2.8.14、Lombok、MyBatis-Plus 3.5.12 / MySQL Connector。`database` Maven profile 已合并为常规依赖，H2 仅供自动化测试。Knife4j 保留 `doc.html`，关闭不兼容增强插件。前端实际解析版本由 `frontend/package-lock.json` 固定。
+
+真实 MySQL 的回滚验证命令（会读取本地私密配置，不自动建表）：
+
+```powershell
+cd backend
+mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dpolicy.mysql.verify=true' '-Dtest=UserInfoMySqlTest' test
+```
 
 官方依据：[网页应用概述](https://open.feishu.cn/document/client-docs/h5/introduction)、[h5sdk.config](https://open.feishu.cn/document/web-app/gadget-api/open-ability/authentication/h5sdkconfig)、[签名与完整示例](https://open.feishu.cn/document/home/integrating-web-apps-in-5-minutes/debug-and-release)、[创建网页应用](https://open.feishu.cn/document/client-docs/h5/development-guide/step1)。
 

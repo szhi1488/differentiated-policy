@@ -17,11 +17,15 @@ class ApplicationContextTest {
     @Test
     void applicationAndApiDocumentationStartWithoutDatabaseOrCredentials() throws Exception {
         mvc.perform(get("/api/feishu/config")).andExpect(status().isOk());
-        mvc.perform(get("/v3/api-docs")).andDo(result -> {
-            if (result.getResolvedException() != null) {
-                throw new AssertionError("OpenAPI generation failed", result.getResolvedException());
-            }
-        }).andExpect(status().isOk());
+        mvc.perform(get("/v3/api-docs"))
+                .andDo(
+                        result -> {
+                            if (result.getResolvedException() != null) {
+                                throw new AssertionError(
+                                        "OpenAPI generation failed", result.getResolvedException());
+                            }
+                        })
+                .andExpect(status().isOk());
         mvc.perform(get("/doc.html")).andExpect(status().isOk());
     }
 }

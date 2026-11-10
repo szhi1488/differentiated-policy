@@ -10,8 +10,10 @@ import org.springframework.context.annotation.Configuration;
 public class HttpClientConfig {
     @Bean
     HttpClient feishuHttpClient() {
-        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
-                .followRedirects(HttpClient.Redirect.NEVER).build();
+        return HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
     }
 
     @Bean

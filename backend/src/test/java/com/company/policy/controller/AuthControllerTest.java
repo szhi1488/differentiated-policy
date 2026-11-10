@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.company.policy.service.FeishuApiTransport;
+import com.company.policy.service.UserInfoService;
+import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
@@ -22,23 +24,37 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-@SpringBootTest(properties = {"spring.config.import=", "feishu.app-id=test-app", "feishu.app-secret=test-secret",
-        "feishu.allowed-origins=http://localhost:5173"})
+@SpringBootTest(
+        properties = {
+            "spring.config.import=",
+            "feishu.app-id=test-app",
+            "feishu.app-secret=test-secret",
+            "feishu.allowed-origins=http://localhost:5173"
+        })
 @AutoConfigureMockMvc
 class AuthControllerTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
     @MockitoBean FeishuApiTransport transport;
     @MockitoBean Clock clock;
+    @MockitoBean UserInfoService users;
     private final Instant now = Instant.parse("2026-11-10T02:00:00Z");
 
     @BeforeEach
     void setup() throws Exception {
         when(clock.instant()).thenReturn(now);
+        when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户"))
+                .thenReturn(
+                        new CurrentUserResponse(
+                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT"));
         when(transport.post(eq("/oauth/v3/token"), anyMap(), isNull()))
-                .thenReturn(mapper.readTree("{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":7200}"));
-        when(transport.getUserInfo("private-token")).thenReturn(mapper.readTree(
-                "{\"code\":0,\"data\":{\"open_id\":\"ou_verified\",\"tenant_key\":\"tenant-test\",\"name\":\"测试用户\"}}"));
+                .thenReturn(
+                        mapper.readTree(
+                                "{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":7200}"));
+        when(transport.getUserInfo("private-token"))
+                .thenReturn(
+                        mapper.readTree(
+                                "{\"code\":0,\"data\":{\"open_id\":\"ou_verified\",\"tenant_key\":\"tenant-test\",\"name\":\"测试用户\"}}"));
     }
 
     private MockHttpServletRequestBuilder mutation(String path) {
@@ -46,14 +62,22 @@ class AuthControllerTest {
     }
 
     private String challenge(MockHttpSession session) throws Exception {
-        var result = mvc.perform(mutation("/api/auth/challenge").session(session))
-                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store")).andReturn();
+        var result =
+                mvc.perform(mutation("/api/auth/challenge").session(session))
+                        .andExpect(status().isOk())
+                        .andExpect(header().string("Cache-Control", "no-store"))
+                        .andReturn();
         return mapper.readTree(result.getResponse().getContentAsString()).path("state").asText();
     }
 
-    private MockHttpServletRequestBuilder login(MockHttpSession session, String state) throws Exception {
-        return mutation("/api/auth/feishu/login").session(session).contentType(MediaType.APPLICATION_JSON)
-                .content(mapper.writeValueAsString(Map.of("code", "single-use-code", "state", state)));
+    private MockHttpServletRequestBuilder login(MockHttpSession session, String state)
+            throws Exception {
+        return mutation("/api/auth/feishu/login")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                        mapper.writeValueAsString(
+                                Map.of("code", "single-use-code", "state", state)));
     }
 
     @Test
@@ -61,18 +85,38 @@ class AuthControllerTest {
         var session = new MockHttpSession();
         String originalId = session.getId();
         String state = challenge(session);
-        mvc.perform(login(session, state)).andExpect(status().isOk())
+        mvc.perform(login(session, state))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.user.openId").value("ou_verified"))
                 .andExpect(jsonPath("$.user.tenantKey").value("tenant-test"))
                 .andExpect(jsonPath("$.user.name").value("测试用户"))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
-                .andExpect(jsonPath("$.user.role").doesNotExist())
-                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private-token"))));
+                .andExpect(jsonPath("$.user.id").value("1"))
+                .andExpect(jsonPath("$.user.roleType").value("APPLICANT"))
+                .andExpect(
+                        content()
+                                .string(
+                                        org.hamcrest.Matchers.not(
+                                                org.hamcrest.Matchers.containsString(
+                                                        "private-token"))));
         assertThat(session.getId()).isNotEqualTo(originalId);
-        verify(transport).post("/oauth/v3/token", Map.of("grant_type", "authorization_code", "client_id", "test-app",
-                "client_secret", "test-secret", "code", "single-use-code"), null);
+        verify(users).saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户");
+        verify(transport)
+                .post(
+                        "/oauth/v3/token",
+                        Map.of(
+                                "grant_type",
+                                "authorization_code",
+                                "client_id",
+                                "test-app",
+                                "client_secret",
+                                "test-secret",
+                                "code",
+                                "single-use-code"),
+                        null);
         mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isOk());
-        mvc.perform(mutation("/api/auth/logout").session(session)).andExpect(status().isNoContent());
+        mvc.perform(mutation("/api/auth/logout").session(session))
+                .andExpect(status().isNoContent());
         assertThat(session.isInvalid()).isTrue();
         mvc.perform(get("/api/auth/session")).andExpect(status().isUnauthorized());
         mvc.perform(mutation("/api/auth/logout")).andExpect(status().isNoContent());
@@ -98,7 +142,10 @@ class AuthControllerTest {
         mvc.perform(post("/api/auth/challenge")).andExpect(status().isForbidden());
         mvc.perform(post("/api/auth/challenge").header("Origin", "http://localhost:5173"))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/api/auth/challenge").header("X-Policy-Request", "1").header("Origin", "https://attacker.example"))
+        mvc.perform(
+                        post("/api/auth/challenge")
+                                .header("X-Policy-Request", "1")
+                                .header("Origin", "https://attacker.example"))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(transport);
     }
@@ -109,13 +156,15 @@ class AuthControllerTest {
         var session = new MockHttpSession();
         mvc.perform(login(session, challenge(session))).andExpect(status().isOk());
         when(clock.instant()).thenReturn(now.plusSeconds(7200));
-        mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isUnauthorized())
+        mvc.perform(get("/api/auth/session").session(session))
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("LOGIN_REQUIRED"));
     }
 
     @Test
     void invalidUpstreamIdentityNeverCreatesLoginAndConsumesCodeAttempt() throws Exception {
-        when(transport.getUserInfo(anyString())).thenReturn(mapper.readTree("{\"code\":0,\"data\":{\"name\":\"假身份\"}}"));
+        when(transport.getUserInfo(anyString()))
+                .thenReturn(mapper.readTree("{\"code\":0,\"data\":{\"name\":\"假身份\"}}"));
         var session = new MockHttpSession();
         String state = challenge(session);
         mvc.perform(login(session, state)).andExpect(status().isBadGateway());
@@ -126,14 +175,33 @@ class AuthControllerTest {
     @Test
     void invalidTokenLifetimeIsRejectedAndShortLifetimeIsRespected() throws Exception {
         when(transport.post(eq("/oauth/v3/token"), anyMap(), isNull()))
-                .thenReturn(mapper.readTree("{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":0}"));
+                .thenReturn(
+                        mapper.readTree(
+                                "{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":0}"));
         var session = new MockHttpSession();
         mvc.perform(login(session, challenge(session))).andExpect(status().isBadGateway());
         verify(transport, never()).getUserInfo(anyString());
         when(transport.post(eq("/oauth/v3/token"), anyMap(), isNull()))
-                .thenReturn(mapper.readTree("{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":60}"));
+                .thenReturn(
+                        mapper.readTree(
+                                "{\"code\":0,\"access_token\":\"private-token\",\"expires_in\":60}"));
         mvc.perform(login(session, challenge(session))).andExpect(status().isOk());
         when(clock.instant()).thenReturn(now.plusSeconds(60));
+        mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void storageFailureDoesNotEstablishSession() throws Exception {
+        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString()))
+                .thenThrow(
+                        new com.company.policy.common.exception.ApiException(
+                                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                                "USER_STORAGE_UNAVAILABLE",
+                                "用户信息保存失败。"));
+        var session = new MockHttpSession();
+        mvc.perform(login(session, challenge(session)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("USER_STORAGE_UNAVAILABLE"));
         mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isUnauthorized());
     }
 }
