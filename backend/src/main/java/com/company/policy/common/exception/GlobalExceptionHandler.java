@@ -12,12 +12,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApi(ApiException error) {
-        return ResponseEntity.status(error.getStatus()).body(new ApiError(error.getCode(), error.getMessage()));
+        return ResponseEntity.status(error.getStatus()).header("Cache-Control", "no-store")
+                .body(new ApiError(error.getCode(), error.getMessage()));
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
     public ResponseEntity<ApiError> handleValidation(Exception ignored) {
-        return ResponseEntity.badRequest().body(new ApiError("INVALID_REQUEST", "请提供有效的页面 URL。"));
+        return ResponseEntity.badRequest().header("Cache-Control", "no-store")
+                .body(new ApiError("INVALID_REQUEST", "请求参数无效，请检查必填字段和格式。"));
     }
 
     @ExceptionHandler(Exception.class)

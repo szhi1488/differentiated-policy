@@ -116,9 +116,11 @@
 当前实现（2026-11-10）：已初始化 Vue 3 / Vite 前端和 Java 17 / Spring Boot 3.5.7 后端，包含构建清单、启动脚本及 JS-SDK 关键测试。后端使用 Knife4j 4.5.0、springdoc 2.8.14、Lombok；MyBatis-Plus / MySQL 置于待启用的 Maven `database` profile，尚未连接数据库。实际前端依赖版本由 `frontend/package-lock.json` 固定。
 
 - 用户确认当前先做本地开发，部署域名稍后提供；前端默认 `http://127.0.0.1:5173`，后端默认 `http://127.0.0.1:8080`。启动命令与飞书后台配置步骤见根目录 `README.md`。
+- `tt.requestAccess` 需要把调用页面完整地址加入飞书「安全设置 → 重定向 URL」（本机 `http://127.0.0.1:5173/`），即使页面不跳转也必须配置；此项独立于 H5 可信域名。2700002 为授权过程失败的通用外层码，需要结合内层码定位，不能直接认定为用户拒绝。只展示数值错误码，不输出 SDK 原始消息、票据或签名。旧客户端仅在 requestAccess 不存在或 errno 103 时按官方指南兼容 requestAuthCode，不在配置错误/拒绝授权时降级。
 - 飞书 App ID 已配置；App Secret 仅存于被忽略的 `backend/.env.local.properties` 或系统环境变量，不在本文件记录。
-- 已实现飞书票据缓存、签名 URL 来源校验、毫秒时间戳 SHA-1 签名及 `h5sdk.config` / `h5sdk.ready` 初始化。普通浏览器只显示环境提示；尚未实现用户免登与身份映射，也未修改远端飞书应用配置。
-- 本次验证：前端 6 项测试及构建、后端 25 项测试及打包通过；使用本地凭证验证真实飞书票据与签名成功。已修复 IDEA 默认项目根目录启动时不加载私密配置的问题，兼容项目根目录和 backend 目录启动，并有两种目录的回归检查。客户端内的 JS-SDK 鉴权还需配置飞书网页应用主页与 H5 可信域名后实测。Knife4j 增强插件因兼容性关闭，`doc.html` 界面及 OpenAPI 文档仍可用。
+- 已实现飞书票据缓存、签名 URL 来源校验、毫秒时间戳 SHA-1 签名及 `h5sdk.config` / `h5sdk.ready` 初始化。用户免登使用 `tt.requestAccess`（空 scopeList）→ v3 token → user_info 核验，身份键为 `tenantKey + openId`，尚无数据库用户映射或管理员授权。普通浏览器只显示环境提示；未修改远端飞书应用配置。
+- 应用使用服务端 HttpSession，Cookie 为 `POLICY_SESSION`（HttpOnly、SameSite=Lax），闲置 30 分钟、绝对有效期不超过 2 小时及 token 有效期；HTTPS 部署设置 `SESSION_COOKIE_SECURE=true`。state 绑定浏览器会话，3 分钟一次有效；登录后轮换会话 ID，支持恢复与退出。默认 `/api/**` 后端鉴权，配置/签名/登录入口按精确路径放行；写请求检查可信 Origin 与 `X-Policy-Request: 1`。应用会话暂不订阅飞书账号撤销事件，重启清空；多实例需共享会话。用户 token 不下发前端、不持久化。
+- 当前验证：前端 17 项测试及构建通过，涵盖授权数字错误码脱敏与旧客户端兼容；后端此前 33 项测试及打包通过，独立端口实际 HTTP 检查通过 Cookie 标记、未登录/错误 state 拦截、来源保护、退出及登录接口文档。真实飞书票据与签名曾验证成功；本次读取实际飞书页面定位 requestAccess 的 2700002 并纠正重定向 URL 配置遗漏后，用户于 2026-11-10 明确确认已成功登录。远端配置不是 Agent 修改，未回读具体配置；客户端刷新恢复/退出重登未逐项实测。项目根目录和 backend 目录启动加载私密配置均有回归检查。Knife4j 增强插件因兼容性关闭，`doc.html` 界面及 OpenAPI 文档仍可用。
 
 ```text
 frontend/src/

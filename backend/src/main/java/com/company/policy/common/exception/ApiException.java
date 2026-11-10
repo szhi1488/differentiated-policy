@@ -16,6 +16,6 @@ public class ApiException extends RuntimeException {
 
     public static ApiException upstream() {
         return new ApiException(HttpStatus.BAD_GATEWAY, "FEISHU_UPSTREAM_ERROR",
-                "飞书票据获取失败，请检查应用凭证、应用状态和网络后重试。");
+                "飞书服务调用失败，请检查应用凭证、应用状态和网络后重试。");
     }
 }

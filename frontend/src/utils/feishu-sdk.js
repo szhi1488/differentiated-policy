@@ -1,4 +1,5 @@
 import { getJsSdkSignature } from '../api/feishu'
+import { feishuFailure } from './feishu-error'
 
 // Fixed version recommended by the Feishu H5 documentation.
 export const FEISHU_SDK_URL = 'https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.48.js'
@@ -63,7 +64,7 @@ export function configureFeishuSdk(sdk, signature, timeoutMs = 15000) {
       resolve()
     }
     try {
-      sdk.error(() => fail())
+      sdk.error((error) => fail(feishuFailure('飞书 JS-SDK 鉴权', error).message))
       sdk.config({
         appId: signature.appId,
         timestamp: signature.timestamp,
@@ -71,7 +72,7 @@ export function configureFeishuSdk(sdk, signature, timeoutMs = 15000) {
         signature: signature.signature,
         jsApiList: signature.jsApiList,
         onSuccess() { configured = true; finish() },
-        onFail() { fail() },
+        onFail(error) { fail(feishuFailure('飞书 JS-SDK 鉴权', error).message) },
       })
       sdk.ready(() => { bridgeReady = true; finish() })
     } catch {
