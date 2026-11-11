@@ -20,6 +20,8 @@ public class LoginInterceptor implements HandlerInterceptor {
                     "POST /api/feishu/js-sdk/signature",
                     "POST /api/auth/challenge",
                     "POST /api/auth/feishu/login",
+                    "POST /api/auth/feishu/browser/authorize",
+                    "POST /api/auth/feishu/browser/login",
                     "POST /api/auth/logout");
     private static final Set<String> READ_METHODS = Set.of("GET", "HEAD", "OPTIONS");
     private final LoginSessionService sessions;

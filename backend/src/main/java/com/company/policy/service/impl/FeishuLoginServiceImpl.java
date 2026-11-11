@@ -7,6 +7,7 @@ import com.company.policy.service.FeishuLoginService;
 import com.company.policy.service.UserInfoService;
 import com.company.policy.vo.AuthSessionResponse;
 import java.time.Clock;
+import java.util.HashMap;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -32,14 +33,18 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
 
     @Override
     public AuthSessionResponse login(String code) {
+        return login(code, null);
+    }
+
+    @Override
+    public AuthSessionResponse login(String code, String redirectUri) {
         if (!properties.isConfigured()) {
             throw new ApiException(
                     HttpStatus.SERVICE_UNAVAILABLE, "FEISHU_NOT_CONFIGURED", "请先配置后端飞书应用凭证。");
         }
         var startedAt = clock.instant();
-        var token =
-                transport.post(
-                        "/oauth/v3/token",
+        var body =
+                new HashMap<>(
                         Map.of(
                                 "grant_type",
                                 "authorization_code",
@@ -48,8 +53,11 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
                                 "client_secret",
                                 properties.getAppSecret(),
                                 "code",
-                                code),
-                        null);
+                                code));
+        if (redirectUri != null) {
+            body.put("redirect_uri", redirectUri);
+        }
+        var token = transport.post("/oauth/v3/token", body, null);
         if (!token.path("access_token").isTextual()
                 || token.path("access_token").asText().isBlank()
                 || !token.path("expires_in").isIntegralNumber()

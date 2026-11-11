@@ -15,7 +15,7 @@
 | [整体架构](architecture/system-overview.md) | 技术栈、源码进度、九表设计边界 | 实现与设计分别标注 |
 | [商品后台确认方案](architecture/catalog-admin-design.md) | 原始导入、自动清洗入库、规格颜色、异常审核 | 业务方案已确认；功能未实现 |
 | [自动清洗细则](business/catalog-cleaning.md) | 唯一规则门槛、颜色提取、状态、重试、人工结果保护与系统审计 | 新增确认流程细化；待实现 |
-| [飞书鉴权](architecture/feishu-auth-flow.md) | JS-SDK、免登与会话 | 已实现；真实环境以实际配置为准 |
+| [飞书鉴权](architecture/feishu-auth-flow.md) | 客户端 JS-SDK 免登、浏览器网页授权与会话 | 已实现；浏览器真实授权待联调，实际配置见登录文档 |
 | [动态表单](business/perspective-rules.md) | 渠道、平台、补贴、颜色范围 | 同步确认版规则；业务持久化待接入 |
 | [状态机](business/status-machine.md) | 草稿、提交、审核、重提、历史 | 业务接口待实现 |
 | [覆盖检测](business/override-engine.md) | 稳定规格与颜色交集、未定优先级 | 候选方案，非已实现生效引擎 |

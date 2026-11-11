@@ -38,3 +38,15 @@ export function exchangeLoginCode(code, state) {
 export function logout() {
   return request('/api/auth/logout', { method: 'POST' })
 }
+
+export function createBrowserAuthorization() {
+  return request('/api/auth/feishu/browser/authorize', { method: 'POST' })
+}
+
+export function exchangeBrowserLoginCode(code, state) {
+  return request('/api/auth/feishu/browser/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, state }),
+  })
+}

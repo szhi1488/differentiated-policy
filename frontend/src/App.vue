@@ -1,23 +1,35 @@
 <script setup>
 import { onMounted, ref } from 'vue'
-import { getFeishuConfig } from './api/feishu'
+import { getFeishuConfig, getLoginSession } from './api/feishu'
 import { isFeishuClient } from './utils/feishu-sdk'
 import { loginWithFeishu } from './utils/feishu-auth'
+import { completeBrowserLogin, startBrowserLogin } from './utils/feishu-browser-auth'
 import ApplicantWorkspace from './views/apply/ApplicantWorkspace.vue'
 const status = ref('loading')
 const message = ref('正在通过飞书验证身份…')
 const login = ref(null)
 const inFeishu = isFeishuClient()
-async function connect() {
+async function connect(startAuthorization = false) {
   status.value = 'loading'
+  message.value = '正在通过飞书验证身份…'
   try {
+    login.value = (await completeBrowserLogin()) || (await getLoginSession())
+    if (login.value) {
+      status.value = 'ready'
+      return
+    }
     const config = await getFeishuConfig()
     if (!config.sdkEnabled) {
       throw new Error('后端飞书应用凭证尚未配置，请完成本地配置后重启服务。')
     }
     if (!inFeishu) {
+      if (startAuthorization) {
+        message.value = '正在前往飞书授权页面…'
+        await startBrowserLogin()
+        return
+      }
       status.value = 'browser'
-      message.value = '请在飞书客户端中打开应用，使用当前飞书账号登录。'
+      message.value = '点击下方按钮，通过飞书网页授权登录。'
       return
     }
     login.value = await loginWithFeishu(config.appId)
@@ -28,7 +40,7 @@ async function connect() {
     message.value = error.message || '登录失败，请重试。'
   }
 }
-onMounted(connect)
+onMounted(() => connect())
 </script>
 <template>
   <ApplicantWorkspace v-if="status === 'ready' && login" />
@@ -45,7 +57,7 @@ onMounted(connect)
       </div>
       <h1>差异化政策管理</h1>
       <p role="status" aria-live="polite">{{ message }}</p>
-      <button type="button" class="primary" :disabled="status === 'loading'" @click="connect">
+      <button type="button" class="primary" :disabled="status === 'loading'" @click="connect(true)">
         {{ status === 'loading' ? '正在登录…' : '通过飞书登录' }}
       </button>
     </section>

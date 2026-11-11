@@ -1,11 +1,22 @@
-# 飞书免登与 JS-SDK 鉴权三步流程
+# 飞书客户端免登与浏览器网页授权
 
-更新日期：2026-11-10。本文描述当前实现；SDK 鉴权成功不代表用户已经登录。
+更新日期：2026-11-11。本文描述当前实现；SDK 鉴权成功不代表用户已经登录。飞书客户端使用 JS-SDK 免登，普通浏览器使用网页 OAuth 授权，共用身份核验、用户落库和应用会话。
+
+## 普通浏览器登录
+
+1. 页面首先处理 OAuth 回调；无回调则通过 `GET /api/auth/session` 恢复已有会话，无会话时显示「通过飞书登录」。普通浏览器不加载飞书 JS-SDK。
+2. 点击按钮后，`POST /api/auth/feishu/browser/authorize`，仍需可信 `Origin` 和 `X-Policy-Request: 1`。服务端从经过白名单校验的 Origin 生成站点根地址（如 `http://127.0.0.1:5173/`），将该地址和随机 state 绑定当前 Cookie 会话。state 3 分钟内一次有效，新建会使旧值失效。
+3. 页面跳转到 `https://accounts.feishu.cn/open-apis/authen/v1/authorize`，传入 `client_id`、`response_type=code`、`redirect_uri`、`state`，不申请额外 scope 或 offline_access。用户在飞书授权页完成登录及授权后返回站点首页。
+4. 回调成功带 `code/state`，取消时带 `error=access_denied`。前端先从地址栏移除授权参数，保留其他参数和 fragment，再通过 `POST /api/auth/feishu/browser/login` 提交 code/state；不把上游原始错误信息显示给用户。
+5. 服务端校验并消费 Cookie 绑定的 state，从会话读取发起时的回调地址，将同一 `redirect_uri` 传入 v3 token 交换，之后沿用下述身份核验、停用检查、用户落库及 Session ID 轮换。无会话、过期、旧 state 或重复回调返回 401；失败后点击按钮重新授权，不重放旧 code。
+6. 刷新恢复当前浏览器自己的应用会话。飞书客户端和外部浏览器的 Cookie 独立，因此客户端已登录不代表浏览器已经登录。授权页需在 3 分钟内完成，超时可重新发起。
+
+浏览器回调固定为当前 Origin 的 `/`，必须把该完整地址加入飞书后台的重定向 URL，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中；保持同源 `/api` 代理，HTTPS 设置 Secure Cookie。当前前端部署于站点根路径，不支持子目录回调配置。官方依据：[获取授权码](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)、[v3 token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token-v3)。
 
 ## 第一步：网页 JS-SDK 鉴权
 
 1. 读取 `GET /api/feishu/config`，取得公开 App ID 和 `sdkEnabled`；后者只表示凭证完整，不保证登录成功。
-2. 飞书客户端加载固定版本 `h5-js-sdk-1.5.48.js`；普通浏览器只显示环境提示。
+2. 飞书客户端加载固定版本 `h5-js-sdk-1.5.48.js`；普通浏览器按上节使用网页授权。
 3. 当前页面 URL 提交至 `POST /api/feishu/js-sdk/signature`，请求体如 `{ "url": "http://127.0.0.1:5173/" }`。保留查询参数原字节，只删 `#` 及后续，不排序、解码或重组。
 4. 后端验证来源属于 `FEISHU_ALLOWED_ORIGINS`，获取并缓存 `tenant_access_token`、`jsapi_ticket`，生成毫秒时间戳和 nonce。
 5. 按 `jsapi_ticket=…&noncestr=…&timestamp=…&url=…` 拼接，UTF-8 后计算 SHA-1，返回 `appId`、`timestamp`、`nonceStr`、`signature`、`jsApiList`（当前为空）。
@@ -42,7 +53,7 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 | 会话读取 | `GET /api/auth/session`，未登录/到期为 401 |
 | 退出 | `POST /api/auth/logout`，204、幂等，仅退出本应用 |
 | 写请求 | 可信 `Origin` 与 `X-Policy-Request: 1` |
-| 默认保护 | `/api/**` 需登录；公开配置、签名、challenge、登录、退出按精确路径放行 |
+| 默认保护 | `/api/**` 需登录；公开配置、签名、challenge、客户端登录、浏览器授权链接/登录交换、退出按精确路径放行 |
 
 响应禁止缓存；HTTPS 设置 `SESSION_COOKIE_SECURE=true` 并同源代理 `/api`。重启清空会话，多实例需共享；当前未订阅飞书撤销授权事件，已有应用会话不会即时同步失效。页面无退出按钮，API 保留。
 
@@ -61,4 +72,4 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 本地错误 `{ "code": "稳定错误码", "message": "中文提示" }`。HTTP：400 参数/签名来源错误，401 state/code/会话失效，403 请求来源或停用账号，502 上游异常，503 缺配置或用户存储不可用。
 
-用户此前确认真实免登成功；签名和会话保护已有自动化验证。远端配置未回读，客户端刷新恢复、退出重登未逐项人工验证。完整设置及官方参考见 [项目 README](../../README.md)。
+用户此前确认真实客户端免登成功。2026-11-11 新增浏览器网页授权、回调处理及会话恢复自动化验证；本轮前端 39 项测试及 lint、格式、构建通过，后端 49 项测试及打包、Spotless 通过，1 项真实 MySQL 专项测试未启用。使用模拟上游和测试数据，未连接用户目标库；真实浏览器扫码/授权、远端重定向 URL 和客户端刷新恢复、退出重登尚未逐项人工联调。完整设置及官方参考见 [项目 README](../../README.md)。

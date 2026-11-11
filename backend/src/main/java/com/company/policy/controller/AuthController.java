@@ -1,9 +1,11 @@
 package com.company.policy.controller;
 
 import com.company.policy.dto.FeishuLoginRequest;
+import com.company.policy.service.FeishuBrowserLoginService;
 import com.company.policy.service.FeishuLoginService;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.AuthSessionResponse;
+import com.company.policy.vo.FeishuAuthorizationResponse;
 import com.company.policy.vo.LoginChallengeResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,10 +27,39 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
     private final LoginSessionService sessions;
     private final FeishuLoginService loginService;
+    private final FeishuBrowserLoginService browserLogin;
 
-    public AuthController(LoginSessionService sessions, FeishuLoginService loginService) {
+    public AuthController(
+            LoginSessionService sessions,
+            FeishuLoginService loginService,
+            FeishuBrowserLoginService browserLogin) {
         this.sessions = sessions;
         this.loginService = loginService;
+        this.browserLogin = browserLogin;
+    }
+
+    @PostMapping("/feishu/browser/authorize")
+    @Operation(
+            summary = "创建浏览器飞书授权链接",
+            description =
+                    "需可信 Origin 和 X-Policy-Request: 1。回调固定为当前 Origin 的根路径 /，须加入飞书重定向 URL；state 与 Cookie 绑定，3 分钟有效。503 缺少配置，403 来源不可信。")
+    public ResponseEntity<FeishuAuthorizationResponse> browserAuthorize(
+            HttpServletRequest request) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(browserLogin.authorize(request.getHeader("Origin"), request.getSession()));
+    }
+
+    @PostMapping("/feishu/browser/login")
+    @Operation(
+            summary = "交换浏览器网页授权码并建立会话",
+            description =
+                    "code/state 来自飞书回调，回调地址从服务端会话读取。401 state/code 无效，403 账号停用，502 上游异常，503 用户存储失败；失败须重新授权，成功轮换 Session ID。")
+    public ResponseEntity<AuthSessionResponse> browserLogin(
+            @Valid @RequestBody FeishuLoginRequest body, HttpServletRequest request) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(browserLogin.login(body.code(), body.state(), request));
     }
 
     @PostMapping("/challenge")

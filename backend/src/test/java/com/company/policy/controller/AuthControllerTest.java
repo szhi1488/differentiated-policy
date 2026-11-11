@@ -61,6 +61,109 @@ class AuthControllerTest {
         return post(path).header("Origin", "http://localhost:5173").header("X-Policy-Request", "1");
     }
 
+    private String browserState(MockHttpSession session) throws Exception {
+        var response =
+                mvc.perform(mutation("/api/auth/feishu/browser/authorize").session(session))
+                        .andExpect(status().isOk())
+                        .andExpect(header().string("Cache-Control", "no-store"))
+                        .andReturn()
+                        .getResponse();
+        var url = mapper.readTree(response.getContentAsString()).path("authorizationUrl").asText();
+        var uri = org.springframework.web.util.UriComponentsBuilder.fromUriString(url).build();
+        assertThat(uri.getHost()).isEqualTo("accounts.feishu.cn");
+        assertThat(uri.getPath()).isEqualTo("/open-apis/authen/v1/authorize");
+        var params = uri.getQueryParams();
+        assertThat(params.getFirst("client_id")).isEqualTo("test-app");
+        assertThat(params.getFirst("response_type")).isEqualTo("code");
+        assertThat(
+                        java.net.URLDecoder.decode(
+                                params.getFirst("redirect_uri"),
+                                java.nio.charset.StandardCharsets.UTF_8))
+                .isEqualTo("http://localhost:5173/");
+        assertThat(params).doesNotContainKeys("scope", "client_secret");
+        return params.getFirst("state");
+    }
+
+    private MockHttpServletRequestBuilder browserLogin(MockHttpSession session, String state)
+            throws Exception {
+        return mutation("/api/auth/feishu/browser/login")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("code", "browser-once", "state", state)));
+    }
+
+    @Test
+    void browserAuthorizationBindsCallbackAndEstablishesRestorableSession() throws Exception {
+        var session = new MockHttpSession();
+        var originalId = session.getId();
+        var state = browserState(session);
+        mvc.perform(browserLogin(session, state))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.id").value("1"))
+                .andExpect(jsonPath("$.access_token").doesNotExist());
+        assertThat(session.getId()).isNotEqualTo(originalId);
+        verify(transport)
+                .post(
+                        "/oauth/v3/token",
+                        Map.of(
+                                "grant_type",
+                                "authorization_code",
+                                "client_id",
+                                "test-app",
+                                "client_secret",
+                                "test-secret",
+                                "code",
+                                "browser-once",
+                                "redirect_uri",
+                                "http://localhost:5173/"),
+                        null);
+        mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isOk());
+        mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
+        verify(transport, times(1)).post(eq("/oauth/v3/token"), anyMap(), isNull());
+    }
+
+    @Test
+    void browserRejectsForeignExpiredReplacedAndClientStatesBeforeTokenExchange() throws Exception {
+        var session = new MockHttpSession();
+        mvc.perform(browserLogin(session, "missing")).andExpect(status().isUnauthorized());
+        var state = browserState(session);
+        mvc.perform(browserLogin(new MockHttpSession(), state))
+                .andExpect(status().isUnauthorized());
+        when(clock.instant()).thenReturn(now.plusSeconds(180));
+        mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
+        when(clock.instant()).thenReturn(now);
+        state = browserState(session);
+        browserState(session);
+        mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
+        mvc.perform(browserLogin(session, challenge(session))).andExpect(status().isUnauthorized());
+        verifyNoInteractions(transport);
+    }
+
+    @Test
+    void browserEndpointsEnforceOriginAndHeadersAndDoNotEstablishFailedLogin() throws Exception {
+        for (var path :
+                java.util.List.of(
+                        "/api/auth/feishu/browser/authorize", "/api/auth/feishu/browser/login")) {
+            mvc.perform(post(path)).andExpect(status().isForbidden());
+            mvc.perform(
+                            post(path)
+                                    .header("Origin", "https://attacker.example")
+                                    .header("X-Policy-Request", "1"))
+                    .andExpect(status().isForbidden());
+        }
+        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString()))
+                .thenThrow(
+                        new com.company.policy.common.exception.ApiException(
+                                org.springframework.http.HttpStatus.FORBIDDEN,
+                                "USER_DISABLED",
+                                "账号已停用"));
+        var session = new MockHttpSession();
+        var state = browserState(session);
+        mvc.perform(browserLogin(session, state)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/auth/session").session(session)).andExpect(status().isUnauthorized());
+        mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
+    }
+
     private String challenge(MockHttpSession session) throws Exception {
         var result =
                 mvc.perform(mutation("/api/auth/challenge").session(session))
