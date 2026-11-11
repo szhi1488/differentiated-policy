@@ -1,5 +1,6 @@
 <script setup>
 import { defineAsyncComponent, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { getFeishuConfig, getLoginSession } from './api/feishu'
 import { isFeishuClient } from './utils/feishu-sdk'
@@ -8,6 +9,8 @@ import { completeBrowserLogin, startBrowserLogin } from './utils/feishu-browser-
 const ApplicantWorkspace = defineAsyncComponent(
   () => import('./views/apply/ApplicantWorkspace.vue'),
 )
+const AdminWorkspace = defineAsyncComponent(() => import('./views/admin/AdminWorkspace.vue'))
+const router = useRouter()
 const status = ref('loading')
 const message = ref('正在通过飞书验证身份…')
 const login = ref(null)
@@ -18,6 +21,8 @@ async function connect(startAuthorization = false) {
   try {
     login.value = (await completeBrowserLogin()) || (await getLoginSession())
     if (login.value) {
+      await router.isReady()
+      await router.setSessionUser(login.value.user)
       status.value = 'ready'
       return
     }
@@ -36,6 +41,8 @@ async function connect(startAuthorization = false) {
       return
     }
     login.value = await loginWithFeishu(config.appId)
+    await router.isReady()
+    await router.setSessionUser(login.value.user)
     status.value = 'ready'
   } catch (error) {
     status.value = 'error'
@@ -47,7 +54,10 @@ onMounted(() => connect())
 </script>
 <template>
   <el-config-provider :locale="zhCn">
-    <ApplicantWorkspace v-if="status === 'ready' && login" />
+    <template v-if="status === 'ready' && login">
+      <AdminWorkspace v-if="login.user?.roleType === 'ADMIN'" :user="login.user" />
+      <ApplicantWorkspace v-else />
+    </template>
     <main v-else class="login-shell">
       <section class="login-card">
         <div class="workspace-brand">

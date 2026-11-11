@@ -6,6 +6,8 @@ import { getFeishuConfig, getLoginSession } from './api/feishu'
 import { completeBrowserLogin, startBrowserLogin } from './utils/feishu-browser-auth'
 import { loginWithFeishu } from './utils/feishu-auth'
 import { isFeishuClient } from './utils/feishu-sdk'
+import { createMemoryHistory } from 'vue-router'
+import { createWorkspaceRouter } from './router'
 
 vi.mock('./api/feishu', () => ({ getFeishuConfig: vi.fn(), getLoginSession: vi.fn() }))
 vi.mock('./utils/feishu-sdk', () => ({ isFeishuClient: vi.fn() }))
@@ -24,7 +26,13 @@ beforeEach(() => {
 
 function render() {
   return mount(App, {
-    global: { stubs: { ApplicantWorkspace: { template: '<div>申请人工作台</div>' } } },
+    global: {
+      plugins: [createWorkspaceRouter(createMemoryHistory())],
+      stubs: {
+        ApplicantWorkspace: { template: '<div>申请人工作台</div>' },
+        AdminWorkspace: { template: '<div>管理员工作台</div>' },
+      },
+    },
   })
 }
 
@@ -37,6 +45,16 @@ it('offers browser authorization and starts it on click without using the SDK', 
   await flushPromises()
   expect(startBrowserLogin).toHaveBeenCalledOnce()
   expect(loginWithFeishu).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+it('服务端 ADMIN 进入管理员工作台，其他角色保持申请人入口', async () => {
+  getLoginSession.mockResolvedValue({ user: { id: 'admin-demo', roleType: 'ADMIN' } })
+  const wrapper = render()
+  await flushPromises()
+  await vi.waitFor(() => expect(wrapper.text()).toContain('管理员工作台'))
+  expect(wrapper.text()).not.toContain('申请人工作台')
+  expect(wrapper.vm.$router.currentRoute.value.path).toBe('/admin/policies')
   wrapper.unmount()
 })
 

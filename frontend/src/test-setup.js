@@ -13,3 +13,6 @@ if (typeof window !== 'undefined') {
     removeEventListener() {},
   }))
 }
+if (typeof window !== 'undefined') {
+  window.scrollTo = () => {}
+}

@@ -5,7 +5,7 @@
 - 前端：Vue 3、Vite、Composition API（`<script setup>`）、Element Plus；通用控件优先使用 Element Plus，必要时结合自定义 CSS 维护业务布局和品牌样式。组件及样式由 unplugin-vue-components 按需导入，中文语言包统一配置；未引入 Tailwind。
 - 后端：Java 17、Spring Boot 3.5.7、MyBatis-Plus 3.5.12、Lombok、Knife4j 4.5.0、springdoc 2.8.14。
 - 数据库：MySQL 8.0.16 及以上；H2 仅供测试。确认采用九表：`user_info`、`catalog_variant`、`catalog_variant_color`、`goods_sync_job`、`source_goods_item`、`catalog_operation_log`、`policy_master`、`policy_detail`、`policy_audit_log`。用户于 2026-11-11 明确目标库仅有库名、尚未建表，旧文档的四表存在状态不作为当前目标库事实；Agent 只交付 SQL，由用户在 Navicat 执行。
-- 运行环境：支持飞书客户端与普通浏览器访问的网页应用。客户端使用 JS-SDK 免登，普通浏览器使用飞书网页 OAuth 授权，统一由服务端核验身份、保存用户并建立 HttpSession。当前本地开发，部署域名待提供；浏览器登录代码及自动化验证已完成，真实授权和远端配置待联调。
+- 运行环境：支持飞书客户端与普通浏览器访问的网页应用。客户端使用 JS-SDK 免登，普通浏览器使用飞书网页 OAuth 授权，统一由服务端核验身份、保存用户并建立 HttpSession。当前本地开发，部署域名待提供；浏览器登录代码及自动化验证已完成，2026-11-11 用户亲自授权后已观察真实管理员页面，其他授权场景及部署配置仍需联调。
 - 依赖以 `frontend/package-lock.json`、`backend/pom.xml` 为准；沿用现有前后端结构。
 
 ## 2. 文档导航（上下文地图）
@@ -15,6 +15,7 @@
 | 任务 | 必读文档 |
 | --- | --- |
 | 系统架构、目录与实现进度 | [整体架构](docs/architecture/system-overview.md) |
+| 管理员展示工作台、角色分流与页面路由 | [管理员展示工作台](docs/architecture/admin-workspace.md) |
 | 吉客云商品读取、清洗、标准机型与商品管理后台 | [商品同步与管理员后台方案](docs/architecture/catalog-admin-design.md) |
 | 自动清洗、颜色识别、异常审核与重试 | [商品自动清洗与异常审核](docs/business/catalog-cleaning.md) |
 | 商品后台及规格颜色接口 | [商品管理接口](docs/api/catalog-api.md) |
