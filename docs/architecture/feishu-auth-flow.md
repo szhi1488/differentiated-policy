@@ -13,7 +13,27 @@
 
 浏览器回调固定为当前 Origin 的 `/`，必须把该完整地址加入飞书后台的重定向 URL，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中；保持同源 `/api` 代理，HTTPS 设置 Secure Cookie。当前前端部署于站点根路径，不支持子目录回调配置。官方依据：[获取授权码](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)、[v3 token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token-v3)。
 
-## 第一步：网页 JS-SDK 鉴权
+### 浏览器登录接口
+
+| 接口 | 请求与响应 | 校验及失败处理 |
+| --- | --- | --- |
+| `POST /api/auth/feishu/browser/authorize` | 无请求体；返回 `{ "authorizationUrl": "飞书官方授权地址" }` | 可信 Origin 和专用请求头；创建 Cookie 绑定的 state 和回调地址；403 来源不可信，503 凭证未配置 |
+| `POST /api/auth/feishu/browser/login` | `{ "code": "一次性授权码", "state": "本次随机值" }`；成功返回 `{ "user": { ... }, "expiresAt": "..." }` | 同样校验写请求来源；401 state/code 无效，403 账号停用，502 上游异常，503 配置或用户存储不可用；失败不建立新登录会话 |
+| `GET /api/auth/session` | 成功返回当前用户与会话到期时间 | 401 表示尚未登录或已到期；前端再显示授权入口 |
+
+以上响应禁止缓存，用户 token 不返回浏览器、不持久化。授权码只能交换一次，登录成功后轮换 Session ID。
+
+### 浏览器真实联调步骤（待完成）
+
+1. 重启前后端，通过实际应用地址打开首页。本机示例为 `http://127.0.0.1:5173/`；使用 `localhost` 或新域名时保持整个授权过程使用同一地址。
+2. 在飞书后台「安全设置 → 重定向 URL」核对完整首页地址（含协议、端口、末尾 `/`）；后端 `FEISHU_ALLOWED_ORIGINS` 配置对应 Origin（不含路径），并保持同源 `/api` 代理。HTTPS 同时配置 `SESSION_COOKIE_SECURE=true`。
+3. 在未登录的浏览器中点击「通过飞书登录」，在飞书官方授权页完成登录与授权，确认返回应用工作台，地址栏不保留 code/state；刷新后仍能恢复当前有效会话。
+4. 分别验证取消授权后可手动重试、超过 3 分钟后旧请求被拒绝并可重新发起授权、重复回调不能再次兑换授权码。后端重启清空会话后需重新授权。
+5. 同时回归飞书客户端免登；客户端与浏览器分别建立会话，不假定两者互通。记录真实结果后再更新验证状态。
+
+这些步骤描述待执行的真实联调，不表示已经修改远端配置或通过真实账号验证。
+
+## 飞书客户端第一步：网页 JS-SDK 鉴权
 
 1. 读取 `GET /api/feishu/config`，取得公开 App ID 和 `sdkEnabled`；后者只表示凭证完整，不保证登录成功。
 2. 飞书客户端加载固定版本 `h5-js-sdk-1.5.48.js`；普通浏览器按上节使用网页授权。
@@ -24,7 +44,7 @@
 
 App Secret、应用 token、ticket 不返回前端、不记日志；签名响应用于 SDK 配置，不持久化或记录日志。票据单进程缓存并提前刷新，每次签名新建 nonce。
 
-## 第二步：取得用户授权码
+## 飞书客户端第二步：取得用户授权码
 
 正常入口先尝试 `GET /api/auth/session` 恢复会话；无会话才执行 SDK 初始化和以下步骤。
 
@@ -33,7 +53,7 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 3. 校验 code 非空；回传 state 时须一致。code 只能使用一次，交换失败重新授权，不重放旧 code。
 4. 仅 `requestAccess` 不存在或 errno `103` 时兼容 `requestAuthCode`；配置错误、拒绝授权、超时不触发降级。
 
-## 第三步：核验身份、落库与会话
+## 飞书客户端第三步：核验身份、落库与会话
 
 1. `POST /api/auth/feishu/login` 提交 `{ "code": "授权码", "state": "本次随机值" }`。
 2. 服务端一次性消费 state，经 `https://accounts.feishu.cn/oauth/v3/token` 交换用户 token，再请求 `https://open.feishu.cn/open-apis/authen/v1/user_info`。

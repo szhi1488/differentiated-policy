@@ -1,10 +1,13 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { defineAsyncComponent, onMounted, ref } from 'vue'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { getFeishuConfig, getLoginSession } from './api/feishu'
 import { isFeishuClient } from './utils/feishu-sdk'
 import { loginWithFeishu } from './utils/feishu-auth'
 import { completeBrowserLogin, startBrowserLogin } from './utils/feishu-browser-auth'
-import ApplicantWorkspace from './views/apply/ApplicantWorkspace.vue'
+const ApplicantWorkspace = defineAsyncComponent(
+  () => import('./views/apply/ApplicantWorkspace.vue'),
+)
 const status = ref('loading')
 const message = ref('正在通过飞书验证身份…')
 const login = ref(null)
@@ -43,23 +46,25 @@ async function connect(startAuthorization = false) {
 onMounted(() => connect())
 </script>
 <template>
-  <ApplicantWorkspace v-if="status === 'ready' && login" />
-  <main v-else class="login-shell">
-    <section class="login-card">
-      <div class="workspace-brand">
-        <span class="logo-grid">
-          <i></i>
-          <i></i>
-          <i></i>
-          <i></i>
-        </span>
-        <strong>电商运营平台</strong>
-      </div>
-      <h1>差异化政策管理</h1>
-      <p role="status" aria-live="polite">{{ message }}</p>
-      <button type="button" class="primary" :disabled="status === 'loading'" @click="connect(true)">
-        {{ status === 'loading' ? '正在登录…' : '通过飞书登录' }}
-      </button>
-    </section>
-  </main>
+  <el-config-provider :locale="zhCn">
+    <ApplicantWorkspace v-if="status === 'ready' && login" />
+    <main v-else class="login-shell">
+      <section class="login-card">
+        <div class="workspace-brand">
+          <span class="logo-grid">
+            <i></i>
+            <i></i>
+            <i></i>
+            <i></i>
+          </span>
+          <strong>电商运营平台</strong>
+        </div>
+        <h1>差异化政策管理</h1>
+        <p role="status" aria-live="polite">{{ message }}</p>
+        <el-button type="primary" :loading="status === 'loading'" @click="connect(true)">
+          {{ status === 'loading' ? '正在登录…' : '通过飞书登录' }}
+        </el-button>
+      </section>
+    </main>
+  </el-config-provider>
 </template>

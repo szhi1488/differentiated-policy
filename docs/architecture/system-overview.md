@@ -13,6 +13,8 @@
 ```mermaid
 flowchart LR
     F[飞书客户端] --> V[Vue 3 页面]
+    B[普通浏览器] --> V
+    V -->|浏览器网页授权与回调| O[飞书官方 OAuth 授权页]
     V -->|同源 /api| C[Spring Boot Controller]
     C --> S[Service 接口与实现]
     S --> M[MyBatis-Plus Mapper]
@@ -26,13 +28,29 @@ flowchart LR
 
 | 层 | 当前配置 |
 | --- | --- |
-| 前端 | Vue 3、Vite 6、Composition API、自定义 CSS；依赖以 lockfile 为准 |
+| 前端 | Vue 3、Vite 6、Composition API、Element Plus、业务布局 CSS；依赖以 lockfile 为准 |
 | 后端 | Java 17、Spring Boot 3.5.7、Lombok |
 | 数据访问 | MyBatis-Plus 3.5.12、MySQL Connector；H2 仅测试 |
 | API 文档 | Knife4j 4.5.0、springdoc 2.8.14 |
 | 检查 | ESLint / Prettier / Vitest，JUnit / Spotless |
 
-未引入 Element Plus / Tailwind；不按示例模板降级 Spring Boot。Knife4j 增强插件因兼容性关闭，`/doc.html` 和 `/v3/api-docs` 保留。
+Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文语言包由 ElConfigProvider 配置；申请工作台在登录后延迟加载。未引入 Tailwind；不按示例模板降级 Spring Boot。Knife4j 增强插件因兼容性关闭，`/doc.html` 和 `/v3/api-docs` 保留。
+
+## 前端组件与页面现状
+
+2026-11-11 已完成现有页面的 Element Plus 替换，依赖版本以 `frontend/package-lock.json` 为准。
+
+| 位置 | 已使用组件与行为 |
+| --- | --- |
+| `src/App.vue` | ConfigProvider 配置中文；Button 显示登录加载状态；申请工作台登录后延迟加载 |
+| `views/apply/components/PolicyApplicationForm.vue` | Form、Select、CheckTag、Radio、DatePicker、Tabs、Tag、Input、Upload、Button、Alert；MessageBox 确认渠道切换、取消平台及清空表单 |
+| `views/apply/components/PolicyDetailsTable.vue` | Table 使用稳定行 key、横向滚动和右侧固定操作列；Input、Select 编辑明细，Empty 显示无明细提示 |
+| `views/apply/ApplicantWorkspace.vue` | 保留业务侧栏和横幅；Empty 与 Button 展示我的提交占位入口；菜单切换保留已填表单 |
+| `vite.config.js`、`src/test-setup.js` | 按需导入组件及样式；测试处理组件 CSS，并为 jsdom 提供尺寸监听替身 |
+
+自定义 CSS 保留侧栏、横幅、业务网格、响应式布局和少量控件尺寸调整，不重复绘制通用控件。`assets/main.css` 管理基础主题，`assets/workspace.css` 管理工作台布局。桌面基础信息在适当宽度分两行排列；手机上日期范围上下显示完整时间，日期弹层限制宽度并可纵向滚动，确认操作保持可访问；明细表格在容器内横向查看，空状态使用正常行高。
+
+日期仍保存精确到秒的北京时间墙上时间字符串，不转换为 UTC；金额仍按十进制字符串录入。确认框以异步结果决定是否清除，取消时不修改原渠道和已填明细。Upload 关闭自动上传，仅暂存当前页面文件，可移除；独立附件接口及 `useAttachments` 已有实现，但当前申请页没有接入该上传流程，详见 [附件接口](../api/attachment-api.md)。组件替换不代表政策持久化、标准机型库或申请页附件上传已接通。当前型号、配置和颜色仍是手工输入占位，不能视为已完成标准目录和颜色范围选择。
 
 ## 模块职责
 
@@ -90,5 +108,7 @@ backend/src/main/java/com/company/policy/
 当前用户目标库未建表，以 2026-11-11 最新说明为准。曾有独立 user_info 回滚测试历史，但不能证明当前目标库存在该表。项目未启用 Flyway 或自动建表，九表 DDL 与业务代码接入分开验收。
 
 此前 2026-11-10 代码检查记录：前端 27 项测试及 lint、格式、构建通过；后端 40 项常规测试及打包、Spotless 通过，1 项真实 MySQL 专项当轮跳过。更早真实 MySQL 回滚及独立 HTTP 检查通过。这些是既往记录，本次文档整理不代表重新运行。命令及验证范围见 [项目 README](../../README.md)。
+
+2026-11-11 Element Plus 替换：本轮前端 lint、格式、41 项测试及生产构建通过。覆盖组件切换、确认框、日期及附件暂存交互。用户授权后，已检查 1440px、768px、390px 浏览器布局，修复窄屏时间与弹层及空状态显示，验证日期选择、明细输入、渠道提示和菜单返回。使用本地临时组件预览，未进行真实飞书授权或业务提交联调；本次未运行后端检查。
 
 本地前端 `http://127.0.0.1:5173`，后端 `http://127.0.0.1:8080`，Vite 代理 `/api`；默认只监听本机。正式 HTTPS 部署须同源代理并设置 Secure Cookie，多实例共享会话和缓存。当前单进程会话随重启清空。

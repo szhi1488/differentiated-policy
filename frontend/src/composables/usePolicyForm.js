@@ -26,13 +26,13 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     },
   })
 
-  function switchChannel(channel) {
+  async function switchChannel(channel) {
     if (channel === form.value.channel) {
       return true
     }
     if (
       form.value.platforms.length &&
-      !confirm('切换渠道会清除已选平台及对应机型明细，是否继续？')
+      !(await confirm('切换渠道会清除已选平台及对应机型明细，是否继续？'))
     ) {
       return false
     }
@@ -50,11 +50,11 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     form.value.details[code] = [createDetail()]
   }
 
-  function togglePlatform(code) {
+  async function togglePlatform(code) {
     if (form.value.platforms.includes(code)) {
       if (
         form.value.details[code]?.some(hasDetailInput) &&
-        !confirm('取消该平台会清除该平台已填写的机型及补贴信息，是否继续？')
+        !(await confirm('取消该平台会清除该平台已填写的机型及补贴信息，是否继续？'))
       ) {
         return
       }
@@ -89,8 +89,8 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     files.value.push(...Array.from(list || []).map((file) => ({ id: crypto.randomUUID(), file })))
   }
 
-  function reset() {
-    if (!confirm('确定清空当前填写的内容吗？')) {
+  async function reset() {
+    if (!(await confirm('确定清空当前填写的内容吗？'))) {
       return
     }
     form.value = createForm()

@@ -6,6 +6,8 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   font-size: 13px;
+  --el-color-primary: #347cff;
+  --el-font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
 }
 * {
   box-sizing: border-box;
@@ -29,55 +31,16 @@ textarea {
 button {
   cursor: pointer;
 }
-button:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
 button:focus-visible,
 a:focus-visible {
   outline: 3px solid #a8c9ff;
   outline-offset: 3px;
-}
-input:focus,
-select:focus,
-textarea:focus {
-  outline: none;
-  border-color: #77a6ff;
-  box-shadow: 0 0 0 3px #347dff12;
 }
 h1,
 h2,
 h3,
 p {
   margin: 0;
-}
-button.primary,
-button.secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  padding: 9px 19px;
-  border-radius: 5px;
-  border: 1px solid #327dff;
-  font-size: 12px;
-  white-space: nowrap;
-}
-button.primary {
-  background: linear-gradient(180deg, #468bff, #2875f9);
-  color: white;
-  box-shadow: 0 3px 7px #317dff1a;
-}
-button.primary:hover {
-  background: #2269e7;
-}
-button.secondary {
-  background: white;
-  border-color: #dee5f0;
-  color: #4a5870;
-}
-button.secondary:hover {
-  background: #f5f8ff;
 }
 .login-shell {
   min-height: 100vh;
@@ -107,6 +70,6 @@ button.secondary:hover {
   line-height: 1.9;
   margin-bottom: 25px;
 }
-.login-card .primary {
+.login-card .el-button {
   width: 100%;
 }

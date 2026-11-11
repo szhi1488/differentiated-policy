@@ -51,21 +51,20 @@ const section = ref('apply')
     </aside>
     <main class="workspace-main">
       <PolicyBanner />
-      <PolicyApplicationForm v-show="section === 'apply'" />
+      <div v-show="section === 'apply'">
+        <PolicyApplicationForm />
+      </div>
       <section v-if="section === 'submissions'" class="submissions-panel">
         <h2>
           <span></span>
           我的提交
         </h2>
-        <div class="submissions-empty">
-          <span><AppIcon name="document" :size="36" /></span>
-          <h3>我的提交即将开放</h3>
-          <p>政策提交与记录查询功能尚未接入。</p>
-          <button class="primary" @click="section = 'apply'">
+        <el-empty description="政策提交与记录查询功能尚未接入" :image-size="110">
+          <el-button type="primary" @click="section = 'apply'">
             前往提交政策
             <AppIcon name="arrow" :size="16" />
-          </button>
-        </div>
+          </el-button>
+        </el-empty>
       </section>
       <p class="workspace-caption">差异化政策管理 · 申请人工作台</p>
     </main>

@@ -2,10 +2,10 @@
 
 ## 1. 项目技术栈与架构
 
-- 前端：Vue 3、Vite、Composition API（`<script setup>`）；当前使用自定义 CSS，未引入 Element Plus 或 Tailwind。
+- 前端：Vue 3、Vite、Composition API（`<script setup>`）、Element Plus；通用控件优先使用 Element Plus，必要时结合自定义 CSS 维护业务布局和品牌样式。组件及样式由 unplugin-vue-components 按需导入，中文语言包统一配置；未引入 Tailwind。
 - 后端：Java 17、Spring Boot 3.5.7、MyBatis-Plus 3.5.12、Lombok、Knife4j 4.5.0、springdoc 2.8.14。
 - 数据库：MySQL 8.0.16 及以上；H2 仅供测试。确认采用九表：`user_info`、`catalog_variant`、`catalog_variant_color`、`goods_sync_job`、`source_goods_item`、`catalog_operation_log`、`policy_master`、`policy_detail`、`policy_audit_log`。用户于 2026-11-11 明确目标库仅有库名、尚未建表，旧文档的四表存在状态不作为当前目标库事实；Agent 只交付 SQL，由用户在 Navicat 执行。
-- 运行环境：飞书网页应用，JS-SDK 鉴权、用户免登与服务端 HttpSession。当前本地开发，部署域名待提供。
+- 运行环境：支持飞书客户端与普通浏览器访问的网页应用。客户端使用 JS-SDK 免登，普通浏览器使用飞书网页 OAuth 授权，统一由服务端核验身份、保存用户并建立 HttpSession。当前本地开发，部署域名待提供；浏览器登录代码及自动化验证已完成，真实授权和远端配置待联调。
 - 依赖以 `frontend/package-lock.json`、`backend/pom.xml` 为准；沿用现有前后端结构。
 
 ## 2. 文档导航（上下文地图）
@@ -18,7 +18,7 @@
 | 吉客云商品读取、清洗、标准机型与商品管理后台 | [商品同步与管理员后台方案](docs/architecture/catalog-admin-design.md) |
 | 自动清洗、颜色识别、异常审核与重试 | [商品自动清洗与异常审核](docs/business/catalog-cleaning.md) |
 | 商品后台及规格颜色接口 | [商品管理接口](docs/api/catalog-api.md) |
-| 飞书免登、JS-SDK 与会话 | [飞书鉴权流程](docs/architecture/feishu-auth-flow.md) |
+| 飞书客户端免登、浏览器网页 OAuth、回调配置与会话 | [飞书鉴权流程](docs/architecture/feishu-auth-flow.md) |
 | 零售/百亿表单、平台机型补贴 | [动态表单规约](docs/business/perspective-rules.md) |
 | 草稿、提交、驳回重提与审核历史 | [状态机](docs/business/status-machine.md) |
 | 覆盖提示、有效政策查询 | [覆盖检测与查询草案](docs/business/override-engine.md) |
@@ -39,11 +39,12 @@
 8. **时间**：统一面向 `Asia/Shanghai`（GMT+8）；本版 `DATETIME` 按北京时间精确到秒。覆盖端点与生效口径待确认，不把审核通过等同于当前生效。
 9. **历史与并发**：保留每轮提交快照和审核意见；主表、明细、日志同事务维护，按状态和版本条件更新并检查影响行数。不自行开放待审撤回或通过后修改，不删除旧政策实施覆盖。
 10. **后端分层**：`Controller → Service → Mapper`；请求放 `dto`，响应放 `vo`，实体放 `entity`。接口放 `service`，实现放 `service.impl` 并命名为 `接口名Impl`；通过接口注入，实现类承担组件与事务注解。`common.config` 注册配置，`common.interceptor` 校验登录和来源。
-11. **前端分层**：请求统一经过 `api/request.js`；选项放 `constants`，状态交互放 `composables`，纯函数放 `utils`。通用组件放 `components`，申请组件放 `views/apply/components`；不直接修改 props，列表用稳定 key，页面不承担最终权限或生效判断。
+11. **前端分层**：请求统一经过 `api/request.js`；选项放 `constants`，状态交互放 `composables`，纯函数放 `utils`。通用组件放 `components`，申请组件放 `views/apply/components`；不直接修改 props，列表用稳定 key，页面不承担最终权限或生效判断。通用表单、表格、按钮、提示、确认框及空状态优先复用 Element Plus，避免另写重复控件与样式；CSS 主要维护业务布局、品牌和响应式适配，按需覆盖须限定业务类名，避免全局原生控件样式干扰组件库。保持组件和样式按需导入、中文语言包及工作台延迟加载。清除渠道/平台/表单内容须等待确认结果，取消时保留原值；日期用精确到秒的北京时间字符串，金额保持十进制字符串，不因替换组件隐式转成浮点数。当前申请页 Upload 关闭自动上传，仅暂存文件，不能显示上传或提交成功。实现与验证记录见整体架构和动态表单文档。
 12. **凭证与附件**：真实配置只通过环境变量或被忽略的本地文件注入，不写源码、日志、测试样例或文档。用户 token 不下发前端、不持久化。上传接入前确定存储、类型、大小、访问权限和链接校验。
 13. **数据库变更**：`schema.sql` 与 `V1__create_policy_tables.sql` 同步为确认版九表空库基线，二选一执行。用户本轮明确未建表，允许更新未部署 V1；其他已执行旧版的库先核对再增量迁移，不能重跑或删除重建。SQL 不建库、不选择库、不插入真实或示例数据。既有用户/政策核心保留，标准目录合并为规格表，另建规格颜色；来源内联映射，不单建规则、映射或批次关联表。
 14. **任务授权**：本文不独立授权建表、连接生产库、发布应用或向他人发消息；按用户当前具体任务推进。
 15. **清洗自动化与历史**：导入任务成功后自动衔接清洗，导入状态和清洗状态分开；异常审核不阻塞其他明确商品。保留九表，将清洗字段放来源表、阶段放任务表，规则以受控代码/配置版本维护，不另建规则引擎表。SYSTEM审计不冒用发起管理员；USER操作才有操作者。自动重跑不覆盖人工确认、不复活停用目录；映射/目录/审计同事务并带版本和执行租约。原始七字段先入库，候选校验通过后才进入可用标准库；规格和颜色分别按所属型号配置维护，政策标准ID和名称快照不被后续清洗改写。
+16. **双入口登录**：保留飞书客户端 `requestAccess` 免登与普通浏览器网页 OAuth 两条流程，不能仅因非飞书环境阻止登录，也不能在普通浏览器调用客户端 JS-SDK。浏览器先恢复会话，无会话时由用户点击按钮发起授权；服务端将随机 state 与当前 Cookie、经白名单校验的 Origin 首页回调地址绑定，3 分钟内一次有效。回调地址固定为当前 Origin 的 `/`，须加入飞书重定向 URL，并与 `FEISHU_ALLOWED_ORIGINS` 及同源 `/api` 代理一致；token 交换使用服务端保存的同一 redirect_uri，不接受前端任意回跳地址。前端在网络请求前清除地址栏授权参数，服务端校验并消费 state；失败重新授权，不重放 code。两种入口共用身份核验、停用检查、用户落库和 Session ID 轮换；客户端与浏览器 Cookie 独立。详细接口、配置和联调步骤见飞书鉴权文档，不能将自动化通过写成真实授权已验证。
 
 ## 4. 工作流程与命令
 
@@ -75,6 +76,7 @@ mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' spotless:apply
 
 - 前端检查含 ESLint、Prettier、测试和构建；后端含测试、打包和 Spotless。编码、换行和缩进遵循 `.editorconfig`。
 - 业务变更重点验证渠道显隐、平台独立与共享规则、补贴互斥、空数量、草稿与完整提交、历史、权限、并发、时间和金额精度；纯文档不新增业务测试。
+- 组件或布局变更按影响范围检查桌面、平板和窄屏，重点关注日期完整显示、弹层边界与滚动、表格横向查看及固定操作列、确认框取消后回显。组件预览与模拟登录不能记为真实飞书授权或业务接口联调；既往 41 项测试和浏览器检查记录见整体架构，不能作为后续修改已验证的依据。
 - 使用 Knife4j 维护实际接口说明，包含枚举、必填条件、分页筛选和错误响应。
 - 完成后报告修改位置、实际验证和剩余事项；不把历史检查、模拟数据或未运行测试描述成本轮通过。实现状态及既往验证见架构文档与根 README。
 
