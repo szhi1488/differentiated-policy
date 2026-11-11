@@ -67,10 +67,11 @@ public class FeishuBrowserLoginServiceImpl implements FeishuBrowserLoginService 
         String redirectUri;
         synchronized (session) {
             var saved = session.getAttribute(PENDING);
-            session.removeAttribute(PENDING);
             if (!(saved instanceof Pending pending) || !pending.state().equals(state)) {
                 throw invalidState();
             }
+            // 刷新二维码后，迟到的旧回调不能使新一轮授权失效。
+            session.removeAttribute(PENDING);
             sessions.consumeChallenge(session, state);
             redirectUri = pending.redirectUri();
         }

@@ -133,10 +133,12 @@ class AuthControllerTest {
         mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
         when(clock.instant()).thenReturn(now);
         state = browserState(session);
-        browserState(session);
+        var refreshed = browserState(session);
         mvc.perform(browserLogin(session, state)).andExpect(status().isUnauthorized());
-        mvc.perform(browserLogin(session, challenge(session))).andExpect(status().isUnauthorized());
         verifyNoInteractions(transport);
+        mvc.perform(browserLogin(session, refreshed)).andExpect(status().isOk());
+        mvc.perform(browserLogin(session, challenge(session))).andExpect(status().isUnauthorized());
+        verify(transport, times(1)).post(eq("/oauth/v3/token"), anyMap(), isNull());
     }
 
     @Test

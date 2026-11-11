@@ -1,9 +1,9 @@
-import { ADMIN_PAGES } from '../constants/admin'
-
 // 页面分流只使用服务端身份；业务接口仍须独立校验权限。
-export function workspaceDestination(user, path) {
-  if (user?.roleType !== 'ADMIN') {
-    return path === '/apply' ? null : '/apply'
-  }
-  return ADMIN_PAGES.some((page) => page.path === path) ? null : '/admin/policies'
+export function workspaceDestination(user, route) {
+  const role = user?.roleType === 'ADMIN' ? 'ADMIN' : 'APPLICANT'
+  return route.meta.role === role
+    ? null
+    : role === 'ADMIN'
+      ? { name: 'catalog-sources' }
+      : { name: 'apply' }
 }

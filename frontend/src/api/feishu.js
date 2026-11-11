@@ -14,7 +14,7 @@ export function getJsSdkSignature(url) {
 
 export async function getLoginSession() {
   try {
-    return await request('/api/auth/session')
+    return await request('/api/auth/session', { sessionProbe: true })
   } catch (error) {
     if (error.status === 401) {
       return null
@@ -29,6 +29,7 @@ export function createLoginChallenge() {
 
 export function exchangeLoginCode(code, state) {
   return request('/api/auth/feishu/login', {
+    sessionProbe: true,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, state }),
@@ -39,12 +40,13 @@ export function logout() {
   return request('/api/auth/logout', { method: 'POST' })
 }
 
-export function createBrowserAuthorization() {
-  return request('/api/auth/feishu/browser/authorize', { method: 'POST' })
+export function createBrowserAuthorization(signal) {
+  return request('/api/auth/feishu/browser/authorize', { method: 'POST', signal })
 }
 
 export function exchangeBrowserLoginCode(code, state) {
   return request('/api/auth/feishu/browser/login', {
+    sessionProbe: true,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, state }),

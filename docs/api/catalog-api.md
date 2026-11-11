@@ -1,6 +1,6 @@
 # 商品管理接口契约
 
-更新日期：2026-11-11。确认流程为原始导入后自动清洗，唯一明确结果自动入标准库，异常才人工审核；九表保留，接口尚未实现。字段见 [数据字典](../sql/database-design.md)，业务见 [确认方案](../architecture/catalog-admin-design.md)及[清洗细则](../business/catalog-cleaning.md)。
+更新日期：2026-11-11。本文记录本应用对前端提供的商品 HTTP 接口契约，表内接口均待实现。当前后端已实现 `JackyunGoodsService` 单页只读查询，管理员源商品库使用静态样例。正式导入后自动清洗，明确结果自动进入标准库，异常进入人工审核。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 

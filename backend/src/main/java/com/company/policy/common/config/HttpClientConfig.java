@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class HttpClientConfig {
     @Bean
-    HttpClient feishuHttpClient() {
+    HttpClient externalHttpClient() {
         return HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NEVER)

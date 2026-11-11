@@ -41,6 +41,10 @@ feishu:
   app-id: ${FEISHU_APP_ID:cli_aa64531940e15c1e}
   app-secret: ${FEISHU_APP_SECRET:}
   allowed-origins: ${FEISHU_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+jackyun:
+  app-key: ${JACKYUN_APP_KEY:}
+  app-secret: ${JACKYUN_APP_SECRET:}
+  token: ${JACKYUN_TOKEN:}
 knife4j:
   # /doc.html 接口文档页面仍可使用；关闭与 Springdoc 2.8 不兼容的
   # Knife4j 4.5 可选增强定制功能。

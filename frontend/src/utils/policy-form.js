@@ -1,3 +1,4 @@
+/** @returns {{key:string, model:string, singleModel:string, spec:string, color:string, quantity:string, mode:string, fixedAmount:string, maxAmount:string, ratio:string, priceBase:string}} 自由文本编辑占位，尚非目录 ID 或出站 DTO。 */
 export function createDetail() {
   return {
     key: crypto.randomUUID(),
@@ -13,6 +14,7 @@ export function createDetail() {
     priceBase: '',
   }
 }
+/** 编辑模型保留备注、说明、链接和文件；DTO 映射待对应契约确认，不直接提交整个表单。 */
 export function createForm() {
   return {
     channel: 'RETAIL',

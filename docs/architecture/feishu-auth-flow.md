@@ -1,17 +1,21 @@
-# 飞书客户端免登与浏览器网页授权
+# 飞书客户端免登、浏览器扫码与网页授权
 
-更新日期：2026-11-11。本文描述当前实现；SDK 鉴权成功不代表用户已经登录。飞书客户端使用 JS-SDK 免登，普通浏览器使用网页 OAuth 授权，共用身份核验、用户落库和应用会话。
+更新日期：2026-11-11。飞书客户端使用 JS-SDK 免登。普通浏览器可在应用页用手机飞书扫码，或前往飞书网页授权，两者共用浏览器 OAuth 回调。三种方式均由服务端核验身份、保存用户和建立应用会话。
+
+`FeishuLoginPage.vue` 展示登录入口。`useAuthSession.js` 集中维护会话，供 App 和路由读取。并发登录请求合并，退出或失效后丢弃迟到结果。账号、租户或角色变化、退出及会话失效会清理申请表单和暂存附件。会话探测和授权码交换的 401 由登录流程处理，业务请求 401 会使会话失效，403 和 409 分别提示权限与冲突。[前端规范](frontend-development.md#6-路由请求与业务操作)
+
+当前联调状态见 [验证记录](#验证记录)。
 
 ## 普通浏览器登录
 
-1. 页面首先处理 OAuth 回调；无回调则通过 `GET /api/auth/session` 恢复已有会话，无会话时显示「通过飞书登录」。普通浏览器不加载飞书 JS-SDK。
-2. 点击按钮后，`POST /api/auth/feishu/browser/authorize`，仍需可信 `Origin` 和 `X-Policy-Request: 1`。服务端从经过白名单校验的 Origin 生成站点根地址（如 `http://127.0.0.1:5173/`），将该地址和随机 state 绑定当前 Cookie 会话。state 3 分钟内一次有效，新建会使旧值失效。
-3. 页面跳转到 `https://accounts.feishu.cn/open-apis/authen/v1/authorize`，传入 `client_id`、`response_type=code`、`redirect_uri`、`state`，不申请额外 scope 或 offline_access。用户在飞书授权页完成登录及授权后返回站点首页。
+1. 页面首先处理 OAuth 回调。无回调时通过 `GET /api/auth/session` 恢复会话。未登录时显示「显示飞书二维码」和「飞书网页授权登录」。
+2. 用户选择方式后，`POST /api/auth/feishu/browser/authorize` 使用可信 `Origin` 和 `X-Policy-Request: 1`。服务端从白名单 Origin 生成站点根地址（如 `http://127.0.0.1:5173/`），将该地址和随机 state 绑定当前 Cookie 会话。state 3 分钟内一次有效，重新生成后旧回调返回 401，新 state 仍可使用。
+3. 「飞书网页授权登录」直接跳转到 `https://accounts.feishu.cn/open-apis/authen/v1/authorize`。该链接包含 `client_id`、`response_type=code`、`redirect_uri`、`state`。用户选择「显示飞书二维码」时，按需加载飞书官方二维码 SDK `1.0.2`，将相同的参数用于 `https://passport.feishu.cn/suite/passport/oauth/authorize`。仅接收当前 iframe 从 Passport 域发回的临时票据 `tmp_code`，随后跳转该 Passport 授权地址完成 OAuth。扫码加载失败、超时或过期时可刷新二维码，也可切换网页授权。普通浏览器不调用客户端免登 JS-SDK。
 4. 回调成功带 `code/state`，取消时带 `error=access_denied`。前端先从地址栏移除授权参数，保留其他参数和 fragment，再通过 `POST /api/auth/feishu/browser/login` 提交 code/state；不把上游原始错误信息显示给用户。
 5. 服务端校验并消费 Cookie 绑定的 state，从会话读取发起时的回调地址，将同一 `redirect_uri` 传入 v3 token 交换，之后沿用下述身份核验、停用检查、用户落库及 Session ID 轮换。无会话、过期、旧 state 或重复回调返回 401；失败后点击按钮重新授权，不重放旧 code。
 6. 刷新恢复当前浏览器自己的应用会话。飞书客户端和外部浏览器的 Cookie 独立，因此客户端已登录不代表浏览器已经登录。授权页需在 3 分钟内完成，超时可重新发起。
 
-浏览器回调固定为当前 Origin 的 `/`，必须把该完整地址加入飞书后台的重定向 URL，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中；保持同源 `/api` 代理，HTTPS 设置 Secure Cookie。当前前端部署于站点根路径，不支持子目录回调配置。官方依据：[获取授权码](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)、[v3 token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token-v3)。
+浏览器回调固定为当前 Origin 的 `/`，必须把该完整地址加入飞书后台的重定向 URL，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中。保持同源 `/api` 代理，HTTPS 设置 Secure Cookie。官方依据见 [二维码 SDK](https://open.feishu.cn/document/common-capabilities/sso/web-application-sso/qr-sdk-documentation)、[获取授权码](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)和 [v3 token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token-v3)。
 
 ### 浏览器登录接口
 
@@ -23,17 +27,17 @@
 
 以上响应禁止缓存，用户 token 不返回浏览器、不持久化。授权码只能交换一次，登录成功后轮换 Session ID。
 
-### 浏览器真实联调步骤（尚未全部完成）
+### 浏览器真实联调步骤
 
-2026-11-11 管理员展示页联调：用户修改本地角色并亲自完成浏览器授权后，已在 `http://127.0.0.1:5173/#/admin/policies` 观察到真实登录身份、采购管理员导航及页面。这确认该账号本次登录后的管理员分流，未逐项验证取消、超时、退出重登或部署环境，不代表所有真实授权场景已通过。
+2026-11-11 前序真实网页授权中，用户完成授权后进入当时的管理员全部政策页。当前管理员入口为 `#/admin/catalog/sources`，已通过模拟会话验证。用真实手机扫码确认后进入工作台的场景待联调。[管理员工作台](admin-workspace.md)
 
 1. 重启前后端，通过实际应用地址打开首页。本机示例为 `http://127.0.0.1:5173/`；使用 `localhost` 或新域名时保持整个授权过程使用同一地址。
 2. 在飞书后台「安全设置 → 重定向 URL」核对完整首页地址（含协议、端口、末尾 `/`）；后端 `FEISHU_ALLOWED_ORIGINS` 配置对应 Origin（不含路径），并保持同源 `/api` 代理。HTTPS 同时配置 `SESSION_COOKIE_SECURE=true`。
-3. 在未登录的浏览器中点击「通过飞书登录」，在飞书官方授权页完成登录与授权，确认返回应用工作台，地址栏不保留 code/state；刷新后仍能恢复当前有效会话。
-4. 分别验证取消授权后可手动重试、超过 3 分钟后旧请求被拒绝并可重新发起授权、重复回调不能再次兑换授权码。后端重启清空会话后需重新授权。
+3. 在未登录的浏览器中点击「飞书网页授权登录」，完成授权并返回工作台。确认管理员进入 `#/admin/catalog/sources`，其他角色进入 `#/apply`。确认地址栏已清理 code/state，刷新后仍能恢复有效会话。
+4. 用新的未登录浏览器会话点击「显示飞书二维码」，使用手机飞书「扫一扫」并在手机上确认。检查浏览器进入当前账号对应的工作台。分别核对取消后重试、过期刷新、旧回调和重复回调。后端重启清空会话后需重新授权。
 5. 同时回归飞书客户端免登；客户端与浏览器分别建立会话，不假定两者互通。记录真实结果后再更新验证状态。
 
-以上是完整验收步骤，尚未逐项执行；本轮只确认上面记录的真实登录后页面，不表示 Agent 修改了远端配置。
+真实联调按上述步骤逐项记录。此前的管理员网页授权记录适用于当时的本地账号和配置。
 
 ## 飞书客户端第一步：网页 JS-SDK 鉴权
 
@@ -49,6 +53,8 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 ## 飞书客户端第二步：取得用户授权码
 
 正常入口先尝试 `GET /api/auth/session` 恢复会话；无会话才执行 SDK 初始化和以下步骤。
+
+端内登录页显示自动验证进度。验证失败时保留错误提示和「重新验证飞书身份」操作。
 
 1. `POST /api/auth/challenge` 创建绑定当前 Cookie 的随机 `state`，3 分钟内一次有效；新建使旧值失效。
 2. 调用 `tt.requestAccess({ appID, scopeList: [], state })`；仅取基本身份，不请求通讯录、手机号、邮箱或 `offline_access`。
@@ -86,12 +92,23 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 - 签名保留 query，而后台重定向 URL 按现有说明配置页面路径，去除 query 和 fragment。localhost 或新路径须单独同步。
 - `FEISHU_ALLOWED_ORIGINS` 用带协议的 origin；部署域名确定后同步主页、可信域名、重定向 URL 和白名单。
 - Secret 只在服务端环境变量或被忽略本地文件，不进入 `VITE_*`；新环境参考 `backend/.env.example`。
-- 本次未修改远端设置。手机 `127.0.0.1` 指向手机自身，手机调试需可访问地址。
+- 手机直接打开应用页面时，需要使用手机可访问的应用地址。测试桌面网页登录时，在桌面浏览器打开已登记的回调地址，由手机飞书扫描桌面显示的二维码。
 
-## 错误与验证
+## 常见错误
 
 `2700002` 是授权过程失败的通用外层码，结合内层数字码定位，不能直接判断用户拒绝。`333447/333448` 检查 H5 可信域名；授权失败先核对重定向 URL、可用范围及企业身份。只展示数值码，不输出 SDK 原始消息、票据或签名。
 
+若飞书扫码框返回 `4401`，核对是否使用上文的 Passport 扫码入口，以及飞书后台登记的重定向 URL 是否与当前首页地址完全一致。
+
 本地错误 `{ "code": "稳定错误码", "message": "中文提示" }`。HTTP：400 参数/签名来源错误，401 state/code/会话失效，403 请求来源或停用账号，502 上游异常，503 缺配置或用户存储不可用。
 
-用户此前确认真实客户端免登成功。2026-11-11 新增浏览器网页授权、回调处理及会话恢复自动化验证；本轮前端 39 项测试及 lint、格式、构建通过，后端 49 项测试及打包、Spotless 通过，1 项真实 MySQL 专项测试未启用。使用模拟上游和测试数据，未连接用户目标库；真实浏览器扫码/授权、远端重定向 URL 和客户端刷新恢复、退出重登尚未逐项人工联调。完整设置及官方参考见 [项目 README](../../README.md)。
+## 验证记录
+
+| 场景 | 已有结果 | 待联调 |
+| --- | --- | --- |
+| 飞书客户端免登 | 用户此前确认真实免登成功。登录页改版后，模拟端内验证失败并手动重试通过 | 在当前工作台回归免登及会话刷新 |
+| 浏览器网页授权 | 用户曾完成真实授权并进入当时的管理员全部政策页。新版登录页已验证模拟取消及重试 | 用真实账号授权并进入当前工作台，核对会话刷新及授权异常 |
+| 浏览器扫码 | 2026-11-11 在 Edge 生产预览中，以 `http://127.0.0.1:5173/` 为回调地址观察到官方二维码。模拟接口已验证扫码回调、角色路由和刷新后的会话恢复 | 用手机飞书扫码并确认，验证真实 OAuth 交换及登录结果 |
+| 部署环境 | 本地开发地址已有验证记录 | 部署域名确定后核对重定向 URL、Origin 白名单和同源代理 |
+
+2026-11-11 登录页改版时，前端 `npm.cmd run check` 通过 17 个文件的 65 项测试及生产构建。扫码测试覆盖按需加载、过期刷新、切换网页授权、SDK 加载失败和 iframe 消息校验。后端 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' verify` 通过 55 项测试、打包及 Spotless，1 项真实 MySQL 专项测试跳过。后端回归验证重新授权后旧 `state` 被拒绝，新 `state` 仍可使用。[前端验证记录](frontend-development.md#9-验证记录与维护)

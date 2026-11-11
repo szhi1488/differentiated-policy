@@ -1,0 +1,250 @@
+.workspace .policy-form {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+.workspace .form-section {
+  padding: 24px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.workspace .form-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  margin-bottom: 22px;
+}
+.workspace .form-section h2 > span {
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--el-color-primary);
+}
+.workspace .basic-grid {
+  display: grid;
+  grid-template-columns: 140px minmax(220px, 1.6fr) repeat(2, minmax(170px, 1fr)) 150px;
+  gap: 20px;
+}
+.workspace .basic-grid.billion-grid {
+  grid-template-columns: 160px 1fr;
+}
+.workspace .two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.workspace .policy-form .el-form-item {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.workspace .policy-form .el-form-item__label {
+  font-weight: 500;
+}
+.workspace .policy-form .el-form-item__content {
+  align-content: start;
+}
+.workspace .policy-form .el-radio {
+  margin-right: 14px;
+}
+.workspace .policy-form .el-radio:last-child {
+  margin-right: 0;
+}
+.workspace .policy-form .el-date-editor {
+  width: 100%;
+  min-width: 0;
+}
+.workspace .platform-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.workspace .section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.workspace .section-heading h2 {
+  margin-bottom: 0;
+}
+.workspace .section-description {
+  color: var(--el-text-color-secondary);
+  margin-bottom: 18px;
+  line-height: 1.7;
+}
+.workspace .platform-detail-nav .el-tag {
+  margin-left: 6px;
+}
+.workspace .details-table {
+  --el-table-header-bg-color: #f5f7fc;
+}
+.workspace .details-table .el-table__empty-text {
+  width: 100%;
+  line-height: 1.6;
+}
+.workspace .subsidy-inputs {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+.workspace .subsidy-inputs label {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.workspace .subsidy-inputs .el-input-group__append {
+  padding: 0 10px;
+}
+.workspace .policy-form .el-upload {
+  display: block;
+}
+.workspace .policy-form .el-upload,
+.workspace .policy-form .el-upload-list,
+.workspace .policy-form .el-upload__tip {
+  width: 100%;
+}
+.workspace .policy-form .el-upload-dragger {
+  padding: 22px 12px;
+  background: #f8faff;
+}
+.workspace .policy-form .el-upload-dragger > svg {
+  color: var(--el-color-primary);
+  margin-bottom: 8px;
+}
+.workspace .attachment-upload {
+  width: 100%;
+}
+.workspace .attachment-link {
+  margin-top: 12px;
+}
+.workspace .form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 18px 24px;
+}
+.workspace .form-actions > span {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.workspace .form-actions .el-button + .el-button {
+  margin-left: 0;
+}
+.workspace .policy-form .el-button svg {
+  margin: 0 4px;
+}
+@media (max-width: 1500px) {
+  .workspace .basic-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .workspace .basic-grid:not(.billion-grid) .platforms-field {
+    grid-column: span 2;
+  }
+}
+@media (max-width: 1100px) {
+  .workspace .two-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace .basic-grid {
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+  .workspace .basic-grid:not(.billion-grid) .platforms-field {
+    grid-column: auto;
+  }
+}
+@media (max-width: 800px) {
+  .workspace .basic-grid,
+  .workspace .basic-grid.billion-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace .form-section {
+    padding: 20px 16px;
+  }
+  .workspace .section-heading {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 520px) {
+  .workspace .policy-form .el-date-editor--datetimerange {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) 18px;
+    height: auto;
+    padding: 6px 10px;
+  }
+  .workspace .policy-form .el-range-input {
+    grid-column: 2;
+    width: 100%;
+    height: 28px;
+  }
+  .workspace .policy-form .el-range-separator {
+    grid-column: 2;
+    padding: 0;
+    line-height: 20px;
+  }
+  .workspace .policy-form .el-range__icon {
+    grid-column: 1;
+    grid-row: 1 / 4;
+  }
+  .workspace .policy-form .el-range__close-icon {
+    grid-column: 3;
+    grid-row: 1 / 4;
+  }
+  .policy-date-popper {
+    max-width: calc(100vw - 24px);
+    /* Teleport 的 Popper 写入行内坐标；窄屏居中避免高弹层超出下沿。 */
+    position: fixed !important;
+    inset: 50% auto auto 50% !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  .policy-date-popper .el-popper__arrow {
+    display: none;
+  }
+  .policy-date-popper .el-date-range-picker {
+    width: calc(100vw - 26px);
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .policy-date-popper .el-date-range-picker.has-time .el-picker-panel__body,
+  .policy-date-popper .el-date-range-picker__content {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .policy-date-popper .el-date-range-picker__time-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .policy-date-popper .el-date-range-picker__editors-wrap {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    gap: 8px;
+  }
+  .policy-date-popper .el-date-range-picker__time-picker-wrap {
+    flex: 1;
+    min-width: 0;
+  }
+  .policy-date-popper .el-date-range-picker__time-header > .el-icon {
+    display: none;
+  }
+  .policy-date-popper .el-picker-panel__footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+  }
+  .workspace .form-actions {
+    padding: 16px;
+  }
+  .workspace .form-actions > span {
+    display: none;
+  }
+}

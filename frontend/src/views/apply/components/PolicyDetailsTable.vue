@@ -1,12 +1,12 @@
 <script setup>
 import { PRICE_BASES } from '../../../constants/policy'
-import { changeSubsidy } from '../../../utils/policy-form'
 
 defineProps({
   platformName: { type: String, default: '' },
   hasPlatform: { type: Boolean, default: false },
+  rows: { type: Array, required: true },
 })
-const rows = defineModel({ type: Array, required: true })
+defineEmits(['update-detail', 'remove-detail'])
 </script>
 
 <template>
@@ -15,7 +15,8 @@ const rows = defineModel({ type: Array, required: true })
     <el-table-column label="涉及型号 *" min-width="160">
       <template #default="{ row, $index }">
         <el-input
-          v-model="row.model"
+          :model-value="row.model"
+          @update:model-value="$emit('update-detail', row.key, 'model', $event)"
           :aria-label="`${platformName}第${$index + 1}行涉及型号`"
           placeholder="请输入型号"
         />
@@ -24,7 +25,8 @@ const rows = defineModel({ type: Array, required: true })
     <el-table-column label="单型号 *" min-width="130">
       <template #default="{ row, $index }">
         <el-input
-          v-model="row.singleModel"
+          :model-value="row.singleModel"
+          @update:model-value="$emit('update-detail', row.key, 'singleModel', $event)"
           :aria-label="`第${$index + 1}行单型号`"
           placeholder="单型号"
         />
@@ -32,18 +34,29 @@ const rows = defineModel({ type: Array, required: true })
     </el-table-column>
     <el-table-column label="配置 *" min-width="110">
       <template #default="{ row, $index }">
-        <el-input v-model="row.spec" :aria-label="`第${$index + 1}行配置`" placeholder="配置" />
+        <el-input
+          :model-value="row.spec"
+          @update:model-value="$emit('update-detail', row.key, 'spec', $event)"
+          :aria-label="`第${$index + 1}行配置`"
+          placeholder="配置"
+        />
       </template>
     </el-table-column>
     <el-table-column label="颜色" min-width="100">
       <template #default="{ row, $index }">
-        <el-input v-model="row.color" :aria-label="`第${$index + 1}行颜色`" placeholder="选填" />
+        <el-input
+          :model-value="row.color"
+          @update:model-value="$emit('update-detail', row.key, 'color', $event)"
+          :aria-label="`第${$index + 1}行颜色`"
+          placeholder="选填"
+        />
       </template>
     </el-table-column>
     <el-table-column label="数量（选填）" min-width="120">
       <template #default="{ row, $index }">
         <el-input
-          v-model="row.quantity"
+          :model-value="row.quantity"
+          @update:model-value="$emit('update-detail', row.key, 'quantity', $event)"
           type="number"
           min="0"
           step="1"
@@ -57,7 +70,7 @@ const rows = defineModel({ type: Array, required: true })
         <el-select
           :model-value="row.mode"
           :aria-label="`第${$index + 1}行补贴方式`"
-          @update:model-value="changeSubsidy(row, $event)"
+          @update:model-value="$emit('update-detail', row.key, 'mode', $event)"
         >
           <el-option value="FIXED" label="固定补贴金额" />
           <el-option value="RATIO" label="补贴比例" />
@@ -71,7 +84,8 @@ const rows = defineModel({ type: Array, required: true })
             <label>
               补贴金额
               <el-input
-                v-model="row.fixedAmount"
+                :model-value="row.fixedAmount"
+                @update:model-value="$emit('update-detail', row.key, 'fixedAmount', $event)"
                 inputmode="decimal"
                 placeholder="0.00"
                 :aria-label="`第${$index + 1}行固定补贴金额`"
@@ -82,7 +96,8 @@ const rows = defineModel({ type: Array, required: true })
             <label>
               补贴上限
               <el-input
-                v-model="row.maxAmount"
+                :model-value="row.maxAmount"
+                @update:model-value="$emit('update-detail', row.key, 'maxAmount', $event)"
                 inputmode="decimal"
                 placeholder="0.00"
                 :aria-label="`第${$index + 1}行补贴上限`"
@@ -95,7 +110,8 @@ const rows = defineModel({ type: Array, required: true })
             <label>
               补贴比例
               <el-input
-                v-model="row.ratio"
+                :model-value="row.ratio"
+                @update:model-value="$emit('update-detail', row.key, 'ratio', $event)"
                 inputmode="decimal"
                 placeholder="0.00"
                 :aria-label="`第${$index + 1}行补贴比例`"
@@ -106,11 +122,17 @@ const rows = defineModel({ type: Array, required: true })
             <label>
               计算基数
               <el-select
-                v-model="row.priceBase"
+                :model-value="row.priceBase"
+                @update:model-value="$emit('update-detail', row.key, 'priceBase', $event)"
                 :aria-label="`第${$index + 1}行计算基数`"
                 placeholder="请选择"
               >
-                <el-option v-for="base in PRICE_BASES" :key="base" :value="base" :label="base" />
+                <el-option
+                  v-for="[code, label] in PRICE_BASES"
+                  :key="code"
+                  :value="code"
+                  :label="label"
+                />
               </el-select>
             </label>
           </template>
@@ -118,12 +140,12 @@ const rows = defineModel({ type: Array, required: true })
       </template>
     </el-table-column>
     <el-table-column label="操作" width="75" fixed="right" align="center">
-      <template #default="{ $index }">
+      <template #default="{ row, $index }">
         <el-button
           link
           type="danger"
           :aria-label="`删除第${$index + 1}行机型`"
-          @click="rows.splice($index, 1)"
+          @click="$emit('remove-detail', row.key)"
         >
           删除
         </el-button>

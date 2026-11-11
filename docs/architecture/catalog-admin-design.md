@@ -1,10 +1,10 @@
 # 商品同步、标准化与管理员后台确认方案
 
-更新日期：2026-11-11。按用户最新确认采用“原始导入 → 自动标准化清洗 → 明确结果自动入标准库 → 异常才人工审核 → 政策选择”的流程。仍为九表，新增清洗字段及系统审计，替代旧的全量人工归类发布流程。实际同步、清洗、维护接口尚未实现；已新增本地演示数据驱动的[管理员展示页](admin-workspace.md)，操作按钮禁用，不操作用户目标库。
+更新日期：2026-11-11。按用户最新确认采用“原始导入 → 自动标准化清洗 → 明确结果自动入标准库 → 异常才人工审核 → 政策选择”的流程。仍为九表，新增清洗字段及系统审计，替代旧的全量人工归类发布流程。后端已接入吉客云单页只读查询，同步任务、清洗和管理接口待接入。[管理员展示页](admin-workspace.md)目前使用本地演示数据，操作按钮禁用。
 
 ## 1. 已确认的业务
 
-- 只同步一加手机、OPPO手机，分别查询并维护独立续拉进度。
+- 只同步一加手机、OPPO手机。请求按吉客云 `brandName` 分别查询，校验返回的 `brandName` 与分区一致，各自维护续拉进度。
 - 来源商品只保存 goodsName、goodsNo、skuName、cateName、goodsField4、goodsField1、goodsField5 七个业务字段。品牌从任务分区确定；本地 ID、账套、租户、哈希、映射和批次等属于管理元数据。
 - skuId 仅在内存中用于 lastMaxId 续拉，任务只保留各品牌最新进度；商品表、日志、快照不保存逐商品外部 SKU ID、完整响应或额外上游属性。
 - 本地标准目录按品牌 → 系列 → 型号 → 配置筛选，但合并保存在 catalog_variant，一行表示一个具体型号配置，规格 ID 稳定。
@@ -71,11 +71,19 @@ flowchart TB
 
 ## 4. 来源七字段与同步
 
-依据：[吉客云条件查询货品](https://open.jackyun.com/developer/refactored/apidocinfo.html?id=erp-goods.goods.sku.search&name=true)。已阅读公开说明，未调用真实商品接口。
+官方文档：[外部系统调用开放平台](https://open.jackyun.com/developer/refactored/document.html?alias=outsystem_openplat)、[如何生成签名](https://open.jackyun.com/developer/document.html?alias=create_testtool)、[条件查询货品](https://open.jackyun.com/developer/refactored/apidocinfo.html?id=erp-goods.goods.sku.search&name=true)。
 
-cols 请求七业务字段并额外获取只供续拉的 skuId。首次 lastMaxId=0，后续取上一批最后一条 skuId；pageIndex 保持 0，不递增，pageSize 首期 50。两个品牌分别维护 oppo_last_max_id 和 oneplus_last_max_id，不共用游标。contextId 是报文上下文编号，不当游标。所有长数字精确处理，禁止 JavaScript Number。
+cols 请求七业务字段、用于核对查询分区的 brandName 和用于续拉的 skuId。首次 lastMaxId=0，后续取上一批最后一条 skuId；pageIndex 保持 0，不递增，正式同步首期 pageSize 设为 50。两个品牌分别维护 oppo_last_max_id 和 oneplus_last_max_id，不共用游标。contextId 是报文上下文编号，不当游标。所有长数字精确处理，禁止 JavaScript Number。
 
-isIncludeBlockup=1 包含停用数据、其他值不包含，任务必须明确记录本次选择；全量盘点建议 1，不能据此把所有导入项判定在用。品牌精确匹配、结束条件、真实 data 数组形态、最大页大小及授权额度仍需联调。
+isIncludeBlockup=1 包含停用数据、其他值不包含，任务必须明确记录本次选择；全量盘点建议 1，不能据此把所有导入项判定在用。末页结束条件、最大页大小及授权额度仍需联调。
+
+### 单页查询联调
+
+后续同步任务可注入 [JackyunGoodsService](../../backend/src/main/java/com/company/policy/service/JackyunGoodsService.java)，按品牌调用 `queryPage(new JackyunGoodsQuery(brandName, pageSize, lastMaxId, includeBlockup))`。从字符串游标 `"0"` 开始，服务以数值发送 `lastMaxId`，逐条校验返回品牌及游标顺序。结果只包含本地品牌分区、七个原始字段和下一页游标。同步任务须在可靠入库后保存新游标。空页保留当前游标，异常响应通过脱敏错误码返回给调用方。
+
+凭证通过环境变量或被忽略的 `backend/.env.local.properties` 配置，变量见 [配置样例](../../backend/.env.example)。自研应用填写 `JACKYUN_APP_KEY` 和 `JACKYUN_APP_SECRET`。ISV 应用另填 `JACKYUN_TOKEN`。查询时检查配置。
+
+2026-11-11 通过迁入后的后端服务实测两个品牌各两页，每页 3 条，四次查询均成功，两个品牌的游标均向前推进。请求显式设置 `isIncludeBlockup=0`。样本中 `goodsField4` 既有系列名，也有归类标签，清洗时需要结合品牌和其他字段校验。后端 Maven `verify` 通过，55 项测试通过，1 项需独立 MySQL 的测试跳过。
 
 不保存外部商品身份，因此不承诺按 SKU 更新同一行，goodsNo 不设唯一键。按租户、账套、品牌、七字段原文生成固定编码内容哈希，保留 NULL 与空字符串区别；命中后再逐字段精确比较，哈希冲突分配 collision_no，不能静默合并。
 
@@ -89,7 +97,7 @@ source_goods_item 仅存首次/最近任务及当前 clean_job_id，不保存历
 
 ## 5. 后台和发布
 
-首期页面：导入与清洗进度、来源原文及清洗结果、异常待审核、标准规格与颜色、操作历史。明确展示“已导入/待清洗/自动通过/待审核/技术失败/人工通过/已排除”，不能让管理员重复处理自动明确的商品。选择器从 ACTIVE 规格生成，不预置示例机型。
+当前管理员前端仅保留源商品库静态展示页。后续接入时需要区分导入进度、来源原文与清洗结果，并提供异常审核、规格颜色及操作历史所需的信息。明确展示“已导入/待清洗/自动通过/待审核/技术失败/人工通过/已排除”。选择器从 ACTIVE 规格生成。
 
 来源 mapping_status 表示当前生效关联，clean_status 表示本次处理进度，互不混用。AUTO_PASSED/MANUAL_PASSED 均须具有确定的规格和颜色；缺颜色留候选待审核，不把未知颜色当不限颜色。规则结果唯一且目标无冲突时，自动创建/复用 ACTIVE 规格颜色、写映射及 SYSTEM 日志同一短事务；人工纠正则写审核人/时间/原因和 USER 日志。重算时保留旧映射，人工结果不得自动覆盖，DISABLED 不自动恢复。
 

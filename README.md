@@ -1,8 +1,12 @@
 # 差异化政策管理
 
-已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书客户端 JS-SDK 免登、普通浏览器网页 OAuth 授权和服务端会话。
+2026-11-11 前端规范化重构：已完成数据边界、页面与样式、基础状态三个阶段的适用整改。布局移至 `frontend/src/layouts/`，商品五类独立路由在 `views/admin/catalog/`；申请表单区块通过事件修改集中状态，切菜单保留内容，身份变化/退出清理；统一 `useAuthSession`、query 白名单、请求错误及取消边界。展示样例集中在 `mocks/`，缺失历史显示空状态，不生成审核或同步结果。无新增依赖，未新增业务接口或启用上传。实现清单见 [前端规范](docs/architecture/frontend-development.md#9-验证记录与维护)。
 
-当前包含申请人页面、登录落库及管理员展示工作台。登录按服务端 `user.roleType` 分流，ADMIN 默认进入 `#/admin/policies`，其他角色进入申请人工作台。申请人侧栏保留「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。管理员提供政策总览、查询、审核预览、商品导入与清洗、来源、异常、标准规格颜色、操作历史及系统信息；业务样例明确标记为演示，审核、同步和维护按钮禁用。政策提交、查询及商品业务接口仍未接入。SDK 鉴权与用户登录是两个独立步骤。完整路由和展示边界见 [管理员工作台](docs/architecture/admin-workspace.md)。
+本轮在 frontend 运行 `npm.cmd run check`，通过 ESLint、Prettier、19 个测试文件的 77 项测试及生产构建。隔离组件预览已检查 1440×1000、768×1000、390×844 的日期到秒显示、弹层边界/滚动、表格横向查看/固定操作列、分页及取消回显；截图保存在 `.local-cache/refactor-ui/`。本轮未重新进行真实飞书授权或 Cookie 恢复/退出联调，未连接数据库、修改后端、运行后端检查或部署。标准目录、共享补贴、持久化、审核和附件契约等仍属后续业务接入，不能据此标记已实现。
+
+已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书客户端 JS-SDK 免登、浏览器内飞书扫码、网页 OAuth 授权及服务端会话。
+
+当前包含申请人页面、登录落库及管理员展示工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`，侧栏为「商品 → 源商品库」。源商品库以静态样例展示两个品牌及七个原始字段，业务控件暂未启用。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。详见 [管理员工作台](docs/architecture/admin-workspace.md)。
 
 已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。管理员业务接口尚未开发。
 
@@ -50,7 +54,7 @@
 6. 当前免登只获取基本身份，`tt.requestAccess` 的 `scopeList` 为空；不需额外申请通讯录、手机号、邮箱或 `offline_access` 权限。首次进入如飞书显示授权提示，由用户完成授权。
 7. 重新启动本地后端，从当前电脑的飞书客户端（推荐 6.9+）打开网页应用。成功保存用户后按本地角色进入工作台，刷新通过服务端会话恢复。申请人不显示头像或用户菜单，管理员显示当前账号身份；退出 API 保留。旧客户端缺少 requestAccess 或返回 errno 103 时兼容 requestAuthCode；授权被拒绝或配置错误时不会降级重试。
 
-飞书客户端使用 `requestAccess` 返回 code；普通浏览器点击「通过飞书登录」后跳转飞书官方授权页，完成登录/授权后携带 code/state 回到当前站点首页。两种方式均须配置飞书后台的重定向 URL。浏览器回调固定为当前 Origin 的 `/`，如 `http://127.0.0.1:5173/` 或 `http://localhost:5173/`，必须与实际访问地址一致，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中。当前前端部署于站点根路径，不支持子目录回调配置。若后台界面拒绝本机 HTTP 地址，请使用实际可访问的 HTTPS 测试域名，并同步修改主页、H5 可信域名、重定向 URL 及 `FEISHU_ALLOWED_ORIGINS`。
+飞书客户端自动通过 `requestAccess` 验证身份。普通浏览器可点击「显示飞书二维码」，用手机飞书扫码并确认，也可点击「飞书网页授权登录」前往飞书授权页。两种浏览器方式均携带 code/state 回到站点首页。浏览器回调固定为当前 Origin 的 `/`，如 `http://127.0.0.1:5173/` 或 `http://localhost:5173/`，必须与飞书后台的重定向 URL 一致，且 Origin 在 `FEISHU_ALLOWED_ORIGINS` 中。若后台拒绝本机 HTTP 地址，请使用可访问的 HTTPS 测试域名，并同步主页、H5 可信域名、重定向 URL 及 `FEISHU_ALLOWED_ORIGINS`。
 
 `2700002` 表示 requestAccess 授权过程失败，是通用外层错误码（取消授权也可能返回），不能仅凭此码判定用户拒绝。页面会显示飞书返回的数字内层错误码，不输出原始错误消息或凭证。先核对上述重定向 URL，再检查应用可用范围、当前飞书企业与授权操作。SDK 的 `333447/333448` 则对应 H5 可信域名配置，应区分处理。
 
@@ -58,7 +62,7 @@
 
 ## 接入流程
 
-普通浏览器流程：先恢复应用会话；无会话时点击按钮，请求 `POST /api/auth/feishu/browser/authorize`，服务端将一次性 state 与站点首页回调地址绑定 Cookie 会话，再返回飞书官方授权链接。授权返回后，前端立即清除地址栏中的 code/state/error，通过 `POST /api/auth/feishu/browser/login` 交换 code/state。服务端核验 state 并从会话读取同一 redirect_uri，兑换 token、核验身份并落库后轮换 Session ID。取消、过期及失败均显示可重试提示，不自动重放授权码；state 有效期 3 分钟。浏览器不加载 JS-SDK。详见 [登录流程](docs/architecture/feishu-auth-flow.md)。
+普通浏览器先恢复应用会话。需要重新登录时，扫码与网页授权均使用 `POST /api/auth/feishu/browser/authorize`，在当前 Cookie 会话中建立 3 分钟内一次有效的 state。二维码由飞书官方组件按需生成，过期后可刷新。授权返回后，前端先清除地址栏中的 code/state/error，再调用 `POST /api/auth/feishu/browser/login`，由服务端校验 state、换取身份并轮换 Session ID。详见 [登录流程](docs/architecture/feishu-auth-flow.md)。
 
 以下为飞书客户端流程：
 
@@ -80,9 +84,13 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 模块化文档与数据库设计
 
-2026-11-11 确认 [商品流程](docs/architecture/catalog-admin-design.md)：两品牌七字段原始导入后系统清洗系列、型号、配置、颜色，唯一明确结果自动进入可用标准库，缺失/歧义/冲突才人工审核；[清洗细则](docs/business/catalog-cleaning.md)规定状态与证据。保持九表并补清洗字段和SYSTEM审计，政策支持不限颜色/指定颜色。文档与SQL已更新，功能尚未实现，未调用真实商品接口。
+2026-11-11 确认 [商品流程](docs/architecture/catalog-admin-design.md)：两品牌七字段原始导入后系统清洗系列、型号、配置、颜色，唯一明确结果自动进入可用标准库，缺失/歧义/冲突才人工审核；[清洗细则](docs/business/catalog-cleaning.md)规定状态与证据。保持九表并补清洗字段和SYSTEM审计，政策支持不限颜色/指定颜色。已实测[吉客云只读查询与续拉](docs/architecture/catalog-admin-design.md#单页查询联调)，正式导入及清洗待接入。
 
 架构、业务规约、状态机、覆盖 SQL 草案及申请人/管理员接口设计统一见 [docs 文档索引](docs/README.md)。接口和覆盖算法文档明确区分已实现能力与待实现草案。
+
+后续功能迭代、缺陷修复和代码审查先读 [AGENTS.md](AGENTS.md) 与 [AI 辅助全栈开发规范](docs/architecture/ai-development.md)，其中包含代码示例、跨层契约、测试要求和迭代需求模板。
+
+前端开发从 [frontend/README.md](frontend/README.md) 进入，目录职责、组件数据流、接口模型、会话路由、样式及整改验收见[前端架构与开发规范](docs/architecture/frontend-development.md)。前三阶段适用整改已实施，政策与商品业务接口接入仍待完成；当前能力以源码和整体架构的实现记录为准。
 
 九张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 

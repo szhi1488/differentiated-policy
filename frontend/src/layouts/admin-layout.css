@@ -1,0 +1,130 @@
+.admin-workspace {
+  --admin-sidebar-width: 176px;
+  --el-color-primary: #176ff2;
+  --el-border-radius-base: 6px;
+  --el-font-size-base: 13px;
+  min-height: 100vh;
+  background: linear-gradient(155deg, #f5f8fc, #edf3fd);
+  color: #17263e;
+}
+.admin-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  width: var(--admin-sidebar-width);
+  background: #f7faff;
+  border-right: 1px solid #e8eef8;
+}
+.admin-sidebar .workspace-brand {
+  padding: 16px 14px;
+  min-height: 54px;
+}
+.admin-sidebar .workspace-brand strong {
+  font-size: 14px;
+}
+.admin-nav {
+  padding: 15px 10px;
+}
+.admin-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+.admin-nav a {
+  display: block;
+  margin-top: 4px;
+  padding: 12px 12px 12px 40px;
+  border-radius: 7px;
+  color: #52637e;
+  text-decoration: none;
+}
+.admin-nav a.router-link-exact-active {
+  color: #145cc7;
+  background: #e7effe;
+  font-weight: 600;
+}
+.admin-body {
+  margin-left: var(--admin-sidebar-width);
+}
+.admin-topbar {
+  min-height: 54px;
+  padding: 8px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  background: #f9fbff;
+  border-bottom: 1px solid #e8eef8;
+}
+.admin-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.admin-identity strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: #e4eeff;
+  color: #145cc7;
+  border-radius: 50%;
+  font-weight: 600;
+}
+.admin-content {
+  max-width: 1800px;
+  padding: 16px 20px 28px;
+  margin: auto;
+}
+.admin-topbar .admin-menu-toggle,
+.admin-menu-mask {
+  display: none;
+}
+@media (max-width: 850px) {
+  .admin-content {
+    padding: 14px 14px 24px;
+  }
+}
+@media (max-width: 600px) {
+  .admin-sidebar {
+    visibility: hidden;
+    transform: translateX(-100%);
+    transition: transform 0.2s;
+  }
+  .admin-sidebar.is-open {
+    visibility: visible;
+    transform: translateX(0);
+  }
+  .admin-body {
+    margin-left: 0;
+  }
+  .admin-menu-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    border: 0;
+    background: #17263e50;
+    z-index: 19;
+  }
+  .admin-topbar .admin-menu-toggle {
+    display: inline-flex;
+    margin-right: auto;
+    padding: 5px;
+  }
+  .admin-topbar {
+    padding-inline: 12px;
+  }
+  .admin-content {
+    padding-inline: 10px;
+  }
+}

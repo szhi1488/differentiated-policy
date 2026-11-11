@@ -1,35 +1,39 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { workspaceDestination } from '../utils/workspace-route'
+import { authSession } from '../composables/useAuthSession'
 
 const EmptyRoute = { render: () => null }
-export function createWorkspaceRouter(history = createWebHashHistory()) {
-  let sessionUser = null
+export function createWorkspaceRouter(history = createWebHashHistory(), session = authSession) {
   const router = createRouter({
     history,
     routes: [
-      { path: '/admin/overview', component: () => import('../views/admin/AdminOverview.vue') },
-      { path: '/admin/policies', component: () => import('../views/admin/AdminPolicies.vue') },
       {
-        path: '/admin/reviews',
-        component: () => import('../views/admin/AdminPolicies.vue'),
-        props: { reviewOnly: true },
+        path: '/apply',
+        name: 'apply',
+        meta: { role: 'APPLICANT' },
+        component: () => import('../views/apply/PolicyApplicationPage.vue'),
       },
       {
-        path: '/admin/catalog/:section(sync|sources|exceptions|variants|logs)',
-        component: () => import('../views/admin/AdminCatalog.vue'),
-        props: true,
+        path: '/apply/submissions',
+        name: 'submissions',
+        meta: { role: 'APPLICANT' },
+        component: () => import('../views/apply/MySubmissionsPage.vue'),
       },
-      { path: '/admin/settings', component: () => import('../views/admin/AdminSettings.vue') },
+      {
+        path: '/admin/catalog/sources',
+        name: 'catalog-sources',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/catalog/CatalogSourcesPage.vue'),
+      },
       { path: '/:pathMatch(.*)*', component: EmptyRoute },
     ],
     scrollBehavior: () => ({ top: 0 }),
   })
   router.beforeEach((to) =>
-    sessionUser ? workspaceDestination(sessionUser, to.path) || true : true,
+    session.user.value ? workspaceDestination(session.user.value, to) || true : true,
   )
-  router.setSessionUser = async (user) => {
-    sessionUser = user
-    const destination = workspaceDestination(user, router.currentRoute.value.path)
+  router.syncSessionRoute = async () => {
+    const destination = workspaceDestination(session.user.value, router.currentRoute.value)
     if (destination) {
       await router.replace(destination)
     }

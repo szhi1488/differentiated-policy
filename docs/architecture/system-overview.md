@@ -2,19 +2,19 @@
 
 更新日期：2026-11-11。源码现状与已确认但未实现能力分别标注。
 
-用户确认流程是两品牌七字段原始导入 → 系统标准化（含颜色）→ 唯一明确结果自动入可用标准库、异常才人工审核 → 政策按规格不限颜色或指定颜色。详见 [商品方案](catalog-admin-design.md)和[清洗细则](../business/catalog-cleaning.md)。保留九表并补来源清洗字段、任务清洗阶段及SYSTEM审计；功能未实现。目标库仍按用户最新说明未建表，由用户自行执行SQL；本轮不连接目标库。
+商品读取已接入后端 `JackyunGoodsService`，并实测一加、OPPO 两品牌的单页查询和续拉。已确认的后续流程为两品牌七字段原始导入 → 自动标准化系列、型号、配置和颜色 → 唯一明确结果进入可用标准库，异常人工审核 → 政策按规格不限颜色或指定颜色。同步任务、来源入库、清洗和标准目录仍待实现。按用户最新说明，目标库尚未建表，由用户执行九表 SQL。[商品方案](catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 产品与运行方式
 
-系统是支持飞书客户端和普通浏览器访问的差异化政策网页应用，包含申请人与采购管理员两类角色。客户端通过 JS-SDK 免登，浏览器通过飞书网页 OAuth 授权，使用同一套服务端身份核验及会话。先完成申请、审核、查询闭环；不扩展结算、打款、库存或多级审批。
+系统是支持飞书客户端和普通浏览器访问的差异化政策网页应用，包含申请人与采购管理员两类角色。客户端通过 JS-SDK 免登，浏览器提供飞书扫码与网页 OAuth 授权，使用同一套服务端身份核验及会话。先完成申请、审核、查询闭环；不扩展结算、打款、库存或多级审批。
 
-飞书登录后按服务端 `user.roleType` 分流：ADMIN 进入管理员全部政策页，其他角色沿用申请人工作台。申请人侧栏仍为「政策提交 → 提交政策 / 我的提交」，同一表单切换零售和百亿。管理员已完成展示工作台，包含政策、商品及系统信息九个路由，业务操作均未接入；详见 [管理员工作台](admin-workspace.md)。
+飞书登录后按服务端 `user.roleType` 分流：ADMIN 进入「商品 → 源商品库」展示页，其他角色沿用申请人工作台。申请人侧栏为「政策提交 → 提交政策 / 我的提交」，同一表单切换零售和百亿。源商品库是唯一管理员页面，采用静态样例，业务控件禁用。详见 [管理员工作台](admin-workspace.md)。
 
 ```mermaid
 flowchart LR
     F[飞书客户端] --> V[Vue 3 页面]
     B[普通浏览器] --> V
-    V -->|浏览器网页授权与回调| O[飞书官方 OAuth 授权页]
+    V -->|浏览器扫码或网页授权| O[飞书 OAuth 授权与回调]
     V -->|同源 /api| C[Spring Boot Controller]
     C --> S[Service 接口与实现]
     S --> M[MyBatis-Plus Mapper]
@@ -23,6 +23,8 @@ flowchart LR
 ```
 
 数据库访问当前仅接入 `user_info`；政策三表的 Mapper、Service 和 Controller 尚未实现。
+
+吉客云只读服务独立于页面和数据库写入。服务端按 `brandName` 请求单页，校验返回品牌和游标顺序，向后续同步任务提供七个原始字段及下一页游标。[单页查询联调](catalog-admin-design.md#单页查询联调)
 
 ## 实际技术栈
 
@@ -42,17 +44,21 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 
 | 位置 | 已使用组件与行为 |
 | --- | --- |
-| `src/App.vue` | ConfigProvider 配置中文；Button 显示登录加载状态；申请工作台登录后延迟加载 |
-| `views/apply/components/PolicyApplicationForm.vue` | Form、Select、CheckTag、Radio、DatePicker、Tabs、Tag、Input、Upload、Button、Alert；MessageBox 确认渠道切换、取消平台及清空表单 |
+| `src/App.vue` | ConfigProvider 配置中文，统一会话按角色加载工作台 |
+| `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
+| `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 单一商品导航及源商品库静态样例，表格在窄屏容器内横向滚动 |
+| `views/apply/PolicyApplicationPage.vue` | `/apply` 页面入口，组装基础信息、时间、明细与附件区块；工作台确认渠道切换、取消平台及清空表单 |
 | `views/apply/components/PolicyDetailsTable.vue` | Table 使用稳定行 key、横向滚动和右侧固定操作列；Input、Select 编辑明细，Empty 显示无明细提示 |
-| `views/apply/ApplicantWorkspace.vue` | 保留业务侧栏和横幅；Empty 与 Button 展示我的提交占位入口；菜单切换保留已填表单 |
-| `vite.config.js`、`src/test-setup.js` | 按需导入组件及样式；测试处理组件 CSS，并为 jsdom 提供尺寸监听替身 |
+| `layouts/ApplicantLayout.vue` | 保留业务侧栏和横幅；持有表单状态，路由切换保留填写；身份变化及失效清理 |
+| `vite.config.js`、`tests/` | 按需导入组件及样式；Vitest 在 `tests/` 下收集单元、组件和集成测试，`setup.js` 为 jsdom 提供尺寸监听替身 |
 
-自定义 CSS 保留侧栏、横幅、业务网格、响应式布局和少量控件尺寸调整，不重复绘制通用控件。`assets/main.css` 管理基础主题，`assets/workspace.css` 管理工作台布局。桌面基础信息在适当宽度分两行排列；手机上日期范围上下显示完整时间，日期弹层限制宽度并可纵向滚动，确认操作保持可访问；明细表格在容器内横向查看，空状态使用正常行高。
+自定义 CSS 保留侧栏、横幅、业务网格、响应式布局和少量控件尺寸调整。`assets/styles/` 维护全局基础及品牌，工作台布局样式位于 `layouts/`，各页面样式随组件加载。桌面基础信息在适当宽度分两行排列；手机上日期范围上下显示完整时间，日期弹层限制宽度并可纵向滚动，确认操作保持可访问；明细表格在容器内横向查看，空状态使用正常行高。构建与验收见[前端工程检查与验收](frontend-harness.md)。
 
 日期仍保存精确到秒的北京时间墙上时间字符串，不转换为 UTC；金额仍按十进制字符串录入。确认框以异步结果决定是否清除，取消时不修改原渠道和已填明细。Upload 关闭自动上传，仅暂存当前页面文件，可移除；独立附件接口及 `useAttachments` 已有实现，但当前申请页没有接入该上传流程，详见 [附件接口](../api/attachment-api.md)。组件替换不代表政策持久化、标准机型库或申请页附件上传已接通。当前型号、配置和颜色仍是手工输入占位，不能视为已完成标准目录和颜色范围选择。
 
 ## 模块职责
+
+以下描述当前结构。目录职责、组件数据流、模型适配、请求/会话与渐进整改按[前端架构与开发规范](frontend-development.md)执行；前三阶段适用整改已落地，规范中的完整目标骨架仍不等于当前文件清单。前端本地阅读入口见 [frontend/README.md](../../frontend/README.md)。
 
 ```text
 frontend/src/
@@ -62,8 +68,13 @@ frontend/src/
   constants/                   固定选项
   composables/                 状态与交互
   utils/                       纯函数与 SDK 封装
-  views/apply/                 申请人工作台
-    components/                表单与明细表格
+  layouts/                     申请人/管理员导航与出口；申请布局持有表单
+  mocks/                       明确展示入口及 fixtures，不作请求失败回退
+  router/                      Hash 命名路由与角色元信息
+  views/auth/                  飞书登录页
+  views/apply/                 政策申请页及我的提交占位页
+    components/                基础、时间、明细和附件表单区块
+  views/admin/catalog/         源商品库单页
 
 backend/src/main/java/com/company/policy/
   controller/                  请求、校验与接口说明
@@ -79,9 +90,9 @@ backend/src/main/java/com/company/policy/
   common/exception/            异常与统一处理
 ```
 
-`router/` 已接入 Vue Router Hash 路由，`views/admin/` 为管理员展示页面；`stores/`、`views/audit/` 仍按需启用。Controller 和服务通过接口注入，不把实现写进接口或配置类。页面不承担服务端权限和最终生效判断。
+`router/` 已接入 Vue Router Hash 路由，`views/admin/` 为管理员展示页面；当前未建立 `stores/`、`views/audit/`。后续不强制引入 Pinia 或另建审核目录，按前端规范和实际共享需求评估。Controller 和服务通过接口注入，不把实现写进接口或配置类。页面不承担服务端权限和最终生效判断。
 
-前端公共请求由 `api/request.js` 处理超时、错误和请求头；组件通过 props、emit 或 v-model 交互，不直接修改 props，列表使用稳定标识。未来金额使用十进制字符串传输，服务端 `BigDecimal` 计算。
+前端公共请求由 `api/request.js` 处理超时、取消、错误和请求头；组件通过 props、emit 或 v-model 交互，不直接修改 props，列表使用稳定标识。现有金额/比例保留十进制字符串，服务端未来使用 `BigDecimal` 计算；展示适配不作为业务 DTO 提交。
 
 ## 数据与安全边界
 
@@ -94,18 +105,21 @@ backend/src/main/java/com/company/policy/
 
 ## 当前实现与验证边界
 
-2026-11-11 管理员展示工作台：`npm.cmd run check` 完整通过 ESLint、Prettier、12 个测试文件的 48 项测试及生产构建；`git diff --check` 无差异格式错误。新增验证覆盖 ADMIN 分流、申请人路由限制、管理员九个子路由、未知地址回退、演示筛选、日期单边及倒置范围。浏览器已检查 1440、768、390px 的页面，验证搜索/重置/分页、详情/历史/候选影响、窄屏导航与商品任务/七字段证据/规格颜色/操作记录展示，业务操作按钮均禁用。用户亲自完成真实登录后，已观察到 5173 管理员页面与真实账号；其余界面验证使用 5174 的隔离组件预览，不代表商品或政策接口已接入。截图保存在忽略目录 `.local-cache/admin-ui/admin-policies.jpg`。本轮未运行后端检查、未连接数据库、未修改飞书远端配置。
+源商品库单页验收使用保留原登录入口的隔离构建。62 项测试及生产构建通过，模拟会话验证三个尺寸、管理员默认入口、直达、旧链接回退和申请人权限分流。扫码登录入口的真实联调单独记录。[管理员工作台](admin-workspace.md)
+
+前序多页管理员工作台、申请布局重构及其验证记录见前端规范。历史真实网页授权是在当时的管理员工作台观察到的，当前源商品库按本页的单页验收记录判断。[前端规范第 9 节](frontend-development.md#9-验证记录与维护) · [飞书鉴权](feishu-auth-flow.md)
 
 | 能力 | 状态 |
 | --- | --- |
 | 票据缓存、页面签名、config/ready | 已实现 |
 | requestAccess、身份核验、用户落库 | 已实现；用户已确认真实登录成功 |
-| 普通浏览器网页授权、回调交换 | 已实现；本轮用户完成真实授权后观察到管理员页面，取消/超时等人工联调仍待完成 |
+| 普通浏览器扫码、网页授权与回调 | 已实现，已看到真实二维码并验证模拟扫码回调。真实手机确认后的登录待联调。[飞书登录验证记录](feishu-auth-flow.md#验证记录) |
 | 会话恢复、退出、来源保护 | 已实现；恢复及退出重登未逐项人工验证 |
 | 渠道显隐、平台独立明细、补贴切换 | 已实现前端交互 |
 | 草稿保存、正式提交、我的提交 | 未接业务持久化，不显示假成功 |
 | 机型读取、共享补贴批量操作、上传 | 待接入 |
-| 管理员工作台、筛选及详情 | 展示版已实现，仅筛选本地演示数据，业务接口未接入 |
+| 吉客云货品读取 | 后端单页查询已实现并实测两品牌续拉，导入任务、落库及清洗待接入 |
+| 管理员源商品库 | 单页展示已实现，使用静态样例，业务控件禁用 |
 | 审核、覆盖计算和生效 | 待实现，覆盖口径待确认；展示版不执行决定 |
 
 当前用户目标库未建表，以 2026-11-11 最新说明为准。曾有独立 user_info 回滚测试历史，但不能证明当前目标库存在该表。项目未启用 Flyway 或自动建表，九表 DDL 与业务代码接入分开验收。

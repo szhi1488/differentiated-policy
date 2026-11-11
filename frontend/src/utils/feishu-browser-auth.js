@@ -1,14 +1,24 @@
 import { createBrowserAuthorization, exchangeBrowserLoginCode } from '../api/feishu'
 
-export async function startBrowserLogin() {
-  const { authorizationUrl } = await createBrowserAuthorization()
-  const url = new URL(authorizationUrl)
+export async function getBrowserAuthorizationUrl(signal) {
+  const { authorizationUrl } = await createBrowserAuthorization(signal)
+  let url
+  try {
+    url = new URL(authorizationUrl)
+  } catch {
+    throw new Error('飞书授权地址无效，请联系管理员。')
+  }
   if (
     url.origin !== 'https://accounts.feishu.cn' ||
     url.pathname !== '/open-apis/authen/v1/authorize'
   ) {
     throw new Error('飞书授权地址无效，请联系管理员。')
   }
+  return url
+}
+
+export async function startBrowserLogin() {
+  const url = await getBrowserAuthorizationUrl()
   window.location.assign(url.href)
 }
 

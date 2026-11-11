@@ -6,8 +6,9 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 export default defineConfig({
   plugins: [vue(), Components({ dts: false, resolvers: [ElementPlusResolver()] })],
   test: {
+    include: ['tests/**/*.test.js'],
     server: { deps: { inline: [/element-plus/] } },
-    setupFiles: ['./src/test-setup.js'],
+    setupFiles: ['./tests/setup.js'],
   },
   server: {
     host: '127.0.0.1',
