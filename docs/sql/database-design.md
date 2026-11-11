@@ -1,247 +1,296 @@
-# 差异化政策管理数据库设计
+# 数据库设计与字段字典
 
-更新日期：2026-11-10。适用数据库：MySQL 8.0.16 及以上。
+更新日期：2026-11-11。确认版九表，MySQL 8.0.16+。用户最新说明：目标库已有库名、尚未建表，覆盖此前“四表已存在”的状态描述。本轮只交付文件，未连接或修改用户目标数据库。
 
-本版采用四张业务表，保存政策申请、平台机型明细、用户角色及审核历史。建表脚本为 [schema.sql](schema.sql)，版本追踪脚本为 [V1__create_policy_tables.sql](V1__create_policy_tables.sql)，两者保持一致。完整 DDL 只在 SQL 文件维护，不在数据字典重复。
+## 1. 在 Navicat 建表
 
-当前交付状态：用户最新 Navicat 截图显示四张表均已存在。本次已核对本机 `differentiated policy` 库的 `user_info` 字段并接入飞书登录落库，真实 MySQL 的临时写入验证已通过并回滚，未改表结构。政策主表、明细表和审核日志尚未接入业务持久化；其实际约束未逐项回读核验。SQL 文件名用于版本追踪，不表示启用 Flyway 或其他自动迁移工具；不要对已有表重跑新建脚本。
+1. 选中你已经创建的目标数据库，先执行 SELECT VERSION(), DATABASE();，确认 MySQL 8.0.16+ 及当前库名。脚本不包含 CREATE DATABASE 或 USE，不会帮你选择库。
+2. 执行 SHOW TABLES;，确认目标库没有本版九张同名表；如存在，先停止核对，不能删除重建或重跑完整脚本。
+3. 打开 [schema.sql](schema.sql)，整份执行一次。它与 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 内容完全一致，二选一，不能两份都执行。
+4. 刷新表列表，应有九张表。确认外键及 CHECK 均创建成功。MySQL DDL 隐式提交，文件中途失败时先核对已创建部分，不直接重跑。
 
-## 1. 已明确的业务与设计边界
+SQL 不含删表、清空、真实用户、凭证或示例机型数据。SET time_zone 仅设置当前连接；应用连接仍须遵守北京时间。SQL 文件是人工执行的空库基线，项目未配置 Flyway 或自动建表。
 
-- 录入顺序为“选择零售或百亿 → 选择平台 → 选择该平台下的机型，填写数量和补贴”。一条明细对应一个平台下的一个机型，数量属于这一条明细；跨平台数量分别保存。
-- 同一机型在不同平台可以有不同补贴；部分或全部平台共享补贴时，保存为各具体平台的明细，由录入界面提供批量填写能力。不能把各平台数量直接当成同一个共享数量重复填充。
-- “全部”是选择操作，保存操作当时明确的平台集合，不保存 `ALL`。当前不自动增加历史适用平台；未来新增平台是否适用历史全选政策仍待确认。
-- 草稿允许不完整，提交时完整校验；申请被拒绝后可以修改重提，每次提交和审核历史必须保留。
-- 用户说明型号、单型号、配置来自同一张机型表，但其主键字段及类型尚不清楚。本版暂存文本快照，不凭空添加关联 ID，也不将名称当作可靠唯一键；正式对接机型库前必须核对稳定标识。
-- 本次不定义政策覆盖优先级和旧政策失效逻辑。`APPROVED` 仅表示审核通过，不能直接解释成当前生效。
+本轮用户明确尚未建表，因此同步更新未部署的 V1 为九表基线；其他已执行旧四表 V1 的库不能照此重跑，须先核对后制定独立增量迁移。
 
-## 2. 表职责与关联关系
+## 2. 九表清单和约束
 
 | 表 | 职责 | 关键关联 |
 | --- | --- | --- |
-| `user_info` | 飞书身份与本地角色映射 | `(tenant_key, open_id)` 唯一 |
-| `policy_master` | 申请基本信息、已选平台、当前状态及版本 | `applicant_id`、`reviewer_id` 关联 `user_info.id` |
-| `policy_detail` | 平台下的机型、颜色、数量及补贴参数 | `policy_id` 关联 `policy_master.id` |
-| `policy_audit_log` | 操作记录、每次提交快照和独立审核意见 | `policy_id` 关联申请，`operator_id` 关联 `user_info.id` |
+| user_info | 飞书身份、本地角色 | tenant_key + open_id 唯一；停用身份仍占唯一键 |
+| catalog_variant | 品牌系列型号配置合并的标准规格 | 租户内稳定 variant_code；品牌 + 型号 + 配置唯一 |
+| catalog_variant_color | 某一具体规格的颜色 | variant_id + tenant_key 外键；规格内颜色名唯一 |
+| goods_sync_job | 两品牌任务与最新续拉进度 | 发起人同租户；同账套仅一个活动槽；幂等键唯一 |
+| source_goods_item | 七字段来源及内联映射 | 首次/最近任务同租户账套；规格同品牌；颜色同规格 |
+| catalog_operation_log | 商品维护审计 | 操作人同租户；对象类型和本地 ID 由服务端鉴权 |
+| policy_master | 政策主表 | 申请人及最近审核人同租户 |
+| policy_detail | 逐平台规格颜色范围及补贴 | 主表、规格同租户；指定颜色同规格 |
+| policy_audit_log | 提交审核历史 | 政策及操作人同租户 |
 
-与原始草案相比，`applicant_id`、`reviewer_id`、`operator_id` 均从飞书 `open_id` 文本改为本地用户 `BIGINT` 主键。姓名字段作为历史快照保留。所有外键使用 `RESTRICT`，不级联删除历史。
+完整关联图及业务见 [确认方案](../architecture/catalog-admin-design.md)。首期不独立建立品牌/系列/型号、映射、清洗规则、逐页响应及批次成员表。
 
-明细及日志跟随主表权限读取。主表逻辑删除后，应在业务查询中同步排除其明细；日志不随主表编辑而修改或清空。
+## 3. 关键存储规则
 
-## 3. 字段与校验约定
+### 来源与标准目录
 
-### 平台与渠道
+吉客云业务字段只保存 goodsName、goodsNo、skuName、cateName、goodsField4、goodsField1、goodsField5。brand_name 来自查询分区；系列、型号、配置、颜色是这些原文经规则清洗或必要时人工纠正产生的本地派生标准信息，不是额外采集字段。原始层先落库，明确结果自动写入标准层，异常才人工审核；不要求用户先手工维护全量颜色。
 
-| 平台 | 编码 | 零售 | 百亿 |
-| --- | --- | --- | --- |
-| 快手 | `KUAISHOU` | 支持 | 不支持 |
-| 拼多多 | `PDD` | 支持 | 支持 |
-| 京东 | `JD` | 支持 | 不支持 |
-| 抖音 | `DOUYIN` | 支持 | 不支持 |
-| 天猫 | `TMALL` | 支持 | 不支持 |
-| 淘宝 | `TAOBAO` | 支持 | 支持 |
-| 招商 | `ZHAOSHANG` | 支持 | 不支持 |
-| 得物 | `DEWU` | 支持 | 不支持 |
-| 联通 | `UNICOM` | 支持 | 支持 |
-| 政企 | `GOV_ENTERPRISE` | 支持 | 不支持 |
+来源字段保留 NULL 与空字符串原意，不自动清洗覆盖原文。VARCHAR 长度是当前工程上限，联调需核对；超长输入明确拒绝，不隐式截断。内容指纹对原始七字段固定编码 SHA256，命中后比较实际字符串，碰撞用 collision_no，不把哈希唯一等同真实 SKU 唯一。
 
-`selected_platforms` 保存字符串数组，例如 `["PDD", "TAOBAO"]`；未填写的草稿可为 SQL `NULL` 或空数组。后端必须校验数组元素、去重、渠道可选范围，以及每条明细的平台属于该集合。JSON 类型本身不完成这些业务校验。
+source_goods_item 是内容项而非外部 SKU 身份，goods_no 不设唯一键。相同原文复用本地 ID，不同内容形成新候选，不自动继承映射。仅首次/最近任务关联，不提供完整历史批次回放。
 
-百亿的 `verify_type`、`scene_type`、`is_estimated` 必须为 SQL `NULL`；零售提交时三者必填。切换渠道或减少已选平台时，需要同步处理不再适用的明细，不能静默保留无效组合。
+目录和颜色保留 DRAFT / ACTIVE / DISABLED；清洗唯一通过时可以直接创建或复用 ACTIVE，人工草稿是补充入口。来源 mapping_status 保存当前生效关联，MAPPED 必须有规格及 AUTO/MANUAL 来源；clean_status 单独表达本次 PENDING/PROCESSING/AUTO_PASSED/REVIEW_REQUIRED/MANUAL_PASSED/ERROR/EXCLUDED。自动或人工通过必须有明确规格和颜色，未知颜色不得变不限颜色。重算异常可保留旧映射，不自动覆盖人工结果或复活 DISABLED。
 
-### 草稿、机型和补贴
+source_goods_item 内新增 clean_candidate、clean_rule_version、clean_error_code、clean_job_id、执行租约/次数、完成时间和人工审核人/时间/原因。候选仅由七字段派生，JSON 外层必须对象，内容结构和大小由服务端白名单校验；成功/异常/纠正历史追加操作日志，当前字段不替代历史。AUTO_PASSED 要规则版本、候选、明确颜色和完成时间且审核人为空；MANUAL_PASSED 要真实审核人、时间、原因。ERROR/REVIEW_REQUIRED 要原因，PROCESSING 要成功批次依据及执行令牌/租约（批次是否成功仍由服务端核验）。详见 [自动清洗细则](../business/catalog-cleaning.md)。
 
-- 草稿也必须有政策单号、申请人和渠道视角；尚未选择平台或机型时，不必创建空明细。创建明细时至少已有所属申请和具体平台。
-- 机型名称、单型号、配置、补贴方式、政策时间允许草稿暂缺。后端只允许申请人编辑本人草稿及已拒绝申请；提交必须完成相应渠道的必填校验。
-- 颜色和数量可为空，SQL `NULL` 不代表某种默认颜色，也不代表数量为零。本版数量允许非负整数；零值业务含义尚未确认，不自动填零。
-- 固定补贴使用 `fixed_amount`、`max_subsidy_amount`，比例补贴使用 `subsidy_ratio`、`base_price_type`。切换方式先清空另一组字段。数据库约束允许当前方式的字段暂缺，完整性由正式提交校验保障。
-- 同平台下同机型的重复或冲突明细由后端识别并提示；本版没有基于名称添加唯一索引。实际机型及颜色识别口径须在主数据对接后确定，不能依赖字符串模糊匹配或最后一条记录取胜。
-- 金额使用 `DECIMAL(10,2)`，比例沿用原始 SQL 草案的 `DECIMAL(5,2)` 百分数表示法，`10.00` 表示 `10%`。这是本版存储约定，不表示已确认最终精度、业务上限或舍入口径。后端使用 `BigDecimal`，拒绝超出存储精度或范围的输入，不能依赖数据库隐式截断或舍入。
-- `DECIMAL(5,2)` 最大可存 `999.99`；脚本只限制非负，不擅自将业务上限设为 `100%`。固定补贴上限的作用范围仍待确认。
+标准规格唯一性为租户、品牌、型号、配置，不包含可调整的系列显示名。同一型号配置若有真正不同版本，应在规范配置中显式区分，不能强行合并。已被引用的身份不可换成另一型号配置；颜色不可挪到另一规格。名称去首尾空格、大小写与单位规范由服务端维护，不依赖数据库自动推断。
 
-### 时间、附件和用户
+### 政策颜色和草稿
 
-- 本版时间字段使用 `DATETIME`，精确到秒，按 `Asia/Shanghai` 对应的北京时间解释；`DATETIME` 本身不携带时区。后端、数据库连接及界面需按相同约定转换。脚本的 `SET time_zone = '+08:00'` 仅设置执行脚本的当前连接，不配置后续连接。
-- 起止时间同时填写时必须开始早于结束；覆盖检测的端点包含规则仍待确认。
-- `attachment_info` 暂存附件或链接的 JSON 数组，仅规定数组外层结构；具体元素字段、存储位置、文件大小和类型、下载鉴权及链接校验待存储方案确定。数据库不保存文件二进制内容、飞书 token 或密钥。
-- 登录后按 `(tenant_key, open_id)` 查找或创建本地用户；普通用户默认为 `APPLICANT`。管理员身份由服务端管理，不能接受前端自行设置角色。多租户读取、写入、外键对象归属和操作权限仍需后端校验。
-- 逻辑删除用户后原唯一身份仍被保留；同一用户再次启用时应恢复原记录，不依靠新建重复身份绕过唯一键。
+color_scope=ALL_COLORS 表示当前规格不限颜色，此时 variant_color_id 和 color 都必须 NULL。SPECIFIC_COLOR 表示指定本规格颜色，草稿可暂未选完，正式提交必须有 ID 和服务端颜色快照。color_scope=NULL 仅表示草稿未选范围，不能当不限颜色。
 
-## 4. 提交、审核与历史保留
+复合颜色外键使用 (variant_color_id, catalog_variant_id, tenant_key)，阻止跨规格和跨租户。明细颜色名只是历史快照，不充当身份。不同型号、同型号不同配置的颜色独立维护；不限颜色不按当前颜色清单展开。
 
-| 字段 | 用途 |
-| --- | --- |
-| `policy_master.submission_version` | 初始为 0，首次提交为 1，每次重提递增 |
-| `policy_master.record_version` | 并发控制版本，每次主表或明细业务修改、提交、审核均递增 |
-| `policy_audit_log.submission_version` | 标记日志对应哪一轮提交；首次提交前为 0 |
-| `policy_audit_log.submission_snapshot` | `SUBMIT`、`RESUBMIT` 时保存完整主表及全部明细快照 |
-| `policy_audit_log.review_remark` | 当前这次审核的意见，后续重提不覆盖 |
+数量允许 NULL 或非负整数，0 业务含义仍待确认。草稿允许机型、时间、补贴参数暂缺，但填写内容必须合法。SQL 不能跨表校验“主表已提交所以子明细必须完整”，必须由 Service 同事务检查。
 
-- 提交快照包含当轮选定平台、机型信息、数量、补贴参数、时间、备注和附件链接信息等完整业务内容，不含会话凭证或 token。快照提交后不改写。
-- 创建或修改草稿、提交、审核均由服务端写操作日志。提交校验、条件更新、版本递增和写入快照在同一事务中完成；通过及拒绝必须针对当前待审核提交版本，并在同一事务内写审核日志。
-- 并发控制由后端显式实现：带原 `record_version` 和允许的当前状态条件更新，影响行数必须为 1；只有版本字段本身不会自动阻止并发操作。明细修改也必须参与同一主表版本保护事务。
-- 修改已拒绝申请时保留此前审核意见；再次提交后清空主表最近审核字段，旧审核信息仍留在对应日志中。待审核、已通过申请不得按草稿编辑接口修改。
-- 本版不开放通过后修改或待审核撤回。覆盖候选检测、最终生效及部分替换须在业务规则确认后实现。
+### 金额、平台和时间
 
-## 5. 在 Navicat 中建立表
+金额 DECIMAL(10,2)、比例 DECIMAL(5,2) 百分数，Java BigDecimal，API 十进制字符串，拒绝超精度，不依赖隐式舍入。固定/比例参数互斥；比例上限、固定上限单位和计算基数来源待确认，SQL 只做非负约束。
 
-1. 选择目标数据库，执行 `SELECT VERSION();`，确认是 MySQL 8.0.16 及以上。
-2. 确认目标库没有四张同名表。本脚本使用普通 `CREATE TABLE`，已存在的表会报错；如已存在，应先检查结构并制定增量迁移，不要删除已有数据。
-3. 打开 `docs/sql/schema.sql`（与 V1 二选一，不要执行两遍），按文件顺序执行：用户表、主表、明细表、日志表。
-4. 查看执行结果，确认四张表、外键和 `CHECK` 约束均创建成功。MySQL DDL 不构成整个文件的原子事务；中途报错时，前面已成功创建的表可能仍存在，先核对结果，不要直接重跑整个文件。
+平台为 KUAISHOU/PDD/JD/DOUYIN/TMALL/TAOBAO/ZHAOSHANG/DEWU/UNICOM/GOV_ENTERPRISE；百亿仅 PDD/TAOBAO/UNICOM。selected_platforms 保存明确 JSON 数组，“全部”只是选中操作。后端校验明细平台属于已选集合及渠道范围。
 
-本脚本只新建业务表，不包含建库、真实用户或机型初始化数据。建表成功并不代表后端数据库连接、权限控制或业务流程已经实现。
+百亿 verify_type、scene_type、is_estimated 必须 NULL。零售提交时必填。起止时间精确到秒、Asia/Shanghai，DATETIME 本身无时区，开始必须早于结束。APPROVED 不等于当前生效；覆盖时间端点、优先级和不限颜色与指定颜色的替换仍待确认。
 
-### CHECK 兼容修正与已有表处理
+### 权限、历史与任务
 
-2026-11-10 的历史日志显示，原 `ck_detail_subsidy_exclusive` 用 `CASE` 返回整数，触发 MySQL 3812。V1 已改为直接 `AND` / `OR` 布尔表达式，并显式处理空补贴方式；`schema.sql` 沿用修正版。
+身份查找须读取停用记录并拒绝登录，不能过滤后新建绕过。本版保留原 user_info 字段，已有登录实体/测试不需要因九表 DDL 改写；新业务接口仍未实现。
 
-用户后续截图显示四表均已存在，不再引用仓库中不存在的 `continue_create_policy_tables.sql`。现有库须先读取结构、约束与执行结果，再为缺失或不一致部分设计独立增量脚本；不重跑整份新建脚本，不删除重建。
+含 is_deleted 的用户和政策主表正常业务查询过滤，明细日志经父政策鉴权；目录采用 status 停用，不物理删除。外键全部 RESTRICT。日志只追加，不随重提覆盖；服务端或数据库账号权限保证不可篡改，不声称仅靠 DDL 就防止直接改日志。
 
-### 验证场景与当前结果
+政策主表 submission_version 每轮提交递增，record_version 每次业务修改递增；主表、明细、提交快照及审核记录同事务。条件更新携带租户、状态和版本并检查影响行数。完整快照含标准 ID、品牌系列型号配置、颜色范围/ID/名称、平台、数量、补贴、时间及附件说明。
 
-以下为数据库及业务接入后的验证要求，不表示已执行通过：
+goods_sync_job 固定两品牌各自当前游标；skuId 不逐商品保存。终态任务只保留该任务最后位置，日志前后值剔除游标、worker_token 和完整上游响应，避免变相保存历史轨迹。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSING/PAUSED 占同账套唯一槽。暂停任务可恢复或取消，不能另建并发活动任务。
 
-- 不完整草稿可以保存，颜色和数量为空时回读仍为空。
-- 百亿不能保存零售专属字段；未知明细平台被约束拒绝。跨渠道平台、未选平台由后端拒绝。
-- 固定补贴不能混入比例字段，比例补贴不能混入固定字段，切换方式正确清理旧值。
-- 提交及重提日志必须有正数提交版本和对象形式的快照；每次拒绝意见及前次提交内容可以独立还原。
-- 同一用户租户身份不重复；外键不能引用不存在的用户或申请；并发编辑和重复审核由后端版本保护拦截。
+数据库唯一活动槽和租约字段不能替代执行器逻辑，导入 worker 必须带 fencing_token，清洗 worker 带 clean_run_key、来源版本和租约条件提交。status=SUCCEEDED 强制两个品牌分区成功；clean_status/clean_rule_version 是独立清洗阶段，只有成功导入后才允许开始。COMPLETED 只表示本轮已完成自动通过或异常分流，不代表所有商品可选。异常不阻塞明确商品。
 
-当前四表存在情况依据用户截图；此前已实际核对 user_info 字段并通过真实 MySQL 临时写入回滚验证。其余三表未接业务持久化，实际约束未逐项核验。本次文档整理未连接数据库、未执行 DDL，也未验证以上政策业务场景。
+catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同租户 operator_id，SYSTEM 必须无用户ID/姓名并有规则版本，不能伪造机器人用户或冒用发起管理员。自动建规格颜色、映射、完成状态及SYSTEM审计同事务；人工审核使用 USER。DDL 不能证明解析准确、权限正确、目标 ACTIVE 或历史只追加，服务端必须实现。include_blockup 必填0/1，业务默认仍待确定。
 
-## 6. 待确认事项
+## 4. 字段字典
 
-1. 现有机型表的字段、稳定主键和读取方式；对接前再确定关联列及增量迁移。
-2. 数量缺省、零数量及空颜色的业务含义。
-3. 固定补贴上限单位和作用范围，比例业务范围、精度、金额舍入及计算基数取值来源。
-4. 覆盖匹配维度、时间端点、优先级、正式替换时点及部分替换规则。
-5. 管理员名单、跨人数据可见范围、自审规则及拒绝原因是否必填。
-6. 备注、附件及链接是否必填，附件存储方案、格式、大小和访问权限。
+以下逐字段从本版 SQL 提取；可空指 DDL 层允许，不等于正式提交可缺失。完整索引/约束以 SQL 为准，ID 和游标精确传输，生成列不由调用方写入。
 
-## 7. 字段字典
+### user_info
 
-以下字段与 [schema.sql](schema.sql) 对应。“可空”指 DDL 层允许 SQL NULL，不等于正式提交允许缺失。ID 使用 BIGINT，API 传十进制字符串。未注明默认值的可空字段默认 NULL；具体索引和约束以 SQL 为准。
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 本地用户主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 飞书租户标识 |
+| open_id | VARCHAR(64) | 否 | — | 飞书应用内用户标识 |
+| union_id | VARCHAR(64) | 是 | NULL | 飞书同一应用开发商下的用户标识 |
+| name | VARCHAR(64) | 否 | — | 用户姓名 |
+| department | VARCHAR(128) | 是 | NULL | 所属部门 |
+| role_type | VARCHAR(32) | 否 | 'APPLICANT' | APPLICANT-申请人，ADMIN-管理员 |
+| is_deleted | TINYINT | 否 | 0 | 0-未删除，1-已删除 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP |  |
 
-### user_info：用户与角色
+### catalog_variant
 
-| 字段 | 类型 | 可空 / 默认 | 含义 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | 否，自增 | 本地主键 |
-| `tenant_key` | VARCHAR(64) | 否 | 飞书租户，二进制排序规则 |
-| `open_id` | VARCHAR(64) | 否 | 应用内用户标识，二进制排序规则 |
-| `union_id` | VARCHAR(64) | 是 | 同开发商用户标识，二进制排序规则 |
-| `name` | VARCHAR(64) | 否 | 用户姓名 |
-| `department` | VARCHAR(128) | 是 | 部门，重复登录保留现有值 |
-| `role_type` | VARCHAR(32) | 否，APPLICANT | 本地角色，不能由前端赋值 |
-| `is_deleted` | TINYINT | 否，0 | 0 有效 / 1 停用 |
-| `created_at` | DATETIME | 否，CURRENT_TIMESTAMP | 创建时间 |
-| `updated_at` | DATETIME | 否，CURRENT_TIMESTAMP | 数据库更新时自动刷新 |
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 本地标准规格主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 飞书租户标识 |
+| variant_code | VARCHAR(64) | 否 | — | 租户内稳定规格编码，不随改名复用 |
+| brand_name | VARCHAR(32) | 否 | — | 固定品牌：一加手机或OPPO手机 |
+| series_name | VARCHAR(64) | 否 | — | 标准系列名称 |
+| model_name | VARCHAR(64) | 否 | — | 标准具体型号名称 |
+| spec | VARCHAR(64) | 否 | — | 标准配置文本，含必要版本差异 |
+| display_name | VARCHAR(256) | 否 | — | 标准规格展示全称 |
+| status | VARCHAR(16) | 否 | 'DRAFT' | DRAFT-待发布，ACTIVE-可选，DISABLED-停用 |
+| record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
 
-唯一索引 `(tenant_key, open_id)`；停用身份仍占用唯一键。当前登录按真实身份查找并拒绝停用用户，不能只过滤后当作新用户。角色修改、恢复入口尚未开发。
+### catalog_variant_color
 
-### policy_master：政策申请主表
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 规格颜色主键，同名颜色在不同规格中分别维护 |
+| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
+| variant_id | BIGINT | 否 | — | 所属标准规格 |
+| color_name | VARCHAR(64) | 否 | — | 规则唯一确定或人工审核后的标准颜色名称 |
+| status | VARCHAR(16) | 否 | 'DRAFT' | DRAFT-待发布，ACTIVE-可选，DISABLED-停用 |
+| record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
 
-| 字段 | 类型 | 可空 / 默认 | 含义 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | 否，自增 | 政策 ID |
-| `policy_code` | VARCHAR(64) | 否 | 唯一单号，二进制排序规则 |
-| `applicant_id` | BIGINT | 否 | user_info.id，由会话确定 |
-| `applicant_name` | VARCHAR(64) | 是 | 申请人姓名快照 |
-| `perspective` | VARCHAR(32) | 否 | RETAIL / BILLION |
-| `channel_type` | VARCHAR(32) | 否 | 与视角一一对应 |
-| `selected_platforms` | JSON | 是 | 明确平台编码数组，草稿可空数组 |
-| `verify_type` | VARCHAR(32) | 是 | 零售核销类型，百亿 NULL |
-| `scene_type` | VARCHAR(32) | 是 | 零售场景，百亿 NULL |
-| `is_estimated` | TINYINT | 是 | 零售 0/1，百亿 NULL |
-| `start_time` | DATETIME | 是 | 开始时间，秒级北京时间 |
-| `end_time` | DATETIME | 是 | 结束时间，start < end |
-| `special_remark` | TEXT | 是 | 特别备注 |
-| `attachment_info` | JSON | 是 | 附件/链接数组；元素定义待确认 |
-| `status` | VARCHAR(32) | 否，DRAFT | 审核状态，不是生效状态 |
-| `submission_version` | INT UNSIGNED | 否，0 | 提交轮次 |
-| `record_version` | INT UNSIGNED | 否，0 | 业务修改并发版本 |
-| `reviewer_id` | BIGINT | 是 | 最近审核人 user_info.id |
-| `reviewer_name` | VARCHAR(64) | 是 | 最近审核人姓名快照 |
-| `review_remark` | VARCHAR(512) | 是 | 最近审核意见 |
-| `review_time` | DATETIME | 是 | 最近审核时间 |
-| `is_deleted` | TINYINT | 否，0 | 主表逻辑删除标记，不代表已开放删除 API |
-| `created_at` | DATETIME | 否，CURRENT_TIMESTAMP | 创建时间 |
-| `updated_at` | DATETIME | 否，CURRENT_TIMESTAMP | 自动刷新 |
+### goods_sync_job
 
-`policy_code` 唯一。索引覆盖申请人+状态+创建时间、视角+状态+创建时间、起止时间及审核人。主表没有 tenant_key 列，当前设计可通过申请人关联限定租户；正式接入须统一外键对象租户校验，不只凭传入 ID 操作。
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 同步任务主键，一个任务包含两个品牌 |
+| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
+| source_key | VARCHAR(64) | 否 | — | 服务端受控账套标识，不保存凭证 |
+| requester_id | BIGINT | 否 | — | 发起管理员 |
+| idempotency_key | VARCHAR(64) | 否 | — | 任务创建幂等键 |
+| status | VARCHAR(16) | 否 | 'QUEUED' | QUEUED、RUNNING、PAUSING、PAUSED、SUCCEEDED、PARTIAL、FAILED、CANCELLED |
+| oppo_status | VARCHAR(16) | 否 | 'PENDING' | OPPO分区：PENDING、RUNNING、SUCCEEDED、FAILED |
+| oneplus_status | VARCHAR(16) | 否 | 'PENDING' | 一加分区：PENDING、RUNNING、SUCCEEDED、FAILED |
+| oppo_last_max_id | VARCHAR(32) | 否 | '0' | OPPO当前唯一最新续拉位置，不保存逐商品标识 |
+| oneplus_last_max_id | VARCHAR(32) | 否 | '0' | 一加当前唯一最新续拉位置，不保存逐商品标识 |
+| page_size | INT | 否 | 50 | 联调确认范围内的单批数量 |
+| include_blockup | TINYINT | 否 | — | 本任务是否包含停用来源，0或1，必须显式选择 |
+| read_count | BIGINT UNSIGNED | 否 | 0 | 累计接收条次，重放可重复，非真实SKU总数 |
+| content_count | BIGINT UNSIGNED | 否 | 0 | 当前任务已提交的去重内容计数 |
+| clean_status | VARCHAR(16) | 否 | 'NOT_STARTED' | 清洗阶段，独立于导入状态：NOT_STARTED、RUNNING、COMPLETED、PARTIAL、FAILED |
+| clean_rule_version | VARCHAR(64) | 是 | NULL | 本次清洗固定的受控规则包版本 |
+| failure_count | INT UNSIGNED | 否 | 0 | 失败尝试次数 |
+| error_code | VARCHAR(64) | 是 | NULL | 脱敏错误类别，不存原始响应或凭证 |
+| worker_token | VARCHAR(64) | 是 | NULL | 当前执行者租约标识，不是上游凭证 |
+| lease_until | DATETIME | 是 | NULL | 租约到期时间 |
+| fencing_token | BIGINT UNSIGNED | 否 | 0 | 接管代次，旧执行者必须条件写入 |
+| record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
+| started_at | DATETIME | 是 | NULL | 开始时间 |
+| finished_at | DATETIME | 是 | NULL | 结束时间 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
+| active_slot | TINYINT | 生成 | 自动生成 | 同租户账套只保留一个活动任务，暂停也占位 |
 
-### policy_detail：具体平台的机型与补贴
+### source_goods_item
 
-| 字段 | 类型 | 可空 / 默认 | 含义 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | 否，自增 | 明细 ID |
-| `policy_id` | BIGINT | 否 | policy_master.id |
-| `platform_code` | VARCHAR(32) | 否 | 具体平台，不含 ALL |
-| `model_full_name` | VARCHAR(128) | 是 | 型号全称快照 |
-| `single_model` | VARCHAR(64) | 是 | 单型号快照 |
-| `spec` | VARCHAR(64) | 是 | 配置快照 |
-| `color` | VARCHAR(32) | 是 | 颜色，空值不作未经确认的通配 |
-| `quantity` | INT | 是 | 此平台此机型数量，非负，不自动补 0 |
-| `subsidy_mode` | VARCHAR(32) | 是 | FIXED / RATIO，草稿可缺 |
-| `fixed_amount` | DECIMAL(10,2) | 是 | 固定金额，非负 |
-| `max_subsidy_amount` | DECIMAL(10,2) | 是 | 固定上限，非负，作用范围待确认 |
-| `subsidy_ratio` | DECIMAL(5,2) | 是 | 百分数，非负，10.00 表示 10% |
-| `base_price_type` | VARCHAR(32) | 是 | 比例计算基数编码 |
-| `created_at` | DATETIME | 否，CURRENT_TIMESTAMP | 创建时间 |
-| `updated_at` | DATETIME | 否，CURRENT_TIMESTAMP | 自动刷新 |
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 本地来源内容主键，不是吉客云SKU主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
+| source_key | VARCHAR(64) | 否 | — | 受控账套标识 |
+| brand_name | VARCHAR(32) | 否 | — | 品牌查询分区，不取上游返回字段 |
+| goods_name | VARCHAR(512) | 是 | NULL | 来源goodsName原文 |
+| goods_no | VARCHAR(128) | 是 | NULL | 来源goodsNo原文，不作SKU唯一键 |
+| sku_name | VARCHAR(256) | 是 | NULL | 来源skuName原文 |
+| cate_name | VARCHAR(256) | 是 | NULL | 来源cateName原文 |
+| goods_field4 | VARCHAR(1024) | 是 | NULL | 来源goodsField4原文 |
+| goods_field1 | VARCHAR(1024) | 是 | NULL | 来源goodsField1原文 |
+| goods_field5 | VARCHAR(1024) | 是 | NULL | 来源goodsField5原文 |
+| content_hash | CHAR(64) | 否 | — | 七字段固定编码的SHA256，命中后仍比较原文 |
+| collision_no | INT UNSIGNED | 否 | 0 | 不同内容同哈希时分配的冲突序号 |
+| first_seen_job_id | BIGINT | 否 | — | 首次写入的同步任务 |
+| last_seen_job_id | BIGINT | 否 | — | 最近出现的同步任务，仅当前信息不作批次历史 |
+| mapping_status | VARCHAR(16) | 否 | 'UNMAPPED' | UNMAPPED-待归类，MAPPED-已确认，EXCLUDED-排除 |
+| catalog_variant_id | BIGINT | 是 | NULL | 规则唯一确定或人工确认的已生效规格映射 |
+| variant_color_id | BIGINT | 是 | NULL | 清洗七字段或人工审核产生的本地颜色映射 |
+| mapping_remark | VARCHAR(512) | 是 | NULL | 归类或排除原因 |
+| mapping_origin | VARCHAR(16) | 是 | NULL | 生效映射来源：AUTO-自动清洗，MANUAL-人工审核 |
+| clean_status | VARCHAR(16) | 否 | 'PENDING' | PENDING、PROCESSING、AUTO_PASSED、REVIEW_REQUIRED、MANUAL_PASSED、ERROR、EXCLUDED |
+| clean_job_id | BIGINT | 是 | NULL | 本次清洗依据的已成功导入任务 |
+| clean_rule_version | VARCHAR(64) | 是 | NULL | 本次处理的受控规则包版本，人工修正亦保留原依据 |
+| clean_candidate | JSON | 是 | NULL | 本地候选及七字段证据，禁止完整响应或额外上游属性 |
+| clean_error_code | VARCHAR(64) | 是 | NULL | 缺失、歧义、冲突或技术错误类别 |
+| clean_attempts | INT UNSIGNED | 否 | 0 | 清洗尝试次数 |
+| clean_run_key | VARCHAR(64) | 是 | NULL | 当前清洗执行标识，防止过期执行者提交 |
+| clean_lease_until | DATETIME | 是 | NULL | 当前清洗租约到期时间 |
+| cleaned_at | DATETIME | 是 | NULL | 最近一次清洗或人工审核结束时间 |
+| reviewed_by | BIGINT | 是 | NULL | 必要时人工审核人，自动通过必须为空 |
+| reviewed_at | DATETIME | 是 | NULL | 人工审核时间 |
+| review_reason | VARCHAR(512) | 是 | NULL | 人工纠正或排除的原因 |
+| record_version | INT UNSIGNED | 否 | 0 | 映射维护并发版本 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
 
-索引 `(policy_id, platform_code)`、`(platform_code, single_model, spec)` 仅供检索，不保证机型唯一。当前没有稳定主数据 ID，也没有逻辑删除字段。重写明细前须以主表版本锁定业务修改，待审/通过版本不允许直接重写。
+### catalog_operation_log
 
-### policy_audit_log：操作、提交快照与审核历史
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 商品操作审计主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
+| actor_type | VARCHAR(16) | 否 | 'USER' | USER-人工操作，SYSTEM-后台自动清洗 |
+| operator_id | BIGINT | 是 | NULL | 人工操作用户，SYSTEM必须为空，不冒用发起人 |
+| operator_name | VARCHAR(64) | 是 | NULL | 操作人姓名快照 |
+| rule_version | VARCHAR(64) | 是 | NULL | 自动清洗使用的规则包版本 |
+| entity_type | VARCHAR(32) | 否 | — | VARIANT、VARIANT_COLOR、SOURCE_GOODS_ITEM、SYNC_JOB |
+| entity_id | BIGINT | 否 | — | 对应本地对象主键，由服务端校验类型和租户 |
+| action_type | VARCHAR(32) | 否 | — | 目录维护、映射、任务控制及CLEAN_AUTO、CLEAN_REVIEW、CLEAN_ERROR、CLEAN_RETRY |
+| batch_key | VARCHAR(64) | 是 | NULL | 本次批量操作关联号，不是外部商品ID |
+| before_data | JSON | 是 | NULL | 本地字段变更前对象，不存完整上游响应或外部SKU标识 |
+| after_data | JSON | 是 | NULL | 本地字段变更后对象，任务快照须剔除游标及执行令牌 |
+| reason | VARCHAR(512) | 是 | NULL | 操作或纠正原因 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 操作时间 |
 
-| 字段 | 类型 | 可空 / 默认 | 含义 |
-| --- | --- | --- | --- |
-| `id` | BIGINT | 否，自增 | 日志 ID |
-| `policy_id` | BIGINT | 否 | policy_master.id |
-| `submission_version` | INT UNSIGNED | 否，0 | 对应提交轮次 |
-| `operator_id` | BIGINT | 否 | user_info.id，服务端确定 |
-| `operator_name` | VARCHAR(64) | 是 | 操作人姓名快照 |
-| `action_type` | VARCHAR(32) | 否 | 操作枚举 |
-| `from_status` | VARCHAR(32) | 是 | 操作前状态，创建时 NULL |
-| `to_status` | VARCHAR(32) | 否 | 操作后状态 |
-| `action_desc` | VARCHAR(255) | 是 | 操作描述 |
-| `review_remark` | VARCHAR(512) | 是 | 此次审核意见，不被后续覆盖 |
-| `submission_snapshot` | JSON | 是 | SUBMIT/RESUBMIT 必须为对象 |
-| `created_at` | DATETIME | 否，CURRENT_TIMESTAMP | 操作时间 |
+### policy_master
 
-索引 `(policy_id, submission_version, id)`、`(operator_id, created_at)`。没有 is_deleted 和 updated_at；历史记录不得随主表编辑清空。CHECK 校验枚举及提交快照，但不完整限制所有 from/to/action 组合，状态迁移仍由 Service 保证。
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 政策主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 申请所属租户，由会话确定 |
+| policy_code | VARCHAR(64) | 否 | — | 政策单号，创建草稿时生成 |
+| applicant_id | BIGINT | 否 | — | 申请人，关联 user_info.id |
+| applicant_name | VARCHAR(64) | 是 | NULL | 申请人姓名快照 |
+| perspective | VARCHAR(32) | 否 | — | RETAIL-零售，BILLION-百亿 |
+| channel_type | VARCHAR(32) | 否 | — | RETAIL_CHANNEL-零售渠道，BILLION_CHANNEL-百亿渠道 |
+| selected_platforms | JSON | 是 | NULL | 已选具体平台编码数组，不保存 ALL |
+| verify_type | VARCHAR(32) | 是 | NULL | SALES-销售维度，ACTIVATION-激活维度；百亿为空 |
+| scene_type | VARCHAR(32) | 是 | NULL | NATIONAL_SUB-国补，LOCAL_SUB-地补，SELF_SUB-自补；百亿为空 |
+| is_estimated | TINYINT | 是 | NULL | 0-否，1-是；百亿及未填写的草稿为空 |
+| start_time | DATETIME | 是 | NULL | 政策开始时间，草稿可为空 |
+| end_time | DATETIME | 是 | NULL | 政策结束时间，草稿可为空 |
+| special_remark | TEXT | 是 | — | 特别备注 |
+| attachment_info | JSON | 是 | NULL | 附件及链接信息数组，不保存文件二进制内容 |
+| status | VARCHAR(32) | 否 | 'DRAFT' | DRAFT-草稿，PENDING-待审核，APPROVED-已通过，REJECTED-已拒绝 |
+| submission_version | INT UNSIGNED | 否 | 0 | 提交版本，未提交为0，每次提交或重提递增 |
+| record_version | INT UNSIGNED | 否 | 0 | 并发控制版本号，每次修改递增 |
+| reviewer_id | BIGINT | 是 | NULL | 最近一次审核人，关联 user_info.id |
+| reviewer_name | VARCHAR(64) | 是 | NULL | 最近一次审核人姓名快照 |
+| review_remark | VARCHAR(512) | 是 | NULL | 最近一次审核意见，完整历史保存在日志表 |
+| review_time | DATETIME | 是 | NULL | 最近一次审核时间 |
+| is_deleted | TINYINT | 否 | 0 | 0-未删除，1-已删除 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP |  |
 
-## 8. 枚举字典
+### policy_detail
 
-| 字段 | 值 | 中文含义 / 约束 |
-| --- | --- | --- |
-| `role_type` | APPLICANT / ADMIN | 申请人 / 采购管理员 |
-| `perspective` | RETAIL / BILLION | 零售 / 百亿 |
-| `channel_type` | RETAIL_CHANNEL / BILLION_CHANNEL | 必须分别匹配 RETAIL / BILLION |
-| `verify_type` | SALES / ACTIVATION | 销售维度 / 激活维度 |
-| `scene_type` | NATIONAL_SUB / LOCAL_SUB / SELF_SUB | 国补 / 地补 / 自补 |
-| `is_estimated` | 0 / 1 / NULL | 否 / 是 / 不适用或未填写草稿 |
-| `status`、日志前后状态 | DRAFT / PENDING / APPROVED / REJECTED | 草稿 / 待审核 / 已通过 / 已拒绝 |
-| `subsidy_mode` | FIXED / RATIO | 固定 / 比例 |
-| `base_price_type` | RETAIL_PRICE | 零售价 |
-| `base_price_type` | POLICY_PRICE | 政策价 |
-| `base_price_type` | HAND_PRICE | 到手价 |
-| `base_price_type` | LOCAL_ACTUAL | 地补实际 |
-| `base_price_type` | MERCHANT_CONTROL | 商家配控 |
-| `action_type` | CREATE_DRAFT / UPDATE_DRAFT | 创建 / 修改草稿或已拒绝申请 |
-| `action_type` | SUBMIT / RESUBMIT | 首次提交 / 拒绝后重提 |
-| `action_type` | APPROVE / REJECT | 审核通过 / 拒绝 |
-| `is_deleted` | 0 / 1 | 未删除 / 已删除（用户用于停用判断） |
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 明细主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 与政策主表相同的租户 |
+| policy_id | BIGINT | 否 | — | 关联 policy_master.id |
+| platform_code | VARCHAR(32) | 否 | — | 具体平台编码，不保存 ALL |
+| catalog_variant_id | BIGINT | 是 | NULL | 标准规格，草稿可暂未选 |
+| brand_name_snapshot | VARCHAR(32) | 是 | NULL | 提交时品牌快照 |
+| series_name_snapshot | VARCHAR(64) | 是 | NULL | 提交时系列快照 |
+| color_scope | VARCHAR(32) | 是 | NULL | ALL_COLORS-不限颜色，SPECIFIC_COLOR-指定颜色；NULL仅为草稿未选择 |
+| variant_color_id | BIGINT | 是 | NULL | 当前规格下的指定颜色ID |
+| model_full_name | VARCHAR(256) | 是 | NULL | 涉及型号全称快照，草稿可为空 |
+| single_model | VARCHAR(64) | 是 | NULL | 单型号快照，草稿可为空 |
+| spec | VARCHAR(64) | 是 | NULL | 配置快照，草稿可为空 |
+| color | VARCHAR(64) | 是 | NULL | 指定颜色的名称快照，不限颜色时为NULL |
+| quantity | INT | 是 | NULL | 该平台该机型的数量；未填写为NULL，不自动记为0 |
+| subsidy_mode | VARCHAR(32) | 是 | NULL | FIXED-固定补贴，RATIO-比例补贴；草稿可为空 |
+| fixed_amount | DECIMAL(10,2) | 是 | NULL | 固定补贴金额 |
+| max_subsidy_amount | DECIMAL(10,2) | 是 | NULL | 固定补贴上限金额，具体作用范围待确认 |
+| subsidy_ratio | DECIMAL(5,2) | 是 | NULL | 补贴比例，百分数；10.00表示10% |
+| base_price_type | VARCHAR(32) | 是 | NULL | RETAIL_PRICE-零售价，POLICY_PRICE-政策价，HAND_PRICE-到手价，LOCAL_ACTUAL-地补实际，MERCHANT_CONTROL-商家配控 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP |  |
 
-平台编码完整映射见本文件第 3 节。基数和平台中文名须保留原名，未经确认不重命名。
+### policy_audit_log
 
-## 9. 数据库与应用分别承担的校验
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 日志主键 |
+| tenant_key | VARCHAR(64) | 否 | — | 与政策和操作人相同的租户 |
+| policy_id | BIGINT | 否 | — | 关联 policy_master.id |
+| submission_version | INT UNSIGNED | 否 | 0 | 对应的提交版本，首次提交前为0 |
+| operator_id | BIGINT | 否 | — | 操作人，关联 user_info.id |
+| operator_name | VARCHAR(64) | 是 | NULL | 操作人姓名快照 |
+| action_type | VARCHAR(32) | 否 | — | CREATE_DRAFT、UPDATE_DRAFT、SUBMIT、APPROVE、REJECT、RESUBMIT |
+| from_status | VARCHAR(32) | 是 | NULL | 操作前状态，创建时为空 |
+| to_status | VARCHAR(32) | 否 | — | 操作后状态 |
+| action_desc | VARCHAR(255) | 是 | NULL | 操作描述 |
+| review_remark | VARCHAR(512) | 是 | NULL | 本次审核意见，不随后续重提覆盖 |
+| submission_snapshot | JSON | 是 | NULL | 提交或重提时的完整主表及明细快照 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 操作时间 |
 
-SQL 的 CHECK 允许草稿暂缺，但校验枚举、非负、渠道对应、百亿字段为空、两组补贴互斥、数组外层类型及提交日志对象。外键 RESTRICT 防止误删关联历史。数据库没有校验所有跨行、跨表规则。
+## 5. 本轮实际验证
 
-应用必须校验：平台数组内容去重和渠道范围、明细平台属于已选集合、稳定主数据有效性、跨平台共享展开、完整提交、状态迁移、每轮快照、本人及租户归属、ADMIN 权限、并发版本。JSON 数组或外键存在不代表业务校验通过。
+本轮在项目缓存目录的独立 MySQL 8.0.29 实例（关闭网络监听）执行新版九表 SQL 成功，52 项合成数据检查通过：包含既有租户/品牌/规格颜色、补贴、任务及政策快照约束，以及新增原文先入库、清洗阶段分离、执行租约、自动通过必须有颜色/候选/规则、人工审核身份、异常原因、SYSTEM/USER 审计和原文保留。交付 SQL 不含测试记录，没有连接用户目标库或读取其凭证。
 
-`DATETIME` 不含时区；SQL 的 SET time_zone 只作用于执行连接。后端 Jackson 和 JDBC 已配置 Asia/Shanghai，后续仍须核对数据库服务器/连接、JVM 时间与读写转换，不能仅靠一个配置宣称时间语义全部验证完成。
-
-关联文档：[表单规约](../business/perspective-rules.md)、[状态机](../business/status-machine.md)、[覆盖查询草案](../business/override-engine.md)、[申请人接口](../api/policy-api.md)、[管理员接口](../api/admin-api.md)。
+两份建表脚本内容一致，全部字段字典、本地链接及差异格式在交付前核对。运行版本为8.0.29，未在最低8.0.16单独实测。未实现/运行真实自动解析器、规则包、商品接口或页面；不把约束验证称为自动清洗业务端到端通过。上一版27项记录属于历史验证，本轮52项包含相关回归。

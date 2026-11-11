@@ -1,6 +1,8 @@
 # 申请人政策接口设计
 
-更新日期：2026-11-10。**本文件为待实现契约草案**。当前仅飞书及登录接口存在，尚无以下政策 Controller/Service/Mapper；前端不应据此显示保存/提交成功。
+确认版九表已包含标准规格与颜色关联。后端从 catalogVariantId、variantColorId 读取目录生成快照，颜色范围必须显式传递；业务见 [商品后台确认方案](../architecture/catalog-admin-design.md)。
+
+更新日期：2026-11-11。业务范围与结构已确认，**本文件接口仍待实现**。尚无以下政策 Controller/Service/Mapper；前端不应据此显示保存/提交成功。
 
 ## 公共约定
 
@@ -43,9 +45,11 @@
 | `details` | `policy_detail` | 每条一个平台的机型及补贴 |
 | `recordVersion` | `record_version` | 更新必传，服务端条件校验 |
 
-每条 detail：`id`（已有行）、`platformCode`、`modelFullName`、`singleModel`、`spec`、`color`、`quantity`、`subsidyMode`、`fixedAmount`、`maxSubsidyAmount`、`subsidyRatio`、`basePriceType`。字段分别对应同名 snake_case 列。主数据关联 ID 尚未确认，不能把客户端任意文本当核验后的机型身份。
+每条 detail 的写入字段：`id`（已有行）、`platformCode`、`catalogVariantId`、`colorScope`、`variantColorId`、`quantity`、`subsidyMode`、`fixedAmount`、`maxSubsidyAmount`、`subsidyRatio`、`basePriceType`。品牌系列、modelFullName、singleModel、spec、color 等快照由服务端从目录生成，响应中返回，不接受客户端任意自报文本作为身份。tenantKey 来自会话，不接受前端传入。
 
-固定方式的比例/基数必须为 null；比例方式的固定金额/上限必须为 null。基数编码见数据字典。颜色与数量可空，数量不自动补 0；草稿已填内容仍校验，金额不超存储精度，冲突不静默取最后一条。
+colorScope 为 ALL_COLORS 时 variantColorId 必须 null，服务端 color 快照为 null；SPECIFIC_COLOR 正式提交必须选择当前规格下 ACTIVE 颜色，生成颜色快照；草稿允许暂未选完。colorScope=null 仅为草稿未选择，不推断不限颜色。不同型号配置的颜色分别维护，后端校验父子和租户。
+
+固定方式的比例/基数必须为 null；比例方式的固定金额/上限必须为 null。数量可空、不自动补 0；颜色按显式范围处理。草稿已填内容仍校验，金额不超存储精度，同平台同规格相同范围重复或不限/指定相交须提示整理，不静默取最后一条。
 
 示例保存请求（结构演示，机型及数字不是初始化数据）：
 
@@ -64,10 +68,9 @@
   "details": [
     {
       "platformCode": "PDD",
-      "modelFullName": "示例型号完整名称",
-      "singleModel": "示例单型号",
-      "spec": "示例配置",
-      "color": null,
+      "catalogVariantId": "1001",
+      "colorScope": "ALL_COLORS",
+      "variantColorId": null,
       "quantity": null,
       "subsidyMode": "FIXED",
       "fixedAmount": "50.00",
@@ -103,7 +106,7 @@
 }
 ```
 
-须校验平台集合、机型及配置、时间、零售分类、补贴方式和对应参数，百亿不带零售值。数量和颜色非必填。固定上限必填性、每个所选平台是否必须有明细及附件备注必填性仍待确认；不能用数据库允许 NULL 代替正式提交规则。
+须校验平台集合、有效标准规格、明确颜色范围、时间、零售分类、补贴方式和参数，百亿不带零售值。指定颜色必须有本规格下有效颜色，服务端生成完整快照；不限颜色无具体颜色 ID。数量可空。固定上限必填性、每个所选平台是否必须有明细及附件备注必填性仍待确认；不能用数据库允许 NULL 代替提交完整校验。
 
 ## 分页、筛选与日志
 

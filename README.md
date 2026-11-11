@@ -72,15 +72,19 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 模块化文档与数据库设计
 
+2026-11-11 确认 [商品流程](docs/architecture/catalog-admin-design.md)：两品牌七字段原始导入后系统清洗系列、型号、配置、颜色，唯一明确结果自动进入可用标准库，缺失/歧义/冲突才人工审核；[清洗细则](docs/business/catalog-cleaning.md)规定状态与证据。保持九表并补清洗字段和SYSTEM审计，政策支持不限颜色/指定颜色。文档与SQL已更新，功能尚未实现，未调用真实商品接口。
+
 架构、业务规约、状态机、覆盖 SQL 草案及申请人/管理员接口设计统一见 [docs 文档索引](docs/README.md)。接口和覆盖算法文档明确区分已实现能力与待实现草案。
 
-四张业务表的结构、字段约定、草稿与审核历史处理方式见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 新建空表时使用 [完整建表入口](docs/sql/schema.sql)（[V1 版本脚本](docs/sql/V1__create_policy_tables.sql)，内容相同，二选一），适用 MySQL 8.0.16 及以上，执行前先选择目标数据库并确认没有同名表。
+九张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 
-用户最新 Navicat 截图显示四表均已存在，本次已实际回读核对 `user_info` 所需字段，未重建或改动表结构。后三张政策表未接入业务持久化，机型主数据标识、覆盖规则等待确认事项见设计文档。
+用户最新明确目标库仅有库名、尚未建表，由用户自己执行 SQL；该说明覆盖早前四表存在的历史描述。本轮未连接该目标库。商品、政策业务仍未接入持久化，创建九表不代表接口或页面已可用；覆盖优先级等仍待确认。
 
 本机数据库为 `127.0.0.1:3306` 下的 `differentiated policy`（库名包含空格，JDBC URL 使用 `differentiated%20policy`）。连接使用 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`，真实凭证只保存在被忽略的 `backend/.env.local.properties`；新环境参考 `.env.example`。应用不自动建表、不初始化真实业务数据。修改后须重启后端，让新登录经过落库；已有旧进程内会话不代表已写入 user_info。
 
 ## 验证与依赖
+
+2026-11-11 自动清洗结构更新：在项目缓存目录下独立、无网络监听的 MySQL 8.0.29 临时实例成功执行新版九表 SQL，52 项合成数据约束检查通过，覆盖清洗状态、规则/候选/颜色门槛、审核和 SYSTEM/USER 审计，并回归既有关系约束。旧版27项为此前验证，本轮不冒充真实解析器或页面通过。未连接用户目标库、未调用真实商品接口，未运行前后端全量检查。完整字段及范围见数据库字典。
 
 ```powershell
 cd frontend

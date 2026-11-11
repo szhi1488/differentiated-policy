@@ -13,6 +13,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -42,6 +43,13 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest()
                 .header("Cache-Control", "no-store")
                 .body(new ApiError("INVALID_REQUEST", "请求参数无效，请检查必填字段和格式。"));
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ApiError> handleMissingFile(MissingServletRequestPartException ignored) {
+        return ResponseEntity.badRequest()
+                .header("Cache-Control", "no-store")
+                .body(new ApiError("ATTACHMENT_INVALID", "请选择需要上传的文件。"));
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

@@ -1,6 +1,8 @@
 # 采购管理员审核接口设计
 
-更新日期：2026-11-10。**以下接口均未实现**。当前已有登录角色映射，不代表已有审核权限校验或审核接口。公共 Cookie、Origin、请求头、ID/金额/时间格式和错误结构沿用 [申请人接口](policy-api.md)。
+商品同步、标准目录、清洗发布和商品操作审计属于新增管理模块，接口建议见 [商品同步与管理员后台方案](../architecture/catalog-admin-design.md)。这些接口均未实现；本文件继续维护政策审核契约，商品发布不等于政策审批。
+
+更新日期：2026-11-11。**以下接口均未实现**。九表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
 
 ## 权限及接口
 
@@ -21,7 +23,7 @@
 
 建议参数：`page`（默认 1）、`pageSize`（默认 20，最大 100）、`perspective`、`platformCode`、`modelKeyword`、`status`、`applicantId`、`startTimeFrom`、`startTimeTo`、`endTimeFrom`、`endTimeTo`；零售可用 `verifyType`、`sceneType`、`estimated`。时间筛选暂定义为对应字段闭区间上下界，不把它混成未确认的“当前最终生效”条件。
 
-正式机型 ID 未确定，`modelKeyword` 仅为名称搜索，不作覆盖身份匹配；接入稳定 ID 后增加精确筛选。百亿和零售专属条件同时出现须提示非法组合。枚举、排序白名单及分页边界在后端验证。
+modelKeyword 仅名称搜索，精确筛选采用 catalogVariantId、colorScope、variantColorId；颜色必须属于规格。查询按 policy_master.tenant_key 隔离，不能由客户端指定其他租户。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
 
 返回 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`，列表项至少含 ID、单号、申请人、视角、平台集合、起止时间、审核状态、版本和最近审核时间。默认 `created_at DESC, id DESC`。明细筛选用 EXISTS 或先去重 ID，total 按申请数计算。不能用状态 APPROVED 显示“当前生效”。
 
@@ -46,7 +48,7 @@
 
 `determination` 草案枚举：`UNCONFIRMED` 尚不能判定、`CANDIDATE` 仅候选、`CONFIRMED` 最终口径计算；最后一种须规则及实现均完成后启用。
 
-候选 item 应含新旧 policyId/policyCode/detailId、平台、型号/单型号/配置/颜色、旧新 subsidyMode 和全部相关参数、各自起止时间、相交区间、旧政策当前有效或未来重叠标记。预览不改变数据库，不隐含二次确认要求。
+候选 item 应含新旧 policyId/policyCode/detailId、平台、catalogVariantId、colorScope、variantColorId、品牌系列型号配置颜色快照、旧新补贴及全部参数、起止时间和候选相交范围。不限颜色与任一指定颜色有交集，两个不同指定颜色不相交；优先级和替换仍待确认，不能自动指定颜色优先。预览不改变数据库，不隐含二次确认要求。
 
 算法假设、SQL 及局限见 [覆盖查询草案](../business/override-engine.md)。最终通过时须重新检查候选与并发，不能把预览结果当锁或提交凭证。
 

@@ -1,108 +1,71 @@
-# 覆盖提示与最新有效政策查询草案
+# 覆盖提示与政策范围交集
 
-更新日期：2026-11-10。本文提供“按机型、平台取最新有效政策”的查询设计及 SQL 示例，尚未接入后端，也未在真实 MySQL 执行。本次不修改旧政策、不实施自动替换。
+更新日期：2026-11-11。标准规格及颜色范围已确认；优先级、时间端点、正式替换和最新生效算法仍待确认，尚未实现。原按名称快照和 NULL 颜色精确分组的示例已撤下，避免与确认版范围表达冲突。
 
-## 已明确的要求
+## 1. 已确认的身份与颜色交集
 
-管理员审核时，若新政策将覆盖已生效补贴，必须提示具体机型。提示至少定位旧政策、机型、平台，并展示新旧补贴方式、参数和有关时间范围。不同平台不能仅因手机名称相同而被整单覆盖；保留原政策与审核历史。
+政策按 tenant_key、渠道、平台、catalog_variant_id 定位范围，名称仅为快照，不作为唯一身份。不同型号或不同配置使用不同规格 ID，不因颜色同名而重叠。
 
-“审核通过”“处于有效时间内”“在该平台机型范围最终被选用”是三个判断，不能只查 `APPROVED` 就宣布生效。正式审批通过时须重新检测，不能只依赖打开审核页时的结果。
+同规格的颜色交集如下：
 
-## SQL 示例采用的暂定口径
+| 新旧范围 | 是否有颜色交集 |
+| --- | --- |
+| ALL_COLORS 与 ALL_COLORS | 有，当前规格不限颜色 |
+| ALL_COLORS 与 SPECIFIC_COLOR | 有，指定的那个颜色 |
+| SPECIFIC_COLOR 与同一个 variant_color_id | 有，该颜色 |
+| SPECIFIC_COLOR 与不同 variant_color_id | 无 |
+| 任意范围未选择或指定颜色未补齐 | 草稿不完整，不能给确定结论 |
 
-为让查询可评审，下面显式采用以下示例假设，均不据此新增已确认的业务规则：
+ALL_COLORS 不使用颜色 NULL 推断，也不按当前颜色列表展开。政策提交后新增颜色是否自动适用既有不限颜色政策仍需确认；结构能表达不限颜色范围，但不能把目录新增颜色当作已确认的政策扩展或覆盖行为。
 
-- 时间区间暂用 `[start_time, end_time)`，在查询时点开始已到且结束未到。
-- “最新”暂按审核通过时间 `review_time` 降序，而不是创建/提交时间；相同审核时间用主表 ID、明细 ID 确保排序稳定。技术排序不能代替业务同优先级规则。
-- 暂按渠道视角、平台、型号全称/单型号/配置快照、颜色精确匹配，零售核销类型、场景、预估标记也分组；`NULL` 颜色只与 `NULL` 相同，不作通配。
-- 查询必须绑定服务端核验的租户；当前主表没有租户列，借申请人的 `user_info.tenant_key` 限定。申请人停用不等于其历史政策自动失效，不能据此自动撤销历史政策。
-- 查询仅“读时选择”，不更新旧记录、不推断部分覆盖后的时间切片。若新政策结束后旧政策仍在期限内，本示例可能重新选回旧政策；是否允许这种恢复必须另行确认。
+指定颜色必须属于当前型号配置及租户，后端另校验 ACTIVE 及快照；历史回读仍使用提交快照。停用颜色或规格不自动撤销已提交政策。同平台同申请的重复及不限/指定交集应在提交前提示整理；不同申请之间出现交集须在审核候选中展示。
 
-机型稳定主键尚未核对，因此只能展示基于现有快照字段的 SQL 原型。名称一致未必是同一主数据，名称变化也可能是同一机型；正式引擎必须改为已确认的稳定标识与匹配维度，不得把此原型当生产唯一键算法。
+## 2. 候选查询草案
 
-## 最新有效政策查询 SQL
+以下仅展示待审明细与已通过政策的候选交集，采用尚未确认的半开时间区间 [start, end) 作演示。参数由后端绑定，不是能直接粘贴 Navicat 执行的脚本，也不能据此确定谁生效。
 
-面向 MySQL 8.0.16+，使用窗口函数。`:tenantKey`、`:platformCode`、`:atTime` 为文档参数占位符，由实现层安全绑定；不是可直接粘贴 Navicat 的完整脚本，也不是 MyBatis 的最终语法。`atTime` 按北京时间秒级传入，不能由客户端任意指定租户。
 
 ```sql
-WITH ranked AS (
-    SELECT
-        m.id AS policy_id,
-        m.policy_code,
-        m.perspective,
-        m.verify_type,
-        m.scene_type,
-        m.is_estimated,
-        m.start_time,
-        m.end_time,
-        m.review_time,
-        m.submission_version,
-        d.id AS detail_id,
-        d.platform_code,
-        d.model_full_name,
-        d.single_model,
-        d.spec,
-        d.color,
-        d.quantity,
-        d.subsidy_mode,
-        d.fixed_amount,
-        d.max_subsidy_amount,
-        d.subsidy_ratio,
-        d.base_price_type,
-        ROW_NUMBER() OVER (
-            PARTITION BY
-                m.perspective,
-                d.platform_code,
-                CAST(d.model_full_name AS BINARY),
-                CAST(d.single_model AS BINARY),
-                CAST(d.spec AS BINARY),
-                CAST(d.color AS BINARY),
-                m.verify_type,
-                m.scene_type,
-                m.is_estimated
-            ORDER BY m.review_time DESC, m.id DESC, d.id DESC
-        ) AS selection_rank
-    FROM policy_master m
-    JOIN policy_detail d ON d.policy_id = m.id
-    JOIN user_info applicant ON applicant.id = m.applicant_id
-    WHERE m.is_deleted = 0
-      AND applicant.tenant_key = :tenantKey
-      AND m.status = 'APPROVED'
-      AND m.review_time IS NOT NULL
-      AND m.review_time <= :atTime
-      AND m.start_time <= :atTime
-      AND :atTime < m.end_time
-      AND d.platform_code = :platformCode
-      AND d.model_full_name IS NOT NULL
-      AND d.single_model IS NOT NULL
-      AND d.spec IS NOT NULL
-      AND JSON_CONTAINS(
-          m.selected_platforms, JSON_QUOTE(d.platform_code), '$'
-      ) = 1
-)
-SELECT *
-FROM ranked
-WHERE selection_rank = 1;
+SELECT m.id AS policy_id, m.policy_code, m.status,
+       m.start_time, m.end_time, m.review_time,
+       d.id AS detail_id, d.platform_code, d.catalog_variant_id,
+       d.color_scope, d.variant_color_id, d.color,
+       d.model_full_name, d.single_model, d.spec,
+       d.subsidy_mode, d.fixed_amount, d.max_subsidy_amount,
+       d.subsidy_ratio, d.base_price_type
+FROM policy_master m
+JOIN policy_detail d
+  ON d.policy_id = m.id AND d.tenant_key = m.tenant_key
+WHERE m.tenant_key = :tenantKey
+  AND m.is_deleted = 0
+  AND m.id <> :newPolicyId
+  AND m.status = 'APPROVED'
+  AND m.perspective = :perspective
+  AND (m.verify_type <=> :verifyType)
+  AND (m.scene_type <=> :sceneType)
+  AND (m.is_estimated <=> :estimated)
+  AND d.platform_code = :platformCode
+  AND d.catalog_variant_id = :catalogVariantId
+  AND d.color_scope IS NOT NULL
+  AND (d.color_scope = 'ALL_COLORS' OR d.variant_color_id IS NOT NULL)
+  AND (:newColorScope = 'ALL_COLORS'
+       OR d.color_scope = 'ALL_COLORS'
+       OR (d.color_scope = 'SPECIFIC_COLOR'
+           AND d.variant_color_id = :newVariantColorId))
+  AND m.start_time < :newEndTime
+  AND :newStartTime < m.end_time;
 ```
 
-按字节分组避免默认数据库排序规则把不同快照文本折叠，但仍不能解决主数据身份问题。当前 SQL 没有完备的正式提交校验；上线前须保证已通过记录的字段、平台与互斥参数有效，遇到脏数据应报告异常。重复同平台机型明细应在提交时拒绝，不能依赖上述 `d.id` 排序静默消解。
+示例暂假设核销、场景、预估参与匹配，须在规则确认后定稿。查询前验证待审规格、颜色范围、时间和版本；查询不能把缺失参数当作无交集。主表租户直接过滤，不再借申请人当前状态推导政策租户。
 
-该查询只给出单一时点的候选选用结果，不能直接返回“新政策未来整段会覆盖哪些历史政策”，也不能重建任意历史时点的数据库状态；历史查询应结合不可变提交快照和审核日志设计。
+## 3. 审核与生效边界
 
-## 审核覆盖预览
+候选返回新旧政策、平台、稳定规格 ID、颜色范围/具体颜色、快照、补贴和时间交集。区分当前时间内与未来重叠，标注 CANDIDATE 或 UNCONFIRMED；没有最终规则时不显示“已确定无覆盖”。
 
-1. 校验管理员、申请租户、`recordVersion` 和 `submissionVersion`，读取当前待审快照。
-2. 按具体平台逐明细找候选旧政策；渠道、机型和颜色等使用最终确认的维度。
-3. 示例半开区间的时间重叠条件为 `old.start_time < new.end_time AND new.start_time < old.end_time`。若选择其他端点规则，需同步修改。
-4. 区分当前有效和未来重叠候选，不能把未来政策标成“目前已生效”。候选全部展示，不用 `ROW_NUMBER = 1` 提前隐藏潜在受影响旧政策。
-5. 输出旧/新政策 ID、具体明细、平台、型号、时间、补贴方式、固定金额/上限或比例/基数及候选相交区间。
+不限颜色与某颜色相交不意味着整条不限颜色政策失效，更不意味着同政策其他平台或规格失效。不能默认具体颜色优先，不能按审核时间或创建时间擅自宣布胜出，也不能删除旧记录实现覆盖。
 
-补贴数值比较使用精确十进制，`NULL` 不等于 0；同平台同机型但参数相同是否算覆盖也待确认。现阶段预览应标记“候选影响，待确认口径”，不能返回确定失效结论。
+正式审核需重新校验状态、提交/记录版本和交集；同一政策乐观锁不足以防两个不同政策同时审批，需要最终匹配范围的串行化方案。规则尚未确认时，不开放声称最终生效的通过替换闭环；拒绝和历史展示独立实现。
 
-## 正式审批与待确认项
+待确认：时间端点、最新/优先级、核销场景预估是否参与、相同优先级、局部颜色及时间替换、新政策结束后旧政策是否恢复、正式生效时点。确认后再实现最新生效查询与并发测试。
 
-正式实现需在审核事务中重新读取候选并执行已确认规则。单申请 `record_version` 只防止同一单重复处理，不能防止两张新申请同时审核后相互影响；还须设计按匹配范围串行化或锁定策略，不能声称一个条件更新已保证全局覆盖一致性。
-
-上线前确认：稳定机型 ID、配置/颜色维度、空颜色是否通配、核销/场景/预估是否参与、端点、“最新”时点及平级处理、旧政策恢复、局部替换与生效时点、是否二次确认。确认后补齐服务端实现与时间边界、并发、局部平台不受影响的测试，再提供确定的生效查询接口。
-
-关联文档：[状态机](status-machine.md)、[管理员接口](../api/admin-api.md)、[数据字典](../sql/database-design.md)。
+关联：[状态机](status-machine.md)、[审核接口](../api/admin-api.md)、[数据库字典](../sql/database-design.md)。
