@@ -1,13 +1,59 @@
 <script setup>
+import { ElMessageBox } from 'element-plus'
 import AppIcon from '../../../components/AppIcon.vue'
-import { RAW_GOODS_FIELDS } from '../../../constants/catalog'
-import { sourceGoodsPreview } from '../../../mocks/fixtures/source-goods'
+import { useSourceGoods } from '../../../composables/useSourceGoods'
+import {
+  GOODS_BRANDS,
+  GOODS_SYNC_ERRORS,
+  GOODS_SYNC_STATUS,
+  RAW_GOODS_FIELDS,
+} from '../../../constants/catalog'
 
-const brandTabs = [
-  { label: '全部', count: sourceGoodsPreview.length, name: 'all' },
-  { label: '一加', count: sourceGoodsPreview.filter(({ brand }) => brand === '一加').length },
-  { label: 'OPPO', count: sourceGoodsPreview.filter(({ brand }) => brand === 'OPPO').length },
-]
+const {
+  brand,
+  input,
+  page,
+  size,
+  goods,
+  latest,
+  activeJob,
+  configured,
+  jobsError,
+  actionError,
+  action,
+  loadGoods,
+  search,
+  reset,
+  selectBrand,
+  resize,
+  refreshJobs,
+  start,
+  resume,
+  cancel,
+} = useSourceGoods()
+const { data, loading, error } = goods
+
+function refresh() {
+  void loadGoods()
+  void refreshJobs()
+}
+
+async function confirmCancel(job) {
+  try {
+    await ElMessageBox.confirm(
+      '结束后不能继续此任务，已入库的商品原文会保留。',
+      `结束${job.brandName}导入`,
+      {
+        type: 'warning',
+        confirmButtonText: '结束任务',
+        cancelButtonText: '返回',
+      },
+    )
+  } catch {
+    return
+  }
+  await cancel(job)
+}
 </script>
 
 <template>
@@ -16,55 +62,127 @@ const brandTabs = [
       <span class="source-banner-icon"><AppIcon name="document" :size="27" /></span>
       <div class="source-heading">
         <h1 id="source-goods-title">源商品库（吉客云）</h1>
-        <p>集中查看一加和 OPPO 的七个商品原始字段，为后续清洗提供数据。</p>
+        <p>按品牌从吉客云导入商品原文。每次只导入一个品牌，完成后可发起另一个品牌。</p>
       </div>
-      <el-button type="primary" class="source-import" disabled>
-        <AppIcon name="upload" :size="16" />
-        <span>导入商品</span>
-      </el-button>
     </header>
+
+    <el-alert
+      v-if="jobsError"
+      class="source-notice"
+      :title="jobsError"
+      type="error"
+      :closable="false"
+      show-icon
+    />
+    <el-alert
+      v-else-if="!configured"
+      class="source-notice"
+      title="请完成吉客云凭证和导入配置后再发起导入。"
+      type="info"
+      :closable="false"
+      show-icon
+    />
+    <el-alert
+      v-if="actionError"
+      class="source-notice"
+      :title="actionError"
+      type="error"
+      :closable="false"
+      show-icon
+    />
+    <div class="source-jobs" aria-label="分品牌导入">
+      <div v-for="name in GOODS_BRANDS" :key="name" class="source-job">
+        <div class="source-job-heading">
+          <h2>{{ name }}</h2>
+          <el-tag
+            v-if="latest[name]"
+            size="small"
+            :type="GOODS_SYNC_STATUS[latest[name].status]?.[1]"
+          >
+            {{ GOODS_SYNC_STATUS[latest[name].status]?.[0] }}
+          </el-tag>
+        </div>
+        <p v-if="latest[name]" aria-live="polite">
+          已读取 {{ latest[name].readCount }} 条 · 本任务去重 {{ latest[name].contentCount }} 条
+        </p>
+        <p v-else>尚未导入 · 仅查询启用商品</p>
+        <p
+          v-if="latest[name]?.errorCode && latest[name].status === 'PAUSED'"
+          class="source-job-error"
+        >
+          {{ GOODS_SYNC_ERRORS[latest[name].errorCode] ?? '导入暂时中断，请核对后继续。' }}
+        </p>
+        <p
+          v-else-if="
+            latest[name]?.status === 'SUCCEEDED' && latest[name].cleanStatus === 'NOT_STARTED'
+          "
+        >
+          商品原文已保存，等待清洗。
+        </p>
+        <div class="source-job-actions">
+          <template v-if="latest[name]?.status === 'PAUSED'">
+            <el-button
+              type="primary"
+              :disabled="!configured || !latest[name].canResume || Boolean(action || jobsError)"
+              @click="resume(latest[name])"
+            >
+              {{ latest[name].canResume ? '继续导入' : '等待冷却' }}
+            </el-button>
+            <el-button
+              :disabled="Boolean(action || jobsError)"
+              @click="confirmCancel(latest[name])"
+            >
+              结束任务
+            </el-button>
+          </template>
+          <el-button
+            v-else
+            type="primary"
+            :loading="action === name"
+            :disabled="!configured || Boolean(activeJob || action || jobsError)"
+            @click="start(name)"
+          >
+            导入{{ name }}
+          </el-button>
+        </div>
+      </div>
+    </div>
 
     <div class="source-panel">
       <div class="source-panel-top">
-        <el-tabs model-value="all" aria-label="商品品牌">
-          <el-tab-pane
-            v-for="tab in brandTabs"
-            :key="tab.label"
-            :name="tab.name || tab.label"
-            :label="`${tab.label}（${tab.count}）`"
-            :disabled="!tab.name"
-          />
+        <el-tabs :model-value="brand" aria-label="商品品牌" @update:model-value="selectBrand">
+          <el-tab-pane name="all" label="全部" />
+          <el-tab-pane v-for="name in GOODS_BRANDS" :key="name" :name="name" :label="name" />
         </el-tabs>
-        <el-tag type="info" effect="plain" size="small">示例数据</el-tag>
+        <el-button text type="primary" :disabled="Boolean(action)" @click="refresh">刷新</el-button>
       </div>
 
-      <el-form class="source-filters" @submit.prevent>
-        <el-form-item label="品牌">
-          <el-select model-value="all" aria-label="品牌" disabled>
-            <el-option label="全部" value="all" />
-          </el-select>
-        </el-form-item>
+      <el-form class="source-filters" @submit.prevent="search">
         <el-form-item>
           <el-input
+            v-model="input"
             placeholder="请输入商品名称、货号或 SKU 名称"
             aria-label="商品关键词"
-            disabled
+            maxlength="128"
+            clearable
           />
         </el-form-item>
         <div class="source-filter-actions">
-          <el-button disabled>重置</el-button>
-          <el-button type="primary" disabled>查询</el-button>
+          <el-button @click="reset">重置</el-button>
+          <el-button native-type="submit" type="primary">查询</el-button>
         </div>
       </el-form>
 
+      <el-alert v-if="error" :title="error.message" type="error" :closable="false" show-icon />
       <el-table
-        :data="sourceGoodsPreview"
-        row-key="goodsNo"
+        v-else
+        :data="data?.items ?? []"
+        :empty-text="loading ? '正在读取商品…' : '暂无已入库商品'"
+        row-key="id"
         class="source-table"
-        aria-label="商品原文示例"
+        aria-label="商品原文"
       >
-        <el-table-column type="index" label="序号" width="62" align="center" />
-        <el-table-column prop="brand" label="品牌" width="76" />
+        <el-table-column prop="brandName" label="品牌" width="105" />
         <el-table-column
           v-for="[field, label, width] in RAW_GOODS_FIELDS"
           :key="field"
@@ -85,16 +203,18 @@ const brandTabs = [
         </el-table-column>
       </el-table>
 
-      <footer class="source-pagination">
-        <span>共 {{ sourceGoodsPreview.length }} 条示例</span>
+      <footer v-if="data" class="source-pagination">
+        <span>共 {{ data.total }} 条</span>
         <el-pagination
-          :total="sourceGoodsPreview.length"
-          :default-page-size="10"
+          v-model:current-page="page"
+          :total="data.total"
+          :page-size="size"
           :page-sizes="[10, 20, 50]"
-          layout="prev, pager, next, sizes"
+          :pager-count="5"
+          layout="prev, pager, next, sizes, jumper"
           background
           size="small"
-          disabled
+          @update:page-size="resize"
         />
       </footer>
     </div>
@@ -107,7 +227,7 @@ const brandTabs = [
 }
 .source-banner {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 16px;
   padding: 16px 18px;
@@ -136,10 +256,50 @@ const brandTabs = [
   color: #465b77;
   line-height: 1.6;
 }
-.source-import :deep(span) {
-  display: inline-flex;
+.source-notice {
+  margin-top: 12px;
+}
+.source-jobs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.source-job {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 13px 16px;
+  border: 1px solid #e8eef8;
+  border-radius: 10px;
+  background: #fff;
+}
+.source-job-heading {
+  display: flex;
   align-items: center;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.source-job-heading h2 {
+  font-size: 15px;
+  color: #10213a;
+}
+.source-job p {
+  font-size: 13px;
+  color: #465b77;
+}
+.source-job p.source-job-error {
+  color: #975b13;
+}
+.source-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+.source-job-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .source-panel {
   min-width: 0;
@@ -169,16 +329,13 @@ const brandTabs = [
 }
 .source-filters {
   display: grid;
-  grid-template-columns: 190px minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px 18px;
   align-items: center;
   padding-block: 17px;
 }
 .source-filters :deep(.el-form-item) {
   margin-bottom: 0;
-}
-.source-filters :deep(.el-form-item__label) {
-  font-weight: 600;
 }
 .source-filter-actions {
   display: flex;
@@ -216,14 +373,10 @@ const brandTabs = [
   padding: 15px 0;
   color: #465b77;
 }
-@media (max-width: 850px) {
-  .source-filters {
-    grid-template-columns: 160px minmax(0, 1fr);
-    gap: 9px 12px;
-  }
-  .source-filter-actions {
-    grid-column: 1 / -1;
-  }
+.source-pagination :deep(.el-pagination) {
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 @media (max-width: 600px) {
   .source-banner {
@@ -237,9 +390,8 @@ const brandTabs = [
   .source-heading p {
     font-size: 12px;
   }
-  .source-import {
-    grid-column: 2;
-    justify-self: start;
+  .source-jobs {
+    grid-template-columns: minmax(0, 1fr);
   }
   .source-panel {
     padding-inline: 10px;
@@ -251,6 +403,9 @@ const brandTabs = [
   .source-filters {
     grid-template-columns: 1fr;
     padding-block: 12px;
+  }
+  .source-pagination :deep(.el-pagination__sizes) {
+    display: none;
   }
 }
 </style>

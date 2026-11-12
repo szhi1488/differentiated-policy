@@ -10,12 +10,14 @@ import static org.mockito.Mockito.when;
 
 import com.company.policy.common.config.JackyunProperties;
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.service.impl.JackyunGoodsServiceImpl;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URLDecoder;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
@@ -117,6 +119,23 @@ class JackyunGoodsServiceImplTest {
                         ApiException.class,
                         error -> assertThat(error.getCode()).isEqualTo("JACKYUN_BUSINESS_ERROR"))
                 .hasMessageNotContaining("private-upstream-response");
+    }
+
+    @Test
+    void returnsRateLimitCooldownWithoutParsingTheResponseBody() throws Exception {
+        configure();
+        @SuppressWarnings("unchecked")
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(429);
+        when(response.headers())
+                .thenReturn(HttpHeaders.of(Map.of("Retry-After", List.of("600")), (k, v) -> true));
+        when(client.<String>send(any(), any())).thenReturn(response);
+
+        assertThatThrownBy(() -> service.queryPage(query))
+                .isInstanceOfSatisfying(
+                        JackyunRateLimitException.class,
+                        error -> assertThat(error.getRetryAfterSeconds()).isEqualTo(600));
+        verify(response, org.mockito.Mockito.never()).body();
     }
 
     @Test

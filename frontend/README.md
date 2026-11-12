@@ -10,7 +10,7 @@
 4. 当前模块的业务与 API 文档，例如[动态表单](../docs/business/perspective-rules.md)、[管理员工作台](../docs/architecture/admin-workspace.md)、[飞书鉴权](../docs/architecture/feishu-auth-flow.md)。
 5. [前端工程检查与验收](../docs/architecture/frontend-harness.md)。
 
-此文件仅提供阅读与运行入口，不复制维护另一套 Agent 规则。工作台布局、申请表单区块和统一会话已接入。管理员只保留「商品 → 源商品库」单页，表格为静态样例，业务控件禁用。申请表单尚未接入政策持久化，附件选择仅暂存。
+此文件仅提供阅读与运行入口，不复制维护另一套 Agent 规则。工作台布局、申请表单区块和统一会话已接入。管理员在「商品 → 源商品库」按品牌导入并查询已落库原文。申请表单尚未接入政策持久化，附件选择仅暂存。
 
 ## 常用命令
 

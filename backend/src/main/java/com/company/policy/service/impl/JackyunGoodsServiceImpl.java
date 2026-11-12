@@ -2,6 +2,7 @@ package com.company.policy.service.impl;
 
 import com.company.policy.common.config.JackyunProperties;
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.vo.JackyunGoodsPage;
@@ -18,7 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.StringJoiner;
@@ -67,10 +70,37 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
         } catch (IOException ignored) {
             throw unavailable("JACKYUN_TRANSPORT_ERROR", "吉客云查询失败，请检查网络后重试。");
         }
+        if (response.statusCode() == 429) {
+            throw new JackyunRateLimitException(
+                    retryAfterSeconds(response.headers().firstValue("Retry-After").orElse("")));
+        }
         if (response.statusCode() != 200) {
             throw unavailable("JACKYUN_HTTP_ERROR", "吉客云查询返回 HTTP " + response.statusCode() + "。");
         }
         return parsePage(query, response.body());
+    }
+
+    private int retryAfterSeconds(String value) {
+        long seconds;
+        try {
+            seconds = Long.parseLong(value);
+        } catch (NumberFormatException ignored) {
+            try {
+                seconds =
+                        Duration.between(
+                                                clock.instant(),
+                                                ZonedDateTime.parse(
+                                                                value,
+                                                                DateTimeFormatter
+                                                                        .RFC_1123_DATE_TIME)
+                                                        .toInstant())
+                                        .getSeconds()
+                                + 1;
+            } catch (DateTimeParseException invalidDate) {
+                seconds = 0;
+            }
+        }
+        return (int) Math.max(300, Math.min(Integer.MAX_VALUE, seconds));
     }
 
     private HttpRequest buildRequest(JackyunGoodsQuery query) throws IOException {
@@ -127,6 +157,9 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
         JsonNode data = envelope.path("result").path("data");
         Iterable<JsonNode> rows;
         if (data.isArray()) {
+            if (data.size() > query.pageSize()) {
+                throw invalidResponse("吉客云返回条数超过请求页大小。");
+            }
             rows = data;
         } else if (data.isObject()) {
             // 官方响应示例使用单个对象，真实分页查询返回数组。

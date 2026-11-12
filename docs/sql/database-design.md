@@ -1,17 +1,23 @@
 # 数据库设计与字段字典
 
-更新日期：2026-11-11。确认版九表，MySQL 8.0.16+。用户最新说明：目标库已有库名、尚未建表，覆盖此前“四表已存在”的状态描述。本轮只交付文件，未连接或修改用户目标数据库。
+更新日期：2026-11-12。本文描述当前九表基线，适用于 MySQL 8.0.16+。首次建表使用空库基线。本机项目库已执行旧版九表，经只读核对，商品导入任务、来源商品及商品操作日志均为空，可由用户在 Navicat 执行相应增量升级脚本。
+
+第一开发阶段允许重新设计项目内所有表。每次重设计先向用户说明拟调整范围、原因、对现有数据和代码的影响，再征求确认。获明确同意后按业务读写路径设计数据约束、索引和事务，同时评估需保留的数据及迁移或重建方式。[项目约定第 13 条](../../AGENTS.md#3-核心技术规则与边界)
+
+查库、建表、迁移、重建和验证所需 SQL 均以本目录中的 `.sql` 文件交付。用户在 Navicat 选中目标库，按交付说明执行并核对结果。需要进一步诊断时，提供对应查询或执行错误的结果即可。
 
 ## 1. 在 Navicat 建表
 
 1. 选中你已经创建的目标数据库，先执行 SELECT VERSION(), DATABASE();，确认 MySQL 8.0.16+ 及当前库名。脚本不包含 CREATE DATABASE 或 USE，不会帮你选择库。
-2. 执行 SHOW TABLES;，确认目标库没有本版九张同名表；如存在，先停止核对，不能删除重建或重跑完整脚本。
+2. 执行 `SHOW TABLES;` 核对目标库。空库继续下一步。已有表的库先核对结构及需保留的数据，按已确认的增量迁移或重建方案操作。
 3. 打开 [schema.sql](schema.sql)，整份执行一次。它与 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 内容完全一致，二选一，不能两份都执行。
 4. 刷新表列表，应有九张表。确认外键及 CHECK 均创建成功。MySQL DDL 隐式提交，文件中途失败时先核对已创建部分，不直接重跑。
 
 SQL 不含删表、清空、真实用户、凭证或示例机型数据。SET time_zone 仅设置当前连接；应用连接仍须遵守北京时间。SQL 文件是人工执行的空库基线，项目未配置 Flyway 或自动建表。
 
-本轮用户明确尚未建表，因此同步更新未部署的 V1 为九表基线；其他已执行旧四表 V1 的库不能照此重跑，须先核对后制定独立增量迁移。
+已执行旧版九表且 `goods_sync_job` 仍有 `oppo_status`、`oneplus_status` 的库，先核对商品任务、来源商品和商品操作日志是否为空。三张表都为空时，停止后端，在 Navicat 选中该库并运行[单品牌导入增量升级 SQL](upgrade_empty_goods_sync_to_single_brand.sql)。脚本仅修改导入任务表、来源表的相关字段与约束，并使用执行后清除的存储过程校验前提。已有导入历史的库需单独制定迁移方案。
+
+2026-11-12 在隔离的 MySQL 8.0.29 上验证旧版九表升级。脚本拒绝已有任务的库，原任务和外键保留。清空测试任务后升级成功，原管理员保留，升级后的 5 项商品导入集成测试通过。本机项目库仅做了只读核对。
 
 ## 2. 九表清单和约束
 
@@ -20,7 +26,7 @@ SQL 不含删表、清空、真实用户、凭证或示例机型数据。SET tim
 | user_info | 飞书身份、本地角色 | tenant_key + open_id 唯一；停用身份仍占唯一键 |
 | catalog_variant | 品牌系列型号配置合并的标准规格 | 租户内稳定 variant_code；品牌 + 型号 + 配置唯一 |
 | catalog_variant_color | 某一具体规格的颜色 | variant_id + tenant_key 外键；规格内颜色名唯一 |
-| goods_sync_job | 两品牌任务与最新续拉进度 | 发起人同租户；同账套仅一个活动槽；幂等键唯一 |
+| goods_sync_job | 每次单品牌导入任务与最新续拉进度 | 发起人同租户；同账套仅一个活动槽；幂等键唯一 |
 | source_goods_item | 七字段来源及内联映射 | 首次/最近任务同租户账套；规格同品牌；颜色同规格 |
 | catalog_operation_log | 商品维护审计 | 操作人同租户；对象类型和本地 ID 由服务端鉴权 |
 | policy_master | 政策主表 | 申请人及最近审核人同租户 |
@@ -69,9 +75,9 @@ color_scope=ALL_COLORS 表示当前规格不限颜色，此时 variant_color_id 
 
 政策主表 submission_version 每轮提交递增，record_version 每次业务修改递增；主表、明细、提交快照及审核记录同事务。条件更新携带租户、状态和版本并检查影响行数。完整快照含标准 ID、品牌系列型号配置、颜色范围/ID/名称、平台、数量、补贴、时间及附件说明。
 
-goods_sync_job 固定两品牌各自当前游标；skuId 不逐商品保存。终态任务只保留该任务最后位置，日志前后值剔除游标、worker_token 和完整上游响应，避免变相保存历史轨迹。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSING/PAUSED 占同账套唯一槽。暂停任务可恢复或取消，不能另建并发活动任务。
+goods_sync_job 每条记录只导入一个品牌并独立保存当前游标；skuId 不逐商品保存。终态任务只保留该任务最后位置，日志不保存游标、worker_token 或完整上游响应。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSED 占同账套唯一槽。暂停任务可在冷却后恢复，或结束并保留已落库原文。源商品的首次、最近和清洗任务引用均要求同租户、账套和品牌。
 
-数据库唯一活动槽和租约字段不能替代执行器逻辑，导入 worker 必须带 fencing_token，清洗 worker 带 clean_run_key、来源版本和租约条件提交。status=SUCCEEDED 强制两个品牌分区成功；clean_status/clean_rule_version 是独立清洗阶段，只有成功导入后才允许开始。COMPLETED 只表示本轮已完成自动通过或异常分流，不代表所有商品可选。异常不阻塞明确商品。
+数据库唯一活动槽和租约字段不能替代执行器逻辑，导入 worker 必须带 fencing_token，清洗 worker 带 clean_run_key、来源版本和租约条件提交。`status=SUCCEEDED` 表示本任务的单品牌导入完成。进入独立清洗阶段要求导入成功且已记录 `clean_rule_version`。`COMPLETED` 表示本轮已完成自动通过或异常分流，仍可有待人工审核的商品。异常不阻塞明确商品。
 
 catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同租户 operator_id，SYSTEM 必须无用户ID/姓名并有规则版本，不能伪造机器人用户或冒用发起管理员。自动建规格颜色、映射、完成状态及SYSTEM审计同事务；人工审核使用 USER。DDL 不能证明解析准确、权限正确、目标 ACTIVE 或历史只追加，服务端必须实现。include_blockup 必填0/1，业务默认仍待确定。
 
@@ -128,18 +134,17 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | BIGINT | 否 | 自增 | 同步任务主键，一个任务包含两个品牌 |
+| id | BIGINT | 否 | 自增 | 同步任务主键，一个任务只导入一个品牌 |
 | tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
 | source_key | VARCHAR(64) | 否 | — | 服务端受控账套标识，不保存凭证 |
+| brand_name | VARCHAR(32) | 否 | — | OPPO手机或一加手机 |
 | requester_id | BIGINT | 否 | — | 发起管理员 |
 | idempotency_key | VARCHAR(64) | 否 | — | 任务创建幂等键 |
-| status | VARCHAR(16) | 否 | 'QUEUED' | QUEUED、RUNNING、PAUSING、PAUSED、SUCCEEDED、PARTIAL、FAILED、CANCELLED |
-| oppo_status | VARCHAR(16) | 否 | 'PENDING' | OPPO分区：PENDING、RUNNING、SUCCEEDED、FAILED |
-| oneplus_status | VARCHAR(16) | 否 | 'PENDING' | 一加分区：PENDING、RUNNING、SUCCEEDED、FAILED |
-| oppo_last_max_id | VARCHAR(32) | 否 | '0' | OPPO当前唯一最新续拉位置，不保存逐商品标识 |
-| oneplus_last_max_id | VARCHAR(32) | 否 | '0' | 一加当前唯一最新续拉位置，不保存逐商品标识 |
-| page_size | INT | 否 | 50 | 联调确认范围内的单批数量 |
-| include_blockup | TINYINT | 否 | — | 本任务是否包含停用来源，0或1，必须显式选择 |
+| status | VARCHAR(16) | 否 | 'QUEUED' | QUEUED、RUNNING、PAUSED、SUCCEEDED、CANCELLED |
+| last_max_id | VARCHAR(32) | 否 | '0' | 本任务品牌的最新续拉位置，不保存逐商品标识 |
+| page_size | INT | 否 | 50 | 单批 1–50 条 |
+| include_blockup | TINYINT | 否 | — | 0 或 1；当前实现固定为 0，仅导入启用商品 |
+| page_count | INT UNSIGNED | 否 | 0 | 已提交页数，包含确认导入完成的空页 |
 | read_count | BIGINT UNSIGNED | 否 | 0 | 累计接收条次，重放可重复，非真实SKU总数 |
 | content_count | BIGINT UNSIGNED | 否 | 0 | 当前任务已提交的去重内容计数 |
 | clean_status | VARCHAR(16) | 否 | 'NOT_STARTED' | 清洗阶段，独立于导入状态：NOT_STARTED、RUNNING、COMPLETED、PARTIAL、FAILED |
@@ -148,6 +153,7 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | error_code | VARCHAR(64) | 是 | NULL | 脱敏错误类别，不存原始响应或凭证 |
 | worker_token | VARCHAR(64) | 是 | NULL | 当前执行者租约标识，不是上游凭证 |
 | lease_until | DATETIME | 是 | NULL | 租约到期时间 |
+| next_request_at | DATETIME | 否 | CURRENT_TIMESTAMP | 最早可请求时间，包含间隔或冷却 |
 | fencing_token | BIGINT UNSIGNED | 否 | 0 | 接管代次，旧执行者必须条件写入 |
 | record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
 | started_at | DATETIME | 是 | NULL | 开始时间 |
@@ -292,5 +298,7 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 ## 5. 本轮实际验证
 
 本轮在项目缓存目录的独立 MySQL 8.0.29 实例（关闭网络监听）执行新版九表 SQL 成功，52 项合成数据检查通过：包含既有租户/品牌/规格颜色、补贴、任务及政策快照约束，以及新增原文先入库、清洗阶段分离、执行租约、自动通过必须有颜色/候选/规则、人工审核身份、异常原因、SYSTEM/USER 审计和原文保留。交付 SQL 不含测试记录，没有连接用户目标库或读取其凭证。
+
+单品牌导入改版后再次在独立 MySQL 8.0.29 本机验收库执行完整九表脚本，`GoodsSyncIntegrationTest` 5 项通过。上游使用模拟返回，覆盖两品牌串行、原文去重、页事务回滚、冷却和续拉、过期执行者及管理员租户权限。目标库未连接、未建表。
 
 两份建表脚本内容一致，全部字段字典、本地链接及差异格式在交付前核对。运行版本为8.0.29，未在最低8.0.16单独实测。未实现/运行真实自动解析器、规则包、商品接口或页面；不把约束验证称为自动清洗业务端到端通过。上一版27项记录属于历史验证，本轮52项包含相关回归。

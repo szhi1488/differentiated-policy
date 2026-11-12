@@ -45,6 +45,10 @@ jackyun:
   app-key: ${JACKYUN_APP_KEY:}
   app-secret: ${JACKYUN_APP_SECRET:}
   token: ${JACKYUN_TOKEN:}
+  tenant-key: ${JACKYUN_TENANT_KEY:}
+  source-key: ${JACKYUN_SOURCE_KEY:jackyun}
+  import-interval-seconds: ${JACKYUN_IMPORT_INTERVAL_SECONDS:5}
+  import-max-pages: ${JACKYUN_IMPORT_MAX_PAGES:2000}
 knife4j:
   # /doc.html 接口文档页面仍可使用；关闭与 Springdoc 2.8 不兼容的
   # Knife4j 4.5 可选增强定制功能。

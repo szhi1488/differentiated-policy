@@ -1,34 +1,34 @@
 # 商品同步、标准化与管理员后台确认方案
 
-更新日期：2026-11-11。按用户最新确认采用“原始导入 → 自动标准化清洗 → 明确结果自动入标准库 → 异常才人工审核 → 政策选择”的流程。仍为九表，新增清洗字段及系统审计，替代旧的全量人工归类发布流程。后端已接入吉客云单页只读查询，同步任务、清洗和管理接口待接入。[管理员展示页](admin-workspace.md)目前使用本地演示数据，操作按钮禁用。
+更新日期：2026-11-11。按用户确认采用“原始导入 → 自动标准化清洗 → 明确结果自动入标准库 → 异常才人工审核 → 政策选择”的流程。当前已实现吉客云只读查询、管理员分品牌导入和原文分页；清洗、异常审核、标准目录及政策选择待接入。[管理员工作台](admin-workspace.md)
 
 ## 1. 已确认的业务
 
 - 只同步一加手机、OPPO手机。请求按吉客云 `brandName` 分别查询，校验返回的 `brandName` 与分区一致，各自维护续拉进度。
 - 来源商品只保存 goodsName、goodsNo、skuName、cateName、goodsField4、goodsField1、goodsField5 七个业务字段。品牌从任务分区确定；本地 ID、账套、租户、哈希、映射和批次等属于管理元数据。
 - skuId 仅在内存中用于 lastMaxId 续拉，任务只保留各品牌最新进度；商品表、日志、快照不保存逐商品外部 SKU ID、完整响应或额外上游属性。
-- 本地标准目录按品牌 → 系列 → 型号 → 配置筛选，但合并保存在 catalog_variant，一行表示一个具体型号配置，规格 ID 稳定。
+- 本地标准目录按品牌 → 系列 → 型号 → 配置筛选，规格 ID 稳定。当前基线用 `catalog_variant` 保存上述层级，每行对应一个具体型号配置。
 - 颜色同样从已保存七字段清洗得到，明确结果自动创建/复用 catalog_variant_color，不要求用户逐个手工建立；不同型号配置各有独立颜色，同名也不能跨规格共用。人工维护只处理异常、纠正和补充。
 - 政策可以按规格不限颜色提交，也可以指定该规格下一个具体颜色。多种指定颜色需分别建明细，数量、补贴分别填写；批量填写仅复制补贴，不自动共享数量。
 - 维持逐平台政策、草稿、提交、审核、驳回重提及历史快照；不扩展吉客云回写、库存、结算或多级审批。
 
-## 2. 九张表与关系
+## 2. 当前九表结构与关系
 
-完整清洗细则见 [自动清洗与异常审核](../business/catalog-cleaning.md)，规则、候选与 SQL 约束以该文档及数据字典一致维护。
+完整清洗细则见 [自动清洗与异常审核](../business/catalog-cleaning.md)，规则、候选与 SQL 约束以该文档及数据字典一致维护。结构重设计遵循 [AGENTS.md 第 13 条](../../AGENTS.md#3-核心技术规则与边界)。
 
 | 表 | 职责 |
 | --- | --- |
 | user_info | 飞书身份、本地角色、停用状态 |
-| catalog_variant | 品牌、系列、型号、配置及发布状态；不再分别建品牌、系列和型号表 |
+| catalog_variant | 集中存储品牌、系列、型号、配置及发布状态 |
 | catalog_variant_color | 每个具体规格的颜色集合及启停状态 |
-| goods_sync_job | 两品牌导入状态/断点、独立清洗阶段及规则包版本 |
+| goods_sync_job | 单品牌任务、独立断点、状态与冷却时间，保留清洗阶段及规则包版本字段 |
 | source_goods_item | 原始七字段、清洗候选/证据/异常/租约、人工审核和已生效映射 |
 | catalog_operation_log | 区分 SYSTEM 自动处理和 USER 人工审核的全过程历史 |
 | policy_master | 政策申请基本信息、租户、状态与版本 |
 | policy_detail | 一个具体平台、规格、颜色范围下的数量和补贴 |
 | policy_audit_log | 每轮提交完整快照和独立审核意见 |
 
-不单独建立规则表、映射表、批次内容关联表或逐页原始响应表。受控代码/配置维护有版本的规则包；可唯一确定的规则结果自动通过，其他进入异常审核，不执行来源中的脚本或任意 SQL。当前候选保存在来源表，各次完成/异常/纠正的证据写操作日志，不因重跑覆盖旧记录。
+当前基线通过受控代码或配置维护规则版本，来源表保存候选和映射，任务表记录批次阶段和断点。可唯一确定的规则结果自动通过，其他进入异常审核，不执行来源中的脚本或任意 SQL。各次完成、异常或纠正的证据写操作日志，重跑保留旧记录。
 
 ```mermaid
 flowchart TB
@@ -73,31 +73,33 @@ flowchart TB
 
 官方文档：[外部系统调用开放平台](https://open.jackyun.com/developer/refactored/document.html?alias=outsystem_openplat)、[如何生成签名](https://open.jackyun.com/developer/document.html?alias=create_testtool)、[条件查询货品](https://open.jackyun.com/developer/refactored/apidocinfo.html?id=erp-goods.goods.sku.search&name=true)。
 
-cols 请求七业务字段、用于核对查询分区的 brandName 和用于续拉的 skuId。首次 lastMaxId=0，后续取上一批最后一条 skuId；pageIndex 保持 0，不递增，正式同步首期 pageSize 设为 50。两个品牌分别维护 oppo_last_max_id 和 oneplus_last_max_id，不共用游标。contextId 是报文上下文编号，不当游标。所有长数字精确处理，禁止 JavaScript Number。
+cols 请求七业务字段、用于核对查询分区的 brandName 和用于续拉的 skuId。首次 lastMaxId=0，后续取上一批最后一条 skuId；pageIndex 保持 0，不递增，导入每页最多 50 条。OPPO 和一加各自创建任务，每个任务各有一个 `last_max_id`。收到空页才结束，短页仍继续查。contextId 是报文上下文编号，不当游标。游标精确保存在服务端，不返回浏览器。
 
 isIncludeBlockup=1 包含停用数据、其他值不包含，任务必须明确记录本次选择；全量盘点建议 1，不能据此把所有导入项判定在用。末页结束条件、最大页大小及授权额度仍需联调。
 
 ### 单页查询联调
 
-后续同步任务可注入 [JackyunGoodsService](../../backend/src/main/java/com/company/policy/service/JackyunGoodsService.java)，按品牌调用 `queryPage(new JackyunGoodsQuery(brandName, pageSize, lastMaxId, includeBlockup))`。从字符串游标 `"0"` 开始，服务以数值发送 `lastMaxId`，逐条校验返回品牌及游标顺序。结果只包含本地品牌分区、七个原始字段和下一页游标。同步任务须在可靠入库后保存新游标。空页保留当前游标，异常响应通过脱敏错误码返回给调用方。
+同步任务注入 [JackyunGoodsService](../../backend/src/main/java/com/company/policy/service/JackyunGoodsService.java)，按品牌调用 `queryPage`。从字符串游标 `"0"` 开始，服务以数值发送 `lastMaxId`，逐条校验返回品牌及游标顺序。每页提交原文、计数和断点；空页保留当前游标，异常响应只显示脱敏错误类别。
 
 凭证通过环境变量或被忽略的 `backend/.env.local.properties` 配置，变量见 [配置样例](../../backend/.env.example)。自研应用填写 `JACKYUN_APP_KEY` 和 `JACKYUN_APP_SECRET`。ISV 应用另填 `JACKYUN_TOKEN`。查询时检查配置。
 
 2026-11-11 通过迁入后的后端服务实测两个品牌各两页，每页 3 条，四次查询均成功，两个品牌的游标均向前推进。请求显式设置 `isIncludeBlockup=0`。样本中 `goodsField4` 既有系列名，也有归类标签，清洗时需要结合品牌和其他字段校验。后端 Maven `verify` 通过，55 项测试通过，1 项需独立 MySQL 的测试跳过。
 
+本轮在编码导入前，用用户提供的凭证运行 `JackyunGoodsLiveTest`。两次只读请求均为 HTTP 200、业务码 200；OPPO 和一加各 3 条，六条样本的 `goodsName`、`goodsNo`、`skuName`、`cateName`、`goodsField4`、`goodsField1`、`goodsField5` 全部非 NULL。该结果只覆盖首批样本，未跑真实全量、未写目标数据库。凭证仅通过测试进程环境变量传入，普通 `verify` 跳过此实测。
+
 不保存外部商品身份，因此不承诺按 SKU 更新同一行，goodsNo 不设唯一键。按租户、账套、品牌、七字段原文生成固定编码内容哈希，保留 NULL 与空字符串区别；命中后再逐字段精确比较，哈希冲突分配 collision_no，不能静默合并。
 
 七字段完全相同复用本地来源内容 ID；同货号不同配置或任一字段变化形成新候选，不能自动继承旧映射。内容去重不等于真实 SKU 去重。来源原文入库后不可修改，管理员只维护其映射及备注；长度超限报错，不隐式截断。
 
-每页原始来源先落库，首次/最近任务引用、计数和品牌 checkpoint 同事务提交。导入成功后后端自动调度清洗，不需再点全库人工发布。只有当前来源确属完整成功导入范围才触发首次自动标准化；部分失败保留原文待恢复，不将其视作成功全量。清洗状态独立于导入成功，不能把“已导入”显示为“已可选”。
+每页原始来源、首次/最近任务引用、计数和断点同事务提交。失败保留之前已提交的原文，等管理员继续；未成功的任务不视作完整导入。当前只写待清洗状态，自动清洗调度待接入。
 
 source_goods_item 仅存首次/最近任务及当前 clean_job_id，不保存历史完整批次成员。clean_job_id 固定本次清洗依据的成功任务，启动时核验 last_seen_job_id；执行时遇到来源/目录版本变化应放弃旧结果并重算，不能拿变更后的 last_seen 冒充原批次。已有通过映射在重算期间保留，失败不会自动撤销；旧内容缺席不自动停用或删除。完整历史批次回放、可靠 SKU 身份增量仍不提供。
 
-同租户账套一次仅一个活动任务，QUEUED/RUNNING/PAUSING/PAUSED 都占活动槽；恢复继续同一个任务。取消/失败/完成后可建新任务，新全量从 0 开始。lease + fencing_token 防止接管后的旧执行者继续写入；游标只保留任务内最新位置，审计快照须剔除游标、令牌和上游响应。
+同租户账套一次仅一个活动任务，QUEUED/RUNNING/PAUSED 都占活动槽；恢复继续同一个任务。结束或完成后可以发起另一个品牌或同品牌新任务，新任务从 0 开始。租约、执行令牌和版本条件防止接管后的旧执行者写入。审计记录发起、继续、结束的实际管理员及本地任务 ID。
 
 ## 5. 后台和发布
 
-当前管理员前端仅保留源商品库静态展示页。后续接入时需要区分导入进度、来源原文与清洗结果，并提供异常审核、规格颜色及操作历史所需的信息。明确展示“已导入/待清洗/自动通过/待审核/技术失败/人工通过/已排除”。选择器从 ACTIVE 规格生成。
+当前管理员页面提供「导入OPPO手机」「导入一加手机」、任务状态、已读取和去重计数、暂停后继续/结束、品牌和关键词分页查询。原文导入成功显示“等待清洗”。异常审核、规格颜色和操作历史页面待接入。
 
 来源 mapping_status 表示当前生效关联，clean_status 表示本次处理进度，互不混用。AUTO_PASSED/MANUAL_PASSED 均须具有确定的规格和颜色；缺颜色留候选待审核，不把未知颜色当不限颜色。规则结果唯一且目标无冲突时，自动创建/复用 ACTIVE 规格颜色、写映射及 SYSTEM 日志同一短事务；人工纠正则写审核人/时间/原因和 USER 日志。重算时保留旧映射，人工结果不得自动覆盖，DISABLED 不自动恢复。
 
@@ -107,10 +109,10 @@ source_goods_item 仅存首次/最近任务及当前 clean_job_id，不保存历
 
 ## 6. 风控与实现边界
 
-页面仅调用本系统后端，密钥、签名和 token 只留后端；操作每次核验有效用户、ADMIN 及租户，不能信登录时角色快照。限流、瞬时故障有限退避，鉴权和参数错误停止；具体 QPS 按授权额度确认，不编造官方安全频率。
+页面仅调用本系统后端，密钥、签名和 token 只留后端；每次 API 重新核验有效 ADMIN 及账套绑定的租户。任务同账套串行，页面重复提交走幂等键。每页间隔默认 5 秒（可配置），默认 2000 页保护上限；这两个值是本系统保护参数，不是吉客云官方额度。HTTP 429 遵守 `Retry-After` 且至少冷却 5 分钟；其他上游和写库异常暂停，至少冷却 60 秒，不自动重试。结束暂停任务也不会跳过剩余冷却。正式全量导入前应核对该应用的配额和末页行为，避免与同一 AppKey 的其他任务叠加使用。
 
 后端沿用 Controller → Service 接口/Impl → Mapper，使用现有 Cookie、Origin、X-Policy-Request 和 DTO/VO 规范。新增任务、来源、规格/颜色维护、映射发布接口建议见 [商品管理接口](../api/catalog-api.md)；政策接口同步增加 catalogVariantId、colorScope、variantColorId。
 
-[完整 SQL](../sql/schema.sql) 与 [V1](../sql/V1__create_policy_tables.sql) 是同一份九表空库基线，二选一执行。用户本轮明确未建表，允许更新未部署 V1；已执行旧版的其他库不可直接重跑，须单独增量迁移。项目未启用 Flyway 或自动建表。
+[完整 SQL](../sql/schema.sql) 与 [V1](../sql/V1__create_policy_tables.sql) 是同一份九表空库基线，二选一执行。已有表的库先核对结构和数据，再按用户确认的方案迁移或重建。目标库 SQL 由用户在 Navicat 执行。[数据字典](../sql/database-design.md#1-在-navicat-建表)
 
 开发顺序为少量接口联调 → 两品牌原始导入 → 可版本化清洗与唯一结果自动入标准库 → 异常审核/重试 → 政策选择。无需 Redis、MQ 或完整规则引擎。九表 DDL 完成不等于自动清洗、页面或政策业务已经实现。

@@ -6,7 +6,7 @@
 
 已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书客户端 JS-SDK 免登、浏览器内飞书扫码、网页 OAuth 授权及服务端会话。
 
-当前包含申请人页面、登录落库及管理员展示工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`，侧栏为「商品 → 源商品库」。源商品库以静态样例展示两个品牌及七个原始字段，业务控件暂未启用。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。详见 [管理员工作台](docs/architecture/admin-workspace.md)。
+当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`，侧栏为「商品 → 源商品库」。管理员可分别导入 OPPO、一加，查询已落库的七字段原文。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。详见 [管理员工作台](docs/architecture/admin-workspace.md)。
 
 已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。管理员业务接口尚未开发。
 
@@ -84,7 +84,15 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 模块化文档与数据库设计
 
-2026-11-11 确认 [商品流程](docs/architecture/catalog-admin-design.md)：两品牌七字段原始导入后系统清洗系列、型号、配置、颜色，唯一明确结果自动进入可用标准库，缺失/歧义/冲突才人工审核；[清洗细则](docs/business/catalog-cleaning.md)规定状态与证据。保持九表并补清洗字段和SYSTEM审计，政策支持不限颜色/指定颜色。已实测[吉客云只读查询与续拉](docs/architecture/catalog-admin-design.md#单页查询联调)，正式导入及清洗待接入。
+## 吉客云商品导入
+
+1. 在 Navicat 选中目标库。首次建表执行 [九表建表 SQL](docs/sql/schema.sql)，与 `V1__create_policy_tables.sql` 二选一。若已执行包含 `oppo_status` 和 `oneplus_status` 的旧版九表，且导入任务、来源商品、商品日志均为空，停止后端后执行 [单品牌导入增量升级 SQL](docs/sql/upgrade_empty_goods_sync_to_single_brand.sql)。有商品导入历史的库需单独迁移。
+2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `JACKYUN_TENANT_KEY` 为授权管理员的 `user_info.tenant_key`。`JACKYUN_SOURCE_KEY` 是本地账套标识，默认 `jackyun`；更换实际账套时用新标识，避免混用原文及断点。
+3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点「导入OPPO手机」或「导入一加手机」，完成后再导入另一个品牌。
+
+任务断点和七字段原文按页一起落库，异常暂停，可继续或结束。当前导入完成只表示原文已保存，清洗仍待接入。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
+
+仅核对 API 时，可在 `backend/` 将凭证临时设为进程环境变量，设置 `JACKYUN_LIVE_CHECK=1`，运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dtest=JackyunGoodsLiveTest' test`。该测试每品牌查询 3 条，只输出字段统计，不连接数据库。
 
 架构、业务规约、状态机、覆盖 SQL 草案及申请人/管理员接口设计统一见 [docs 文档索引](docs/README.md)。接口和覆盖算法文档明确区分已实现能力与待实现草案。
 
