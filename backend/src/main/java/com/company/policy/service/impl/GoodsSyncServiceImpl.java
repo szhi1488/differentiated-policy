@@ -4,12 +4,13 @@ import com.company.policy.common.config.JackyunProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.GoodsSyncRequest;
+import com.company.policy.dto.GoodsSyncRequest.Mode;
 import com.company.policy.dto.JackyunGoodsQuery;
+import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.GoodsSyncJobMapper;
 import com.company.policy.mapper.SourceGoodsItemMapper;
-import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.vo.CurrentUserResponse;
@@ -19,16 +20,12 @@ import com.company.policy.vo.GoodsSyncResponse.Source;
 import com.company.policy.vo.GoodsSyncResponse.SourcePage;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -39,37 +36,40 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Slf4j
 @Service
 public class GoodsSyncServiceImpl implements GoodsSyncService {
-    private static final List<String> BRANDS = List.of("OPPO手机", "一加手机");
+    private static final List<String> BRANDS = CatalogAccess.BRANDS;
     private static final int PAGE_SIZE = 50;
-    private static final int[] FIELD_LENGTHS = {512, 128, 256, 256, 1024, 1024, 1024};
+    private static final int[] FIELD_LENGTHS = {512, 128, 256, 256, 1024, 1024, 1024, 1024};
 
-    private final UserInfoMapper users;
+    private final CatalogAccess access;
     private final GoodsSyncJobMapper jobs;
     private final SourceGoodsItemMapper sources;
     private final JackyunGoodsService jackyun;
     private final JackyunProperties config;
+    private final ObjectMapper json;
     private final TransactionTemplate tx;
     private long lastWorkerWarning = System.nanoTime() - TimeUnit.MINUTES.toNanos(1);
 
-    public GoodsSyncServiceImpl(
-            UserInfoMapper users,
+    GoodsSyncServiceImpl(
+            CatalogAccess access,
             GoodsSyncJobMapper jobs,
             SourceGoodsItemMapper sources,
             JackyunGoodsService jackyun,
             JackyunProperties config,
+            ObjectMapper json,
             PlatformTransactionManager manager) {
-        this.users = users;
+        this.access = access;
         this.jobs = jobs;
         this.sources = sources;
         this.jackyun = jackyun;
         this.config = config;
+        this.json = json;
         this.tx = new TransactionTemplate(manager);
         this.tx.setTimeout(60);
     }
 
     @Override
     public Overview overview(CurrentUserResponse session) {
-        UserInfo admin = requireAdmin(session);
+        UserInfo admin = access.requireAdmin(session);
         var latest =
                 BRANDS.stream()
                         .map(
@@ -84,7 +84,13 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     @Override
     public GoodsSyncResponse start(CurrentUserResponse session, GoodsSyncRequest request) {
-        UserInfo admin = requireAdmin(session);
+        UserInfo admin = access.requireAdmin(session);
+        if ((request.mode() == Mode.FULL) != (request.date() == null)
+                || (request.date() != null
+                        && (request.date().getYear() < 1000 || request.date().getYear() > 9999))) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST, "CATALOG_INVALID_SYNC_DATE", "按日导入须填写有效日期，全量导入无需日期。");
+        }
         var job = new GoodsSyncJob();
         job.setTenantKey(admin.getTenantKey());
         job.setSourceKey(config.getSourceKey());
@@ -92,6 +98,15 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         job.setBrandName(request.brandName());
         job.setIdempotencyKey(request.idempotencyKey());
         job.setPageSize(PAGE_SIZE);
+        job.setIncludeBlockup(true);
+        job.setSyncMode(request.mode());
+        job.setSyncDate(request.date());
+        job.setSyncPhase(
+                switch (request.mode()) {
+                    case FULL -> Phase.FULL;
+                    case CREATED -> Phase.CREATED;
+                    case MODIFIED -> Phase.GOODS_MODIFIED;
+                });
         try {
             return tx.execute(
                     ignored -> {
@@ -127,6 +142,8 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             return null;
         }
         if (!Objects.equals(existing.getBrandName(), job.getBrandName())
+                || existing.getSyncMode() != job.getSyncMode()
+                || !Objects.equals(existing.getSyncDate(), job.getSyncDate())
                 || !Objects.equals(existing.getRequesterId(), job.getRequesterId())) {
             throw conflict("CATALOG_IDEMPOTENCY_CONFLICT", "该导入请求编号已被其他操作使用。");
         }
@@ -145,7 +162,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     private GoodsSyncResponse control(
             CurrentUserResponse session, long id, int version, boolean resume) {
-        UserInfo admin = requireAdmin(session);
+        UserInfo admin = access.requireAdmin(session);
         if (resume) {
             requireReady();
         }
@@ -176,15 +193,22 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     @Override
     public SourcePage sources(
-            CurrentUserResponse session, String brand, String keyword, int page, int size) {
-        UserInfo admin = requireAdmin(session);
+            CurrentUserResponse session,
+            String brand,
+            String keyword,
+            LocalDate createdDate,
+            int page,
+            int size) {
+        UserInfo admin = access.requireAdmin(session);
         if ((brand != null && !BRANDS.contains(brand))
                 || (keyword != null && keyword.length() > 128)
+                || (createdDate != null
+                        && (createdDate.getYear() < 1000 || createdDate.getYear() > 9999))
                 || page < 1
                 || size < 1
                 || size > 100) {
             throw new ApiException(
-                    HttpStatus.BAD_REQUEST, "CATALOG_INVALID_FILTER", "品牌、关键词或分页参数无效。");
+                    HttpStatus.BAD_REQUEST, "CATALOG_INVALID_FILTER", "品牌、关键词、建档日或分页参数无效。");
         }
         String search = keyword == null || keyword.isBlank() ? null : keyword.strip();
         return tx.execute(
@@ -196,6 +220,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                                             config.getSourceKey(),
                                             brand,
                                             search,
+                                            createdDate,
                                             size,
                                             (page - 1L) * size)
                                     .stream()
@@ -204,27 +229,12 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     return new SourcePage(
                             items,
                             sources.count(
-                                    admin.getTenantKey(), config.getSourceKey(), brand, search));
+                                    admin.getTenantKey(),
+                                    config.getSourceKey(),
+                                    brand,
+                                    search,
+                                    createdDate));
                 });
-    }
-
-    private UserInfo requireAdmin(CurrentUserResponse session) {
-        var user = users.findIdentity(session.tenantKey(), session.openId());
-        if (user == null
-                || !Objects.equals(session.id(), user.getId().toString())
-                || !"ADMIN".equals(user.getRoleType())
-                || !Integer.valueOf(0).equals(user.getIsDeleted())) {
-            throw new ApiException(
-                    HttpStatus.FORBIDDEN, "CATALOG_ADMIN_REQUIRED", "只有有效管理员可以访问源商品库。");
-        }
-        if (!config.hasImportScope()) {
-            throw new ApiException(
-                    HttpStatus.SERVICE_UNAVAILABLE, "CATALOG_SCOPE_MISSING", "请先配置吉客云账套与飞书租户的绑定。");
-        }
-        if (!config.getTenantKey().equals(user.getTenantKey())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "CATALOG_SCOPE_DENIED", "当前租户未授权访问此商品账套。");
-        }
-        return user;
     }
 
     private void requireReady() {
@@ -274,7 +284,9 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                             job.getBrandName(),
                             job.getPageSize(),
                             job.getLastMaxId(),
-                            job.isIncludeBlockup());
+                            job.isIncludeBlockup(),
+                            job.getSyncPhase(),
+                            job.getSyncDate());
             var page = jackyun.queryPage(query);
             page.goods().forEach(GoodsSyncServiceImpl::validateFields);
             tx.executeWithoutResult(ignored -> commitPage(job, token, page));
@@ -304,44 +316,120 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         if (jobs.lockOwned(job, token) == null) {
             throw new LeaseLost();
         }
+        var skuIds = page.goods().stream().map(Goods::skuId).toList();
+        if (!skuIds.isEmpty()) {
+            // 覆盖最近批次前保留旧版本已确认的建档日。
+            sources.recordCreatedDates(job, skuIds);
+        }
         int count = 0;
         for (Goods goods : page.goods()) {
             if (saveContent(job, goods)) {
                 count++;
             }
         }
-        String nextStatus = page.goods().isEmpty() ? "SUCCEEDED" : "RUNNING";
+        if (job.getSyncMode() == Mode.CREATED && !skuIds.isEmpty()) {
+            sources.recordCreatedDates(job, skuIds);
+        }
+        boolean nextPhase = page.goods().isEmpty() && job.getSyncPhase() == Phase.GOODS_MODIFIED;
+        String nextStatus = page.goods().isEmpty() && !nextPhase ? "SUCCEEDED" : "RUNNING";
         if (jobs.advance(
                         job,
                         token,
                         nextStatus,
-                        page.nextLastMaxId(),
+                        nextPhase ? "0" : page.nextLastMaxId(),
+                        nextPhase ? Phase.SKU_MODIFIED : job.getSyncPhase(),
                         page.goods().size(),
                         count,
-                        config.getImportIntervalSeconds())
+                        config.getImportIntervalSeconds(),
+                        CatalogCleaningRule.VERSION)
                 != 1) {
             throw new LeaseLost();
         }
     }
 
     private boolean saveContent(GoodsSyncJob job, Goods goods) {
-        String hash = hash(job, goods);
-        int collision = 0;
-        for (var candidate : sources.matchingHash(job, hash)) {
-            if (goods.equals(candidate.original())) {
-                if (job.getId().equals(candidate.getLastSeenJobId())) {
-                    return false;
-                }
-                checkUpdated(sources.markSeen(job, candidate.getId()));
-                return true;
-            }
-            collision = candidate.getCollisionNo() + 1;
+        var existing = sources.lockSku(job, goods.skuId());
+        if (existing == null) {
+            checkUpdated(sources.insert(job, goods));
+            return true;
         }
-        checkUpdated(sources.insert(job, goods, hash, collision));
-        return true;
+        if (!job.getBrandName().equals(existing.getBrandName())) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "CATALOG_SKU_BRAND_CONFLICT",
+                    "同一 SKU 出现在不同品牌，请先核对吉客云品牌归属。");
+        }
+        boolean firstInJob = !job.getId().equals(existing.getLastSeenJobId());
+        var previous = existing.original();
+        if (older(goods.gmtModified(), previous.gmtModified())
+                || older(goods.goodsGmtModified(), previous.goodsGmtModified())) {
+            if (firstInJob) {
+                checkUpdated(sources.markSeen(job, existing.getId()));
+            }
+            return firstInJob;
+        }
+        var current =
+                new Goods(
+                        goods.goodsName(),
+                        goods.goodsNo(),
+                        goods.skuName(),
+                        goods.cateName(),
+                        goods.goodsField4(),
+                        goods.goodsField1(),
+                        goods.goodsField5(),
+                        goods.skuId(),
+                        goods.cateFullName(),
+                        known(goods.gmtModified(), previous.gmtModified()),
+                        known(goods.goodsGmtModified(), previous.goodsGmtModified()),
+                        known(goods.isBlockup(), previous.isBlockup()),
+                        known(goods.isPackageGood(), previous.isPackageGood()));
+        if (previous.equals(current)) {
+            if (firstInJob) {
+                checkUpdated(sources.markSeen(job, existing.getId()));
+            }
+            return firstInJob;
+        }
+        boolean changed =
+                !java.util.Arrays.equals(fields(previous), fields(current))
+                        || !Objects.equals(previous.isBlockup(), current.isBlockup())
+                        || !Objects.equals(previous.isPackageGood(), current.isPackageGood());
+        checkUpdated(
+                sources.updateSku(
+                        job,
+                        existing,
+                        current,
+                        changed && !"EXCLUDED".equals(existing.getMappingStatus())));
+        if (changed) {
+            checkUpdated(
+                    sources.auditUpdate(
+                            job,
+                            existing.getId(),
+                            "CLN-" + job.getId(),
+                            auditSnapshot(previous),
+                            auditSnapshot(current)));
+        }
+        return firstInJob;
+    }
+
+    private String auditSnapshot(Goods goods) {
+        var snapshot = json.<com.fasterxml.jackson.databind.node.ObjectNode>valueToTree(goods);
+        snapshot.remove("skuId");
+        return snapshot.toString();
+    }
+
+    private static boolean older(Long incoming, Long saved) {
+        return incoming != null && saved != null && incoming < saved;
+    }
+
+    private static <T> T known(T incoming, T saved) {
+        return incoming == null ? saved : incoming;
     }
 
     private static void validateFields(Goods goods) {
+        if (goods.skuId() == null || !goods.skuId().matches("[1-9][0-9]{0,18}")) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "CATALOG_INVALID_SKU", "吉客云未返回有效 SKU ID。");
+        }
         String[] values = fields(goods);
         boolean present = false;
         for (int i = 0; i < values.length; i++) {
@@ -370,35 +458,9 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             goods.cateName(),
             goods.goodsField4(),
             goods.goodsField1(),
-            goods.goodsField5()
+            goods.goodsField5(),
+            goods.cateFullName()
         };
-    }
-
-    private static String hash(GoodsSyncJob job, Goods goods) {
-        try {
-            var digest = MessageDigest.getInstance("SHA-256");
-            Stream.concat(
-                            Stream.of(job.getTenantKey(), job.getSourceKey(), job.getBrandName()),
-                            Stream.of(fields(goods)))
-                    .forEach(
-                            value -> {
-                                // 固定顺序及 UTF-8 字节长度，区分 NULL、空串及字段边界。
-                                byte[] bytes =
-                                        value == null
-                                                ? null
-                                                : value.getBytes(StandardCharsets.UTF_8);
-                                digest.update(
-                                        ByteBuffer.allocate(Integer.BYTES)
-                                                .putInt(bytes == null ? -1 : bytes.length)
-                                                .array());
-                                if (bytes != null) {
-                                    digest.update(bytes);
-                                }
-                            });
-            return HexFormat.of().formatHex(digest.digest());
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("当前 Java 环境缺少 SHA-256", impossible);
-        }
     }
 
     private static void checkUpdated(int rows) {

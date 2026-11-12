@@ -4,6 +4,7 @@ import com.company.policy.common.config.JackyunProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.JackyunGoodsQuery;
+import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
@@ -18,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -35,9 +37,11 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
     private static final URI GATEWAY = URI.create("https://open.jackyun.com/open/openapi/do");
     private static final String METHOD = "erp-goods.goods.sku.search";
     private static final String COLS =
-            "goodsName,goodsNo,skuName,cateName,goodsField4,goodsField1,goodsField5,brandName,skuId";
+            "goodsName,goodsNo,skuName,cateName,goodsField4,goodsField1,goodsField5,brandName,skuId,"
+                    + "cateFullName,gmtModified,goodsGmtModified,isBlockup,isPackageGood";
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter TIMESTAMP =
-            DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss").withZone(ZoneId.of("Asia/Shanghai"));
+            DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss").withZone(BUSINESS_ZONE);
 
     private final JackyunProperties properties;
     private final HttpClient client;
@@ -112,6 +116,10 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
                         .put("lastMaxId", Long.parseLong(query.lastMaxId()))
                         .put("pageIndex", 0)
                         .put("pageSize", query.pageSize());
+        if (query.date() != null) {
+            bizcontent.put(query.phase().startKey, query.date() + " 00:00:00");
+            bizcontent.put(query.phase().endKey, query.date() + " 23:59:59");
+        }
         var parameters = new TreeMap<String, String>();
         parameters.put("appkey", properties.getAppKey());
         parameters.put("bizcontent", mapper.writeValueAsString(bizcontent));
@@ -181,6 +189,13 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
                 throw invalidResponse("吉客云返回的 SKU 续拉位置未递增。");
             }
             checkpoint = skuId;
+            Long skuModified = readEpoch(row, "gmtModified");
+            Long goodsModified = readEpoch(row, "goodsGmtModified");
+            if (query.phase() == Phase.GOODS_MODIFIED) {
+                validateDate(query, goodsModified);
+            } else if (query.phase() == Phase.SKU_MODIFIED) {
+                validateDate(query, skuModified);
+            }
             goods.add(
                     new Goods(
                             readSourceField(row, "goodsName"),
@@ -189,9 +204,55 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
                             readSourceField(row, "cateName"),
                             readSourceField(row, "goodsField4"),
                             readSourceField(row, "goodsField1"),
-                            readSourceField(row, "goodsField5")));
+                            readSourceField(row, "goodsField5"),
+                            Long.toString(skuId),
+                            readSourceField(row, "cateFullName"),
+                            skuModified,
+                            goodsModified,
+                            readFlag(row, "isBlockup"),
+                            readFlag(row, "isPackageGood")));
         }
         return new JackyunGoodsPage(query.brandName(), goods, Long.toString(checkpoint));
+    }
+
+    private static void validateDate(JackyunGoodsQuery query, Long value) {
+        if (value == null
+                || !query.date()
+                        .equals(Instant.ofEpochMilli(value).atZone(BUSINESS_ZONE).toLocalDate())) {
+            throw invalidResponse("吉客云返回了指定修改日期之外的商品。");
+        }
+    }
+
+    private static Long readEpoch(JsonNode row, String field) {
+        var node = row.path(field);
+        if (node.isMissingNode()
+                || node.isNull()
+                || (node.isTextual() && node.asText().isBlank())) {
+            return null;
+        }
+        try {
+            if ((node.isIntegralNumber() || node.isTextual())
+                    && node.asText().matches("[0-9]{1,15}")) {
+                return Long.valueOf(node.asText());
+            }
+        } catch (NumberFormatException ignored) {
+            // 统一按字段类型异常处理。
+        }
+        throw invalidResponse("吉客云货品字段 " + field + " 的毫秒时间戳无效。");
+    }
+
+    private static Boolean readFlag(JsonNode row, String field) {
+        var node = row.path(field);
+        if (node.isMissingNode()
+                || node.isNull()
+                || (node.isTextual() && node.asText().isBlank())) {
+            return null;
+        }
+        return switch (node.asText()) {
+            case "0" -> false;
+            case "1" -> true;
+            default -> throw invalidResponse("吉客云货品字段 " + field + " 的状态值无效。");
+        };
     }
 
     private static long readSkuId(JsonNode node) {

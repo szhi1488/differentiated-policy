@@ -32,6 +32,9 @@ const menuOpen = ref(false)
         <router-link :to="{ name: 'catalog-sources' }" @click="menuOpen = false">
           源商品库
         </router-link>
+        <router-link :to="{ name: 'catalog-cleaning' }" @click="menuOpen = false">
+          商品清洗与识别
+        </router-link>
       </nav>
     </aside>
 

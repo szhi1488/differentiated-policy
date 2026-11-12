@@ -30,6 +30,8 @@ export function useSourceGoods() {
   const brand = ref('all')
   const input = ref('')
   const keyword = ref('')
+  const createdDateInput = ref(null)
+  const createdDate = ref(null)
   const page = ref(1)
   const size = ref(20)
   const goods = useLatestQuery()
@@ -52,6 +54,7 @@ export function useSourceGoods() {
         {
           brand: brand.value === 'all' ? '' : brand.value,
           keyword: keyword.value,
+          createdDate: createdDate.value,
           page: page.value,
           size: size.value,
         },
@@ -60,26 +63,36 @@ export function useSourceGoods() {
     )
   }
 
-  watch([brand, keyword, page, size], loadGoods, { immediate: true })
+  watch([brand, keyword, createdDate, page, size], loadGoods, { immediate: true })
 
   function search() {
     const next = input.value.trim()
-    if (page.value === 1 && keyword.value === next) {
+    const nextDate = createdDateInput.value || null
+    if (page.value === 1 && keyword.value === next && createdDate.value === nextDate) {
       return loadGoods()
     }
     page.value = 1
     keyword.value = next
+    createdDate.value = nextDate
   }
 
   function reset() {
     brand.value = 'all'
     input.value = ''
+    createdDateInput.value = null
     return search()
   }
 
   function selectBrand(value) {
     page.value = 1
     brand.value = value
+  }
+
+  function viewCreatedDate(job) {
+    selectBrand(job.brandName)
+    input.value = ''
+    createdDateInput.value = job.syncDate
+    return search()
   }
 
   function resize(value) {
@@ -157,15 +170,16 @@ export function useSourceGoods() {
     }
   }
 
-  function start(brandName) {
-    if (!configured.value || activeJob.value || jobsError.value) {
+  function start(brandName, { mode, date }) {
+    if (!configured.value || activeJob.value || jobsError.value || (mode !== 'FULL' && !date)) {
       return
     }
+    const scopeKey = JSON.stringify([brandName, mode, date])
     return mutate(brandName, async (signal) => {
-      const key = requestKeys.get(brandName) ?? createRequestId()
-      requestKeys.set(brandName, key)
-      const result = await startGoodsJob(brandName, key, signal)
-      requestKeys.delete(brandName)
+      const idempotencyKey = requestKeys.get(scopeKey) ?? createRequestId()
+      requestKeys.set(scopeKey, idempotencyKey)
+      const result = await startGoodsJob({ brandName, idempotencyKey, mode, date }, signal)
+      requestKeys.delete(scopeKey)
       return result
     })
   }
@@ -194,6 +208,8 @@ export function useSourceGoods() {
   return {
     brand,
     input,
+    createdDateInput,
+    createdDate,
     page,
     size,
     goods,
@@ -207,6 +223,7 @@ export function useSourceGoods() {
     search,
     reset,
     selectBrand,
+    viewCreatedDate,
     resize,
     refreshJobs,
     start,

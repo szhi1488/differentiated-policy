@@ -1,5 +1,6 @@
 package com.company.policy.mapper;
 
+import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.UserInfo;
 import org.apache.ibatis.annotations.Insert;
@@ -58,9 +59,10 @@ public interface GoodsSyncJobMapper {
             """
         INSERT INTO goods_sync_job
           (tenant_key, source_key, requester_id, brand_name, idempotency_key,
-           page_size, include_blockup, next_request_at)
+           page_size, include_blockup, sync_mode, sync_date, sync_phase, next_request_at)
         VALUES (#{job.tenantKey}, #{job.sourceKey}, #{job.requesterId}, #{job.brandName}, #{job.idempotencyKey},
-           #{job.pageSize}, #{job.includeBlockup}, TIMESTAMPADD(SECOND, #{delaySeconds}, CURRENT_TIMESTAMP))
+           #{job.pageSize}, #{job.includeBlockup}, #{job.syncMode}, #{job.syncDate}, #{job.syncPhase},
+           TIMESTAMPADD(SECOND, #{delaySeconds}, CURRENT_TIMESTAMP))
         """)
     @Options(useGeneratedKeys = true, keyProperty = "job.id")
     int insert(@Param("job") GoodsSyncJob job, @Param("delaySeconds") int delaySeconds);
@@ -95,11 +97,13 @@ public interface GoodsSyncJobMapper {
 
     @Update(
             """
-        UPDATE goods_sync_job SET status = #{status}, last_max_id = #{cursor},
+        UPDATE goods_sync_job SET status = #{status}, last_max_id = #{cursor}, sync_phase = #{phase},
           read_count = read_count + #{rows}, content_count = content_count + #{contents},
           page_count = page_count + 1, worker_token = NULL, lease_until = NULL,
           next_request_at = TIMESTAMPADD(SECOND, #{delaySeconds}, CURRENT_TIMESTAMP),
           finished_at = CASE WHEN #{status} = 'SUCCEEDED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+          clean_status = CASE WHEN #{status} = 'SUCCEEDED' THEN 'RUNNING' ELSE clean_status END,
+          clean_rule_version = CASE WHEN #{status} = 'SUCCEEDED' THEN #{ruleVersion} ELSE clean_rule_version END,
           record_version = record_version + 1
         WHERE
         """
@@ -109,9 +113,11 @@ public interface GoodsSyncJobMapper {
             String token,
             String status,
             String cursor,
+            Phase phase,
             int rows,
             int contents,
-            int delaySeconds);
+            int delaySeconds,
+            String ruleVersion);
 
     @Update(
             """

@@ -1,4 +1,4 @@
--- 差异化政策管理：确认版九表，MySQL 8.0.16+，2026-11-11。
+-- 差异化政策管理：SKU 同步版九表，MySQL 8.0.16+，2026-11-12。
 -- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
 -- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
 -- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
@@ -85,12 +85,15 @@ CREATE TABLE `goods_sync_job` (
   `requester_id` BIGINT NOT NULL COMMENT '发起管理员',
   `idempotency_key` VARCHAR(64) NOT NULL COMMENT '任务创建幂等键',
   `status` VARCHAR(16) NOT NULL DEFAULT 'QUEUED' COMMENT 'QUEUED、RUNNING、PAUSED、SUCCEEDED、CANCELLED',
-  `last_max_id` VARCHAR(32) NOT NULL DEFAULT '0' COMMENT '本任务品牌的最新续拉位置，不保存逐商品标识',
+  `sync_mode` VARCHAR(16) NOT NULL DEFAULT 'FULL' COMMENT 'FULL 全量、CREATED 按建档日、MODIFIED 按变更日',
+  `sync_date` DATE DEFAULT NULL COMMENT '按日导入的北京时间日期，全量为空',
+  `sync_phase` VARCHAR(16) NOT NULL DEFAULT 'FULL' COMMENT '当前查询阶段，变更日先查货品再查规格',
+  `last_max_id` VARCHAR(32) NOT NULL DEFAULT '0' COMMENT '当前品牌及阶段的续拉位置',
   `page_size` INT NOT NULL DEFAULT 50 COMMENT '联调确认范围内的单批数量',
-  `include_blockup` TINYINT NOT NULL COMMENT '本任务是否包含停用来源，0或1；当前导入固定为0',
+  `include_blockup` TINYINT NOT NULL COMMENT '是否查询停用来源；当前导入固定为 1',
   `page_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已提交页数，含确认结束的空页',
   `read_count` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '累计接收条次，重放可重复，非真实SKU总数',
-  `content_count` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前任务已提交的去重内容计数',
+  `content_count` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前任务已提交的不同 SKU 数',
   `clean_status` VARCHAR(16) NOT NULL DEFAULT 'NOT_STARTED' COMMENT '清洗阶段，独立于导入状态：NOT_STARTED、RUNNING、COMPLETED、PARTIAL、FAILED',
   `clean_rule_version` VARCHAR(64) DEFAULT NULL COMMENT '本次清洗固定的受控规则包版本',
   `failure_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '失败尝试次数',
@@ -115,6 +118,11 @@ CREATE TABLE `goods_sync_job` (
   CONSTRAINT `fk_job_requester` FOREIGN KEY (`requester_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `ck_job_status` CHECK (`status` IN ('QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED', 'CANCELLED')),
   CONSTRAINT `ck_job_brand` CHECK (`brand_name` IN ('OPPO手机', '一加手机')),
+  CONSTRAINT `ck_job_sync_scope` CHECK (
+    (`sync_mode` = 'FULL' AND `sync_date` IS NULL AND `sync_phase` = 'FULL')
+    OR (`sync_mode` = 'CREATED' AND `sync_date` IS NOT NULL AND `sync_phase` = 'CREATED')
+    OR (`sync_mode` = 'MODIFIED' AND `sync_date` IS NOT NULL AND `sync_phase` IN ('GOODS_MODIFIED', 'SKU_MODIFIED'))
+  ),
   CONSTRAINT `ck_job_page` CHECK (`page_size` BETWEEN 1 AND 50),
   CONSTRAINT `ck_job_blockup` CHECK (`include_blockup` IN (0, 1)),
   CONSTRAINT `ck_job_clean_status` CHECK (`clean_status` IN ('NOT_STARTED', 'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED')),
@@ -123,7 +131,7 @@ CREATE TABLE `goods_sync_job` (
 
 
 CREATE TABLE `source_goods_item` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '本地来源内容主键，不是吉客云SKU主键',
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '本地来源商品稳定主键',
   `tenant_key` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '租户标识',
   `source_key` VARCHAR(64) NOT NULL COMMENT '受控账套标识',
   `brand_name` VARCHAR(32) NOT NULL COMMENT '品牌查询分区，不取上游返回字段',
@@ -134,19 +142,23 @@ CREATE TABLE `source_goods_item` (
   `goods_field4` VARCHAR(1024) DEFAULT NULL COMMENT '来源goodsField4原文',
   `goods_field1` VARCHAR(1024) DEFAULT NULL COMMENT '来源goodsField1原文',
   `goods_field5` VARCHAR(1024) DEFAULT NULL COMMENT '来源goodsField5原文',
-  `content_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '七字段固定编码的SHA256，命中后仍比较原文',
-  `collision_no` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '不同内容同哈希时分配的冲突序号',
+  `sku_id` VARCHAR(19) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '吉客云SKU ID，同租户账套内唯一',
+  `cate_full_name` VARCHAR(1024) DEFAULT NULL COMMENT '吉客云完整分类路径原文',
+  `gmt_modified` BIGINT UNSIGNED DEFAULT NULL COMMENT '规格修改时间，Unix 毫秒',
+  `goods_gmt_modified` BIGINT UNSIGNED DEFAULT NULL COMMENT '货品修改时间，Unix 毫秒',
+  `is_blockup` TINYINT UNSIGNED DEFAULT NULL COMMENT '吉客云停用标记，NULL 表示未知',
+  `is_package_good` TINYINT UNSIGNED DEFAULT NULL COMMENT '吉客云组合装标记，NULL 表示未知',
   `first_seen_job_id` BIGINT NOT NULL COMMENT '首次写入的同步任务',
   `last_seen_job_id` BIGINT NOT NULL COMMENT '最近出现的同步任务，仅当前信息不作批次历史',
   `mapping_status` VARCHAR(16) NOT NULL DEFAULT 'UNMAPPED' COMMENT 'UNMAPPED-待归类，MAPPED-已确认，EXCLUDED-排除',
   `catalog_variant_id` BIGINT DEFAULT NULL COMMENT '规则唯一确定或人工确认的已生效规格映射',
-  `variant_color_id` BIGINT DEFAULT NULL COMMENT '清洗七字段或人工审核产生的本地颜色映射',
+  `variant_color_id` BIGINT DEFAULT NULL COMMENT '清洗或人工审核产生的本地颜色映射',
   `mapping_remark` VARCHAR(512) DEFAULT NULL COMMENT '归类或排除原因',
   `mapping_origin` VARCHAR(16) DEFAULT NULL COMMENT '生效映射来源：AUTO-自动清洗，MANUAL-人工审核',
   `clean_status` VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING、PROCESSING、AUTO_PASSED、REVIEW_REQUIRED、MANUAL_PASSED、ERROR、EXCLUDED',
   `clean_job_id` BIGINT DEFAULT NULL COMMENT '本次清洗依据的已成功导入任务',
   `clean_rule_version` VARCHAR(64) DEFAULT NULL COMMENT '本次处理的受控规则包版本，人工修正亦保留原依据',
-  `clean_candidate` JSON DEFAULT NULL COMMENT '本地候选及七字段证据，禁止完整响应或额外上游属性',
+  `clean_candidate` JSON DEFAULT NULL COMMENT '本地候选及白名单字段证据，禁止完整响应',
   `clean_error_code` VARCHAR(64) DEFAULT NULL COMMENT '缺失、歧义、冲突或技术错误类别',
   `clean_attempts` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '清洗尝试次数',
   `clean_run_key` VARCHAR(64) DEFAULT NULL COMMENT '当前清洗执行标识，防止过期执行者提交',
@@ -159,7 +171,7 @@ CREATE TABLE `source_goods_item` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间，北京时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间，北京时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_source_content` (`tenant_key`, `source_key`, `brand_name`, `content_hash`, `collision_no`),
+  UNIQUE KEY `uk_source_sku` (`tenant_key`, `source_key`, `sku_id`),
   KEY `idx_source_variant` (`catalog_variant_id`, `tenant_key`, `brand_name`),
   KEY `idx_source_color` (`variant_color_id`, `catalog_variant_id`, `tenant_key`),
   KEY `idx_source_first_job` (`first_seen_job_id`, `tenant_key`, `source_key`, `brand_name`),
@@ -178,6 +190,11 @@ CREATE TABLE `source_goods_item` (
   CONSTRAINT `fk_source_clean_job` FOREIGN KEY (`clean_job_id`, `tenant_key`, `source_key`, `brand_name`) REFERENCES `goods_sync_job` (`id`, `tenant_key`, `source_key`, `brand_name`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `fk_source_reviewer` FOREIGN KEY (`reviewed_by`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `ck_source_brand` CHECK (`brand_name` IN ('一加手机', 'OPPO手机')),
+  CONSTRAINT `ck_source_sku_id` CHECK (CHAR_LENGTH(TRIM(`sku_id`)) BETWEEN 1 AND 19),
+  CONSTRAINT `ck_source_flags` CHECK (
+    (`is_blockup` IS NULL OR `is_blockup` IN (0, 1))
+    AND (`is_package_good` IS NULL OR `is_package_good` IN (0, 1))
+  ),
   CONSTRAINT `ck_source_mapping` CHECK ((`mapping_status` = 'MAPPED' AND `catalog_variant_id` IS NOT NULL AND `mapping_origin` IS NOT NULL AND `mapping_origin` IN ('AUTO', 'MANUAL')) OR (`mapping_status` IN ('UNMAPPED', 'EXCLUDED') AND `catalog_variant_id` IS NULL AND `variant_color_id` IS NULL AND `mapping_origin` IS NULL)),
   CONSTRAINT `ck_source_clean_enum` CHECK (`clean_status` IN ('PENDING', 'PROCESSING', 'AUTO_PASSED', 'REVIEW_REQUIRED', 'MANUAL_PASSED', 'ERROR', 'EXCLUDED')),
   CONSTRAINT `ck_source_candidate` CHECK (`clean_candidate` IS NULL OR JSON_TYPE(`clean_candidate`) = 'OBJECT'),
@@ -186,7 +203,7 @@ CREATE TABLE `source_goods_item` (
   CONSTRAINT `ck_source_clean_processing` CHECK (`clean_status` <> 'PROCESSING' OR (`clean_job_id` IS NOT NULL AND `clean_run_key` IS NOT NULL AND `clean_lease_until` IS NOT NULL AND `clean_rule_version` IS NOT NULL AND CHAR_LENGTH(TRIM(`clean_rule_version`)) > 0)),
   CONSTRAINT `ck_source_clean_issue` CHECK (`clean_status` NOT IN ('REVIEW_REQUIRED', 'ERROR') OR (`clean_error_code` IS NOT NULL AND CHAR_LENGTH(TRIM(`clean_error_code`)) > 0)),
   CONSTRAINT `ck_source_clean_excluded` CHECK ((`clean_status` = 'EXCLUDED' AND `mapping_status` = 'EXCLUDED' AND `reviewed_by` IS NOT NULL AND `reviewed_at` IS NOT NULL AND `review_reason` IS NOT NULL AND CHAR_LENGTH(TRIM(`review_reason`)) > 0 AND `cleaned_at` IS NOT NULL) OR (`clean_status` <> 'EXCLUDED' AND `mapping_status` <> 'EXCLUDED'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='七项来源业务字段及内联标准映射';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='当前 SKU 来源字段及内联标准映射';
 
 
 CREATE TABLE `catalog_operation_log` (

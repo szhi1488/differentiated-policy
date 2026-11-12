@@ -16,6 +16,7 @@ const paths = {
   layers: 'm12 3 10 5-10 5L2 8z M2 12l10 5 10-5 M2 16l10 5 10-5',
   history: 'M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v5l3 2',
   settings: 'M9 3h6l1 4 4 1v8l-4 1-1 4H9l-1-4-4-1V8l4-1z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
+  search: 'M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0z M14.5 14.5 20 20',
 }
 </script>
 <template>

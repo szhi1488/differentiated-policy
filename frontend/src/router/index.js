@@ -25,6 +25,12 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         meta: { role: 'ADMIN' },
         component: () => import('../views/admin/catalog/CatalogSourcesPage.vue'),
       },
+      {
+        path: '/admin/catalog/cleaning',
+        name: 'catalog-cleaning',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/catalog/CatalogCleaningPage.vue'),
+      },
       { path: '/:pathMatch(.*)*', component: EmptyRoute },
     ],
     scrollBehavior: () => ({ top: 0 }),

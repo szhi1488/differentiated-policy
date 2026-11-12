@@ -13,7 +13,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import org.springframework.dao.DataAccessException;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.TransactionException;
@@ -51,9 +53,9 @@ public class GoodsSyncController {
 
     @PostMapping("/goods-sync/jobs")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "发起一个品牌的只读导入", description = "仅查询启用商品；同一账套同时只处理一个任务。")
+    @Operation(summary = "发起一个品牌的只读导入", description = "支持全量、按建档日或按修改日。包含停用 SKU，同一账套同时只处理一个任务。")
     @ApiResponse(responseCode = "202", description = "已受理，结果以任务状态为准")
-    @ApiResponse(responseCode = "400", description = "品牌或幂等键无效")
+    @ApiResponse(responseCode = "400", description = "品牌、幂等键、导入模式或日期无效")
     @ApiResponse(responseCode = "409", description = "有活动任务、处于冷却期或幂等键冲突")
     public GoodsSyncResponse start(
             @Valid @RequestBody GoodsSyncRequest body, HttpServletRequest request) {
@@ -83,18 +85,23 @@ public class GoodsSyncController {
     }
 
     @GetMapping("/source-goods")
-    @Operation(summary = "分页读取已经落库的七字段原文")
-    @ApiResponse(responseCode = "400", description = "品牌、关键词或分页参数无效")
+    @Operation(summary = "分页读取当前 SKU 的吉客云原文、分类和修改时间")
+    @ApiResponse(responseCode = "400", description = "品牌、关键词、建档日或分页参数无效")
     public SourcePage sources(
             @Parameter(description = "不传为全部；可选 OPPO手机、一加手机") @RequestParam(required = false)
                     String brandName,
-            @Parameter(description = "商品名称、货号或 SKU 名称的子串，最多 128 字符") @RequestParam(required = false)
+            @Parameter(description = "商品名称、货号、SKU 名称或完整分类路径的子串，也可精确查询 SKU ID，最多 128 字符")
+                    @RequestParam(required = false)
                     String keyword,
+            @Parameter(description = "按吉客云建档日导入命中的日期，北京时间 YYYY-MM-DD")
+                    @RequestParam(required = false)
+                    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate createdDate,
             @Parameter(description = "从 1 开始") @RequestParam(defaultValue = "1") int page,
             @Parameter(description = "每页 1 至 100 条") @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
         return service.sources(
-                sessions.requireLogin(request).user(), brandName, keyword, page, size);
+                sessions.requireLogin(request).user(), brandName, keyword, createdDate, page, size);
     }
 
     @ExceptionHandler({DataAccessException.class, TransactionException.class})
@@ -105,6 +112,7 @@ public class GoodsSyncController {
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest().body(new ApiError("INVALID_REQUEST", "任务 ID 或分页参数无效。"));
+        return ResponseEntity.badRequest()
+                .body(new ApiError("INVALID_REQUEST", "任务 ID、建档日或分页参数无效。"));
     }
 }

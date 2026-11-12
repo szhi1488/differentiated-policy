@@ -1,6 +1,8 @@
 package com.company.policy.entity;
 
 import com.company.policy.vo.JackyunGoodsPage.Goods;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.Data;
 
 @Data
@@ -14,12 +16,40 @@ public class SourceGoodsItem {
     private String goodsField4;
     private String goodsField1;
     private String goodsField5;
-    private int collisionNo;
+    private String skuId;
+    private String cateFullName;
+    private LocalDate createdDate;
+    private Long gmtModified;
+    private Long goodsGmtModified;
+    private Boolean isBlockup;
+    private Boolean isPackageGood;
     private Long lastSeenJobId;
     private String cleanStatus;
+    private Long cleanJobId;
+    private String cleanRuleVersion;
+    private String cleanCandidate;
+    private String cleanErrorCode;
+    private String mappingStatus;
+    private String mappingOrigin;
+    private Long catalogVariantId;
+    private Long variantColorId;
+    private int recordVersion;
+    private LocalDateTime cleanedAt;
 
     public Goods original() {
         return new Goods(
-                goodsName, goodsNo, skuName, cateName, goodsField4, goodsField1, goodsField5);
+                goodsName,
+                goodsNo,
+                skuName,
+                cateName,
+                goodsField4,
+                goodsField1,
+                goodsField5,
+                skuId,
+                cateFullName,
+                gmtModified,
+                goodsGmtModified,
+                isBlockup,
+                isPackageGood);
     }
 }

@@ -6,7 +6,7 @@
 
 已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书客户端 JS-SDK 免登、浏览器内飞书扫码、网页 OAuth 授权及服务端会话。
 
-当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`，侧栏为「商品 → 源商品库」。管理员可分别导入 OPPO、一加，查询已落库的七字段原文。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。详见 [管理员工作台](docs/architecture/admin-workspace.md)。
+当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`。管理员可在「商品 → 源商品库」分别导入 OPPO、一加，查询当前 SKU 原文、完整分类路径和修改时间，或在「商品 → 商品清洗与识别」启动清洗并处理异常。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。[管理员工作台](docs/architecture/admin-workspace.md)
 
 已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。管理员业务接口尚未开发。
 
@@ -86,11 +86,11 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 在 Navicat 选中目标库。首次建表执行 [九表建表 SQL](docs/sql/schema.sql)，与 `V1__create_policy_tables.sql` 二选一。若已执行包含 `oppo_status` 和 `oneplus_status` 的旧版九表，且导入任务、来源商品、商品日志均为空，停止后端后执行 [单品牌导入增量升级 SQL](docs/sql/upgrade_empty_goods_sync_to_single_brand.sql)。有商品导入历史的库需单独迁移。
+1. 在 Navicat 选中目标库。首次建表执行 [九表建表 SQL](docs/sql/schema.sql)，与 `V1__create_policy_tables.sql` 二选一。建表后执行 [SKU 同步核对 SQL](docs/sql/verify_sku_sync.sql)，确认九张表和 SKU 唯一键。若清空了 user_info，首次登录生成申请人账号，需要在 Navicat 对已确认的管理员账号恢复 ADMIN 角色，再重新登录。
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `JACKYUN_TENANT_KEY` 为授权管理员的 `user_info.tenant_key`。`JACKYUN_SOURCE_KEY` 是本地账套标识，默认 `jackyun`；更换实际账套时用新标识，避免混用原文及断点。
-3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点「导入OPPO手机」或「导入一加手机」，完成后再导入另一个品牌。
+3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 
-任务断点和七字段原文按页一起落库，异常暂停，可继续或结束。当前导入完成只表示原文已保存，清洗仍待接入。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
+首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。新批次在导入成功后排入清洗，历史成功批次可在清洗页面手动启动。清洗页面还提供进度、结果筛选分页、审核、重试和日志。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
 
 仅核对 API 时，可在 `backend/` 将凭证临时设为进程环境变量，设置 `JACKYUN_LIVE_CHECK=1`，运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dtest=JackyunGoodsLiveTest' test`。该测试每品牌查询 3 条，只输出字段统计，不连接数据库。
 
@@ -102,7 +102,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 九张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 
-用户最新明确目标库仅有库名、尚未建表，由用户自己执行 SQL；该说明覆盖早前四表存在的历史描述。本轮未连接该目标库。商品、政策业务仍未接入持久化，创建九表不代表接口或页面已可用；覆盖优先级等仍待确认。
+用户已确认目标库空表重建，由用户在 Navicat 执行。商品导入和清洗已接入持久化。建表脚本仅恢复结构，旧用户、商品和政策记录须通过备份恢复或重新导入。
 
 本机数据库为 `127.0.0.1:3306` 下的 `differentiated policy`（库名包含空格，JDBC URL 使用 `differentiated%20policy`）。连接使用 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`，真实凭证只保存在被忽略的 `backend/.env.local.properties`；新环境参考 `.env.example`。应用不自动建表、不初始化真实业务数据。修改后须重启后端，让新登录经过落库；已有旧进程内会话不代表已写入 user_info。
 

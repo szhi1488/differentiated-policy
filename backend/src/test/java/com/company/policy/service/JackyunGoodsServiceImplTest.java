@@ -24,6 +24,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
@@ -56,14 +57,30 @@ class JackyunGoodsServiceImplTest {
                 {"code":200,"result":{"contextId":"42","data":[
                   {"brandName":"OPPO手机","skuId":2216051345374512129,"goodsName":" 样例手机 ",
                    "goodsNo":"SAMPLE","skuName":"8+128","cateName":"样例型号",
-                   "goodsField4":"","goodsField1":null,"retailPrice":10}
+                   "goodsField4":"","goodsField1":null,"retailPrice":10,
+                   "cateFullName":"OPPO手机/A系列/样例型号","gmtModified":1748428975000,
+                   "goodsGmtModified":"1748428976000","isBlockup":1,"isPackageGood":"0"}
                 ]}}
                 """);
 
         var page = service.queryPage(query);
         assertThat(page.brandName()).isEqualTo("OPPO手机");
         assertThat(page.goods())
-                .containsExactly(new Goods(" 样例手机 ", "SAMPLE", "8+128", "样例型号", "", null, null));
+                .containsExactly(
+                        new Goods(
+                                " 样例手机 ",
+                                "SAMPLE",
+                                "8+128",
+                                "样例型号",
+                                "",
+                                null,
+                                null,
+                                "2216051345374512129",
+                                "OPPO手机/A系列/样例型号",
+                                1748428975000L,
+                                1748428976000L,
+                                true,
+                                false));
         assertThat(page.nextLastMaxId()).isEqualTo("2216051345374512129");
 
         var requests = ArgumentCaptor.forClass(HttpRequest.class);
@@ -77,13 +94,40 @@ class JackyunGoodsServiceImplTest {
                 .containsEntry("version", "v1.0")
                 .containsEntry("timestamp", "2025-01-01 08:00:00")
                 .containsEntry("token", "test+token&value")
-                .containsEntry("sign", "104e3347e6a50564ec255c3dfb8fb789");
+                .containsEntry("sign", "591254444f5c51ea1c3f7aaf4a5d6b02");
         var business = mapper.readTree(form.get("bizcontent"));
         assertThat(business.path("brandName").asText()).isEqualTo("OPPO手机");
         assertThat(business.path("lastMaxId").isIntegralNumber()).isTrue();
         assertThat(business.path("lastMaxId").asText()).isEqualTo(CURSOR);
         assertThat(business.path("pageIndex").intValue()).isZero();
         assertThat(business.path("isIncludeBlockup").intValue()).isEqualTo(1);
+        assertThat(business.path("cols").asText().split(","))
+                .contains(
+                        "skuId",
+                        "cateFullName",
+                        "gmtModified",
+                        "goodsGmtModified",
+                        "isBlockup",
+                        "isPackageGood");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "CREATED,startDate,endDate",
+        "GOODS_MODIFIED,startDateModifiedGoods,endDateModifiedGoods",
+        "SKU_MODIFIED,startDateModifiedSku,endDateModifiedSku"
+    })
+    void sendsTheDateBoundsForTheSelectedPhase(
+            JackyunGoodsQuery.Phase phase, String start, String end) throws Exception {
+        configure();
+        respond("{\"code\":200,\"result\":{\"data\":[]}}");
+        service.queryPage(
+                new JackyunGoodsQuery("OPPO手机", 3, "0", true, phase, LocalDate.of(2025, 5, 28)));
+        var requests = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(client).send(requests.capture(), any());
+        var business = mapper.readTree(readForm(requests.getValue()).get("bizcontent"));
+        assertThat(business.path(start).asText()).isEqualTo("2025-05-28 00:00:00");
+        assertThat(business.path(end).asText()).isEqualTo("2025-05-28 23:59:59");
     }
 
     @ParameterizedTest

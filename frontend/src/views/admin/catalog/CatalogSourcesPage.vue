@@ -1,17 +1,23 @@
 <script setup>
 import { ElMessageBox } from 'element-plus'
+import { computed, reactive, ref } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import { useSourceGoods } from '../../../composables/useSourceGoods'
 import {
   GOODS_BRANDS,
   GOODS_SYNC_ERRORS,
+  GOODS_SYNC_MODES,
+  GOODS_SYNC_PHASES,
   GOODS_SYNC_STATUS,
   RAW_GOODS_FIELDS,
+  SOURCE_GOODS_FIELDS,
 } from '../../../constants/catalog'
 
 const {
   brand,
   input,
+  createdDateInput,
+  createdDate,
   page,
   size,
   goods,
@@ -25,6 +31,7 @@ const {
   search,
   reset,
   selectBrand,
+  viewCreatedDate,
   resize,
   refreshJobs,
   start,
@@ -32,6 +39,66 @@ const {
   cancel,
 } = useSourceGoods()
 const { data, loading, error } = goods
+const fields = [
+  ...RAW_GOODS_FIELDS.slice(0, 2),
+  ...SOURCE_GOODS_FIELDS,
+  ...RAW_GOODS_FIELDS.slice(2),
+]
+const importOpen = ref(false)
+const importForm = reactive({ brandName: '', mode: 'FULL', date: null })
+const importModes = ['FULL', 'CREATED']
+const displayedJob = computed(() => activeJob.value ?? latest.value[importForm.brandName])
+const canStart = computed(
+  () =>
+    configured.value &&
+    !activeJob.value &&
+    !action.value &&
+    !jobsError.value &&
+    Boolean(importForm.brandName) &&
+    (importForm.mode === 'FULL' || Boolean(importForm.date)),
+)
+const businessTime = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  dateStyle: 'short',
+  timeStyle: 'medium',
+  hourCycle: 'h23',
+})
+
+function formatSourceCell(_row, { property }, value) {
+  if (value === null || value === undefined || value === '') {
+    return '—'
+  }
+  if (property === 'gmtModified' || property === 'goodsGmtModified') {
+    const time = businessTime.format(value)
+    const milliseconds = value % 1000
+    return milliseconds === 0 ? time : `${time}.${String(milliseconds).padStart(3, '0')}`
+  }
+  if (property === 'isBlockup') {
+    return value ? '已停用' : '启用'
+  }
+  if (property === 'isPackageGood') {
+    return value ? '是' : '否'
+  }
+  return value
+}
+
+function openImport() {
+  importForm.brandName =
+    activeJob.value?.brandName ?? (brand.value === 'all' ? importForm.brandName : brand.value)
+  importOpen.value = true
+}
+
+function startImport() {
+  if (canStart.value) {
+    const { brandName, mode, date } = importForm
+    void start(brandName, { mode, date: mode === 'FULL' ? null : date })
+  }
+}
+
+function showCreatedGoods(job) {
+  importOpen.value = false
+  void viewCreatedDate(job)
+}
 
 function refresh() {
   void loadGoods()
@@ -62,91 +129,18 @@ async function confirmCancel(job) {
       <span class="source-banner-icon"><AppIcon name="document" :size="27" /></span>
       <div class="source-heading">
         <h1 id="source-goods-title">源商品库（吉客云）</h1>
-        <p>按品牌从吉客云导入商品原文。每次只导入一个品牌，完成后可发起另一个品牌。</p>
+        <p>按品牌查询和导入吉客云商品。</p>
+      </div>
+      <div class="source-banner-actions">
+        <el-tag v-if="activeJob" :type="GOODS_SYNC_STATUS[activeJob.status]?.[1]" size="small">
+          {{ GOODS_SYNC_STATUS[activeJob.status]?.[0] }}
+        </el-tag>
+        <el-button type="primary" @click="openImport">
+          <AppIcon name="upload" :size="15" />
+          <span>导入商品</span>
+        </el-button>
       </div>
     </header>
-
-    <el-alert
-      v-if="jobsError"
-      class="source-notice"
-      :title="jobsError"
-      type="error"
-      :closable="false"
-      show-icon
-    />
-    <el-alert
-      v-else-if="!configured"
-      class="source-notice"
-      title="请完成吉客云凭证和导入配置后再发起导入。"
-      type="info"
-      :closable="false"
-      show-icon
-    />
-    <el-alert
-      v-if="actionError"
-      class="source-notice"
-      :title="actionError"
-      type="error"
-      :closable="false"
-      show-icon
-    />
-    <div class="source-jobs" aria-label="分品牌导入">
-      <div v-for="name in GOODS_BRANDS" :key="name" class="source-job">
-        <div class="source-job-heading">
-          <h2>{{ name }}</h2>
-          <el-tag
-            v-if="latest[name]"
-            size="small"
-            :type="GOODS_SYNC_STATUS[latest[name].status]?.[1]"
-          >
-            {{ GOODS_SYNC_STATUS[latest[name].status]?.[0] }}
-          </el-tag>
-        </div>
-        <p v-if="latest[name]" aria-live="polite">
-          已读取 {{ latest[name].readCount }} 条 · 本任务去重 {{ latest[name].contentCount }} 条
-        </p>
-        <p v-else>尚未导入 · 仅查询启用商品</p>
-        <p
-          v-if="latest[name]?.errorCode && latest[name].status === 'PAUSED'"
-          class="source-job-error"
-        >
-          {{ GOODS_SYNC_ERRORS[latest[name].errorCode] ?? '导入暂时中断，请核对后继续。' }}
-        </p>
-        <p
-          v-else-if="
-            latest[name]?.status === 'SUCCEEDED' && latest[name].cleanStatus === 'NOT_STARTED'
-          "
-        >
-          商品原文已保存，等待清洗。
-        </p>
-        <div class="source-job-actions">
-          <template v-if="latest[name]?.status === 'PAUSED'">
-            <el-button
-              type="primary"
-              :disabled="!configured || !latest[name].canResume || Boolean(action || jobsError)"
-              @click="resume(latest[name])"
-            >
-              {{ latest[name].canResume ? '继续导入' : '等待冷却' }}
-            </el-button>
-            <el-button
-              :disabled="Boolean(action || jobsError)"
-              @click="confirmCancel(latest[name])"
-            >
-              结束任务
-            </el-button>
-          </template>
-          <el-button
-            v-else
-            type="primary"
-            :loading="action === name"
-            :disabled="!configured || Boolean(activeJob || action || jobsError)"
-            @click="start(name)"
-          >
-            导入{{ name }}
-          </el-button>
-        </div>
-      </div>
-    </div>
 
     <div class="source-panel">
       <div class="source-panel-top">
@@ -157,15 +151,28 @@ async function confirmCancel(job) {
         <el-button text type="primary" :disabled="Boolean(action)" @click="refresh">刷新</el-button>
       </div>
 
-      <el-form class="source-filters" @submit.prevent="search">
-        <el-form-item>
+      <el-form class="source-filters" size="small" @submit.prevent="search">
+        <el-form-item label="建档日" class="source-created-filter">
+          <el-date-picker
+            v-model="createdDateInput"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="全部日期"
+            aria-label="建档日筛选"
+          />
+        </el-form-item>
+        <el-form-item class="source-search">
           <el-input
             v-model="input"
-            placeholder="请输入商品名称、货号或 SKU 名称"
+            placeholder="搜索商品、货号、SKU 或分类"
             aria-label="商品关键词"
             maxlength="128"
             clearable
-          />
+          >
+            <template #prefix>
+              <AppIcon name="search" :size="14" />
+            </template>
+          </el-input>
         </el-form-item>
         <div class="source-filter-actions">
           <el-button @click="reset">重置</el-button>
@@ -177,28 +184,34 @@ async function confirmCancel(job) {
       <el-table
         v-else
         :data="data?.items ?? []"
-        :empty-text="loading ? '正在读取商品…' : '暂无已入库商品'"
+        :empty-text="
+          loading
+            ? '正在读取商品…'
+            : createdDate
+              ? '暂无符合条件的建档日导入记录'
+              : '暂无已入库商品'
+        "
         row-key="id"
         class="source-table"
         aria-label="商品原文"
       >
         <el-table-column prop="brandName" label="品牌" width="105" />
         <el-table-column
-          v-for="[field, label, width] in RAW_GOODS_FIELDS"
+          v-for="[field, label, width] in fields"
           :key="field"
           :prop="field"
           :label="label"
           :min-width="width"
+          :formatter="formatSourceCell"
+          :class-name="field === 'goodsNo' || field === 'skuId' ? 'source-goods-no' : undefined"
           show-overflow-tooltip
         >
           <template #header>
             <span class="source-field-title">
               {{ label }}
-              <small>{{ field }}</small>
+              <small v-if="field === 'createdDate'">按建档日导入确认</small>
+              <small v-else>{{ field }}</small>
             </span>
-          </template>
-          <template #default="{ row }">
-            <span :class="{ 'source-goods-no': field === 'goodsNo' }">{{ row[field] ?? '—' }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -218,6 +231,114 @@ async function confirmCancel(job) {
         />
       </footer>
     </div>
+
+    <el-dialog
+      v-model="importOpen"
+      title="导入商品"
+      width="min(460px, calc(100vw - 24px))"
+      destroy-on-close
+    >
+      <el-alert v-if="jobsError" :title="jobsError" type="error" :closable="false" show-icon />
+      <el-alert
+        v-else-if="!configured"
+        title="请完成吉客云凭证和导入配置后再发起导入。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <el-alert v-if="actionError" :title="actionError" type="error" :closable="false" show-icon />
+      <el-form
+        v-if="!activeJob"
+        :model="importForm"
+        :disabled="Boolean(action)"
+        label-position="top"
+        class="source-import-form"
+        @submit.prevent
+      >
+        <el-form-item label="品牌" required>
+          <el-select v-model="importForm.brandName" placeholder="选择商品品牌">
+            <el-option v-for="name in GOODS_BRANDS" :key="name" :label="name" :value="name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="导入范围" required>
+          <el-select v-model="importForm.mode">
+            <el-option
+              v-for="mode in importModes"
+              :key="mode"
+              :value="mode"
+              :label="GOODS_SYNC_MODES[mode]"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="importForm.mode === 'CREATED'" label="建档日" required>
+          <el-date-picker
+            v-model="importForm.date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择北京时间日期"
+          />
+        </el-form-item>
+      </el-form>
+
+      <div v-if="displayedJob" class="source-job" aria-live="polite">
+        <div class="source-job-heading">
+          <strong>{{ displayedJob.brandName }}</strong>
+          <el-tag :type="GOODS_SYNC_STATUS[displayedJob.status]?.[1]" size="small">
+            {{ GOODS_SYNC_STATUS[displayedJob.status]?.[0] }}
+          </el-tag>
+        </div>
+        <p>
+          {{ GOODS_SYNC_MODES[displayedJob.syncMode] }}
+          <template v-if="displayedJob.syncDate">· {{ displayedJob.syncDate }}</template>
+          <template v-if="GOODS_SYNC_PHASES[displayedJob.syncPhase]">
+            · {{ GOODS_SYNC_PHASES[displayedJob.syncPhase] }}
+          </template>
+        </p>
+        <p>
+          已读取 {{ displayedJob.readCount }} 条 · 本任务去重 {{ displayedJob.contentCount }} 条
+        </p>
+        <p
+          v-if="displayedJob.errorCode && displayedJob.status === 'PAUSED'"
+          class="source-job-error"
+        >
+          {{ GOODS_SYNC_ERRORS[displayedJob.errorCode] ?? '导入暂时中断，请核对后继续。' }}
+        </p>
+        <el-button
+          v-if="displayedJob.syncMode === 'CREATED' && displayedJob.contentCount > 0"
+          type="primary"
+          link
+          @click="showCreatedGoods(displayedJob)"
+        >
+          查看该日商品
+        </el-button>
+      </div>
+      <template #footer>
+        <div class="source-import-actions">
+          <el-button @click="importOpen = false">关闭</el-button>
+          <template v-if="activeJob?.status === 'PAUSED'">
+            <el-button :disabled="Boolean(action || jobsError)" @click="confirmCancel(activeJob)">
+              结束任务
+            </el-button>
+            <el-button
+              type="primary"
+              :disabled="!configured || !activeJob.canResume || Boolean(action || jobsError)"
+              @click="resume(activeJob)"
+            >
+              {{ activeJob.canResume ? '继续导入' : '等待冷却' }}
+            </el-button>
+          </template>
+          <el-button
+            v-else-if="!activeJob"
+            type="primary"
+            :loading="Boolean(action)"
+            :disabled="!canStart"
+            @click="startImport"
+          >
+            开始导入
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -227,7 +348,7 @@ async function confirmCancel(job) {
 }
 .source-banner {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 16px 18px;
@@ -256,24 +377,26 @@ async function confirmCancel(job) {
   color: #465b77;
   line-height: 1.6;
 }
-.source-notice {
+.source-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.source-banner-actions svg {
+  margin-right: 6px;
+}
+.source-import-form {
   margin-top: 12px;
 }
-.source-jobs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 12px;
+.source-import-form :deep(.el-select),
+.source-import-form :deep(.el-date-editor.el-input) {
+  width: 100%;
 }
 .source-job {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 13px 16px;
-  border: 1px solid #e8eef8;
-  border-radius: 10px;
-  background: #fff;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f5f8fd;
 }
 .source-job-heading {
   display: flex;
@@ -281,24 +404,27 @@ async function confirmCancel(job) {
   flex-wrap: wrap;
   gap: 8px;
 }
-.source-job-heading h2 {
-  font-size: 15px;
+.source-job-heading strong {
   color: #10213a;
 }
 .source-job p {
+  margin-top: 4px;
   font-size: 13px;
   color: #465b77;
 }
 .source-job p.source-job-error {
   color: #975b13;
 }
-.source-job-actions {
+.source-job .el-button {
+  margin-top: 6px;
+}
+.source-import-actions {
   display: flex;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: auto;
 }
-.source-job-actions :deep(.el-button + .el-button) {
+.source-import-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
 .source-panel {
@@ -328,18 +454,27 @@ async function confirmCancel(job) {
   font-size: 13px;
 }
 .source-filters {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
   align-items: center;
-  padding-block: 17px;
+  padding-block: 15px;
 }
 .source-filters :deep(.el-form-item) {
   margin-bottom: 0;
 }
+.source-created-filter :deep(.el-date-editor.el-input) {
+  width: 144px;
+}
+.source-search {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 318px;
+}
 .source-filter-actions {
   display: flex;
   justify-content: flex-end;
+  margin-left: auto;
 }
 .source-table {
   width: 100%;
@@ -360,7 +495,7 @@ async function confirmCancel(job) {
   font-weight: 500;
   line-height: 1.35;
 }
-.source-goods-no {
+.source-table :deep(td.source-goods-no .cell) {
   color: #284f86;
   font-variant-numeric: tabular-nums;
 }
@@ -382,16 +517,21 @@ async function confirmCancel(job) {
   .source-banner {
     gap: 10px;
     padding: 13px 12px;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .source-banner-icon {
+    display: none;
+  }
+  .source-banner-actions {
+    flex-direction: column-reverse;
+    align-items: flex-end;
+    gap: 4px;
   }
   .source-heading h1 {
     font-size: 19px;
   }
   .source-heading p {
     font-size: 12px;
-  }
-  .source-jobs {
-    grid-template-columns: minmax(0, 1fr);
   }
   .source-panel {
     padding-inline: 10px;
@@ -401,8 +541,11 @@ async function confirmCancel(job) {
     font-size: 12px;
   }
   .source-filters {
-    grid-template-columns: 1fr;
+    gap: 8px 12px;
     padding-block: 12px;
+  }
+  .source-search {
+    max-width: none;
   }
   .source-pagination :deep(.el-pagination__sizes) {
     display: none;

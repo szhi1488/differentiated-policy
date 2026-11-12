@@ -1,13 +1,19 @@
 package com.company.policy.vo;
 
+import com.company.policy.dto.GoodsSyncRequest.Mode;
+import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.SourceGoodsItem;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.time.LocalDate;
 import java.util.List;
 
 public record GoodsSyncResponse(
         String id,
         String brandName,
+        Mode syncMode,
+        LocalDate syncDate,
+        Phase syncPhase,
         @Schema(allowableValues = {"QUEUED", "RUNNING", "PAUSED", "SUCCEEDED", "CANCELLED"})
                 String status,
         String cleanStatus,
@@ -21,6 +27,9 @@ public record GoodsSyncResponse(
         return new GoodsSyncResponse(
                 job.getId().toString(),
                 job.getBrandName(),
+                job.getSyncMode(),
+                job.getSyncDate(),
+                job.getSyncPhase(),
                 job.getStatus(),
                 job.getCleanStatus(),
                 job.getPageCount(),
@@ -43,6 +52,13 @@ public record GoodsSyncResponse(
             String goodsField4,
             String goodsField1,
             String goodsField5,
+            String skuId,
+            String cateFullName,
+            LocalDate createdDate,
+            Long gmtModified,
+            Long goodsGmtModified,
+            Boolean isBlockup,
+            Boolean isPackageGood,
             String cleanStatus) {
         public static Source from(SourceGoodsItem item) {
             return new Source(
@@ -55,6 +71,13 @@ public record GoodsSyncResponse(
                     item.getGoodsField4(),
                     item.getGoodsField1(),
                     item.getGoodsField5(),
+                    item.getSkuId(),
+                    item.getCateFullName(),
+                    item.getCreatedDate(),
+                    item.getGmtModified(),
+                    item.getGoodsGmtModified(),
+                    item.getIsBlockup(),
+                    item.getIsPackageGood(),
                     item.getCleanStatus());
         }
     }
