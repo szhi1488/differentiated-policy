@@ -8,7 +8,6 @@ import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Log;
 import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Results;
@@ -37,11 +36,11 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestController
 @RequestMapping("/api/admin")
-@Tag(name = "商品清洗与识别", description = "查看清洗任务、结果、处理日志，复核来源与重试技术失败")
+@Tag(name = "商品清洗与识别", description = "查看清洗任务、结果，复核来源与重试技术失败")
 @ApiResponse(responseCode = "400", description = "请求或分页参数无效")
 @ApiResponse(responseCode = "401", description = "会话无效")
 @ApiResponse(responseCode = "403", description = "非有效管理员、租户未授权或写请求来源校验失败")
-@ApiResponse(responseCode = "404", description = "当前租户账套下不存在该资源")
+@ApiResponse(responseCode = "404", description = "当前账套下不存在该资源")
 @ApiResponse(responseCode = "409", description = "状态、版本或目录目标发生冲突")
 @ApiResponse(responseCode = "503", description = "账套未配置或数据库不可用")
 public class CatalogCleaningController {
@@ -157,26 +156,6 @@ public class CatalogCleaningController {
             @PathVariable long id, @Valid @RequestBody Retry body, HttpServletRequest request) {
         return service.retrySource(
                 sessions.requireLogin(request).user(), id, body.recordVersion(), body.requestKey());
-    }
-
-    @GetMapping("/catalog/cleaning/jobs/{id}/logs")
-    @Operation(summary = "分页查看该批次的清洗审计", description = "页码从 1 开始，每页 1 至 100 条。")
-    public Page<Log> logs(
-            @PathVariable long id,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size,
-            HttpServletRequest request) {
-        return service.logs(sessions.requireLogin(request).user(), id, page, size);
-    }
-
-    @GetMapping("/source-goods/{id}/clean-logs")
-    @Operation(summary = "分页查看指定来源商品的处理历史")
-    public Page<Log> sourceLogs(
-            @PathVariable long id,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size,
-            HttpServletRequest request) {
-        return service.sourceLogs(sessions.requireLogin(request).user(), id, page, size);
     }
 
     @ExceptionHandler({DataAccessException.class, TransactionException.class})

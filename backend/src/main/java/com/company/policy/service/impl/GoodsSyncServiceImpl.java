@@ -69,13 +69,10 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     @Override
     public Overview overview(CurrentUserResponse session) {
-        UserInfo admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         var latest =
                 BRANDS.stream()
-                        .map(
-                                brand ->
-                                        jobs.latest(
-                                                admin.getTenantKey(), config.getSourceKey(), brand))
+                        .map(brand -> jobs.latest(config.getSourceKey(), brand))
                         .filter(Objects::nonNull)
                         .map(GoodsSyncResponse::from)
                         .toList();
@@ -92,7 +89,6 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     HttpStatus.BAD_REQUEST, "CATALOG_INVALID_SYNC_DATE", "按日导入须填写有效日期，全量导入无需日期。");
         }
         var job = new GoodsSyncJob();
-        job.setTenantKey(admin.getTenantKey());
         job.setSourceKey(config.getSourceKey());
         job.setRequesterId(admin.getId());
         job.setBrandName(request.brandName());
@@ -115,15 +111,13 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                             return existing;
                         }
                         requireReady();
-                        if (Boolean.TRUE.equals(
-                                jobs.coolingDown(job.getTenantKey(), job.getSourceKey()))) {
+                        if (Boolean.TRUE.equals(jobs.coolingDown(job.getSourceKey()))) {
                             throw conflict("CATALOG_COOLDOWN", "账套正在冷却，请稍后再发起导入。");
                         }
                         // 首次请求也留出间隔，连续导入另一个品牌不会立即连发。
                         checkUpdated(jobs.insert(job, config.getImportIntervalSeconds()));
                         checkUpdated(jobs.audit(admin, job.getId(), "START"));
-                        return GoodsSyncResponse.from(
-                                jobs.find(job.getTenantKey(), job.getSourceKey(), job.getId()));
+                        return GoodsSyncResponse.from(jobs.find(job.getSourceKey(), job.getId()));
                     });
         } catch (DuplicateKeyException conflict) {
             // 唯一键处理并发提交；重新读取已提交结果，避免事务快照漏掉并发任务。
@@ -136,8 +130,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     }
 
     private GoodsSyncResponse replay(GoodsSyncJob job) {
-        var existing =
-                jobs.findByKey(job.getTenantKey(), job.getSourceKey(), job.getIdempotencyKey());
+        var existing = jobs.findByKey(job.getSourceKey(), job.getIdempotencyKey());
         if (existing == null) {
             return null;
         }
@@ -168,7 +161,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         }
         return tx.execute(
                 ignored -> {
-                    var job = jobs.find(admin.getTenantKey(), config.getSourceKey(), id);
+                    var job = jobs.find(config.getSourceKey(), id);
                     if (job == null) {
                         throw new ApiException(
                                 HttpStatus.NOT_FOUND, "CATALOG_JOB_NOT_FOUND", "未找到该导入任务。");
@@ -186,8 +179,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                         throw changed();
                     }
                     checkUpdated(jobs.audit(admin, id, resume ? "RESUME" : "CANCEL"));
-                    return GoodsSyncResponse.from(
-                            jobs.find(admin.getTenantKey(), config.getSourceKey(), id));
+                    return GoodsSyncResponse.from(jobs.find(config.getSourceKey(), id));
                 });
     }
 
@@ -199,7 +191,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             LocalDate createdDate,
             int page,
             int size) {
-        UserInfo admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         if ((brand != null && !BRANDS.contains(brand))
                 || (keyword != null && keyword.length() > 128)
                 || (createdDate != null
@@ -216,7 +208,6 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     var items =
                             sources
                                     .page(
-                                            admin.getTenantKey(),
                                             config.getSourceKey(),
                                             brand,
                                             search,
@@ -228,12 +219,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                                     .toList();
                     return new SourcePage(
                             items,
-                            sources.count(
-                                    admin.getTenantKey(),
-                                    config.getSourceKey(),
-                                    brand,
-                                    search,
-                                    createdDate));
+                            sources.count(config.getSourceKey(), brand, search, createdDate));
                 });
     }
 
@@ -252,7 +238,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             return;
         }
         try {
-            var job = jobs.findDue(config.getTenantKey(), config.getSourceKey());
+            var job = jobs.findDue(config.getSourceKey());
             if (job == null) {
                 return;
             }
@@ -347,7 +333,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     }
 
     private boolean saveContent(GoodsSyncJob job, Goods goods) {
-        var existing = sources.lockSku(job, goods.skuId());
+        var existing = sources.lockSku(goods.skuId());
         if (existing == null) {
             checkUpdated(sources.insert(job, goods));
             return true;
@@ -357,6 +343,9 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     HttpStatus.CONFLICT,
                     "CATALOG_SKU_BRAND_CONFLICT",
                     "同一 SKU 出现在不同品牌，请先核对吉客云品牌归属。");
+        }
+        if (!job.getSourceKey().equals(existing.getSourceKey())) {
+            throw conflict("CATALOG_SKU_SOURCE_CONFLICT", "该 SKU 已属于另一个吉客云账套，请核对服务端配置。");
         }
         boolean firstInJob = !job.getId().equals(existing.getLastSeenJobId());
         var previous = existing.original();
@@ -401,7 +390,6 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         if (changed) {
             checkUpdated(
                     sources.auditUpdate(
-                            job,
                             existing.getId(),
                             "SYNC-" + job.getId(),
                             auditSnapshot(previous),

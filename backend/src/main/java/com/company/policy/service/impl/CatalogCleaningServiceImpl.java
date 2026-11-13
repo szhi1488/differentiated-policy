@@ -11,11 +11,11 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogCleaningMapper;
 import com.company.policy.mapper.CatalogCleaningMapper.Change;
 import com.company.policy.mapper.CatalogCleaningMapper.Member;
+import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Log;
 import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Result;
@@ -23,7 +23,6 @@ import com.company.policy.vo.CatalogCleaningResponse.Results;
 import com.company.policy.vo.CatalogCleaningResponse.Status;
 import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -50,6 +49,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     private static final int BATCH_SIZE = 100;
     private final CatalogCleaningMapper mapper;
     private final CatalogAccess access;
+    private final CatalogGoodsMapper goods;
     private final JackyunProperties config;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
@@ -58,11 +58,13 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     CatalogCleaningServiceImpl(
             CatalogCleaningMapper mapper,
             CatalogAccess access,
+            CatalogGoodsMapper goods,
             JackyunProperties config,
             ObjectMapper json,
             PlatformTransactionManager manager) {
         this.mapper = mapper;
         this.access = access;
+        this.goods = goods;
         this.config = config;
         this.json = json;
         this.tx = new TransactionTemplate(manager);
@@ -71,13 +73,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     @Override
     public Page<Job> jobs(CurrentUserResponse session, int page, int size) {
-        var admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         long offset = offset(page, size);
         return tx.execute(
                 ignored -> {
-                    String tenant = admin.getTenantKey();
                     String account = config.getSourceKey();
-                    var jobs = mapper.jobs(tenant, account, size, offset);
+                    var jobs = mapper.jobs(account, size, offset);
                     Map<Long, Map<String, Long>> counts = new HashMap<>();
                     if (!jobs.isEmpty()) {
                         mapper.jobCounts(jobs.stream().map(CatalogCleaningJob::getId).toList())
@@ -96,22 +97,22 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                                             counts.getOrDefault(
                                                                     job.getId(), Map.of())))
                                     .toList(),
-                            mapper.countJobs(tenant, account));
+                            mapper.countJobs(account));
                 });
     }
 
     @Override
     public Job job(CurrentUserResponse session, long id) {
-        var admin = access.requireAdmin(session);
-        return tx.execute(ignored -> snapshot(requireJob(admin, id)));
+        access.requireAdmin(session);
+        return tx.execute(ignored -> snapshot(requireJob(id)));
     }
 
     @Override
     public Job active(CurrentUserResponse session) {
-        var admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         return tx.execute(
                 ignored -> {
-                    var job = mapper.active(admin.getTenantKey(), config.getSourceKey());
+                    var job = mapper.active(config.getSourceKey());
                     return job == null ? null : snapshot(job);
                 });
     }
@@ -125,12 +126,10 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         desired.setIncludeReviews(request.includeReviews());
         return create(
                 desired,
-                admin,
                 () -> {
                     long count =
                             mapper.insertMembers(
                                     desired.getId(),
-                                    desired.getTenantKey(),
                                     desired.getSourceKey(),
                                     desired.getBrandName(),
                                     desired.getCreatedDate(),
@@ -143,7 +142,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 });
     }
 
-    private Job create(CatalogCleaningJob desired, UserInfo admin, Runnable selectMembers) {
+    private Job create(CatalogCleaningJob desired, Runnable selectMembers) {
         try {
             return tx.execute(
                     ignored -> {
@@ -153,19 +152,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                         }
                         checked(mapper.insertJob(desired));
                         selectMembers.run();
-                        boolean retry = desired.getTargetSourceId() != null;
-                        checked(
-                                mapper.audit(
-                                        desired,
-                                        admin,
-                                        "CLEAN_JOB",
-                                        desired.getId(),
-                                        retry ? "CLEAN_RETRY" : "START",
-                                        batch(desired),
-                                        null,
-                                        null,
-                                        retry ? "管理员重试单条技术失败商品。" : "管理员确认启动商品清洗。"));
-                        return snapshot(requireJob(admin, desired.getId()));
+                        return snapshot(requireJob(desired.getId()));
                     });
         } catch (DuplicateKeyException concurrent) {
             // 唯一键保证同一请求只创建一次，同账套只运行一个清洗任务。
@@ -178,16 +165,15 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     private Job existingJob(CatalogCleaningJob desired) {
-        String tenant = desired.getTenantKey();
         String account = desired.getSourceKey();
-        var requested = mapper.requested(tenant, account, desired.getRequestKey());
+        var requested = mapper.requested(account, desired.getRequestKey());
         if (requested != null) {
             if (!sameScope(requested, desired)) {
                 throw conflict("CATALOG_CLEAN_REQUEST_CONFLICT", "该请求标识已用于其他清洗范围。");
             }
             return snapshot(requested);
         }
-        var active = mapper.active(tenant, account);
+        var active = mapper.active(account);
         if (active == null) {
             return null;
         }
@@ -206,7 +192,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     private CatalogCleaningJob newJob(UserInfo admin, String brand, String requestKey) {
         var job = new CatalogCleaningJob();
-        job.setTenantKey(admin.getTenantKey());
         job.setSourceKey(config.getSourceKey());
         job.setBrandName(brand);
         job.setRequesterId(admin.getId());
@@ -224,18 +209,16 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
             String keyword,
             int page,
             int size) {
-        var admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         validateBrand(brand);
         String search = keyword(keyword);
         long offset = offset(page, size);
         return tx.execute(
                 ignored -> {
-                    String tenant = admin.getTenantKey();
                     String account = config.getSourceKey();
                     var items =
                             mapper
                                     .results(
-                                            tenant,
                                             account,
                                             brand,
                                             createdDate,
@@ -248,20 +231,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                     .map(this::storedResult)
                                     .toList();
                     long count =
-                            mapper
-                                    .counts(tenant, account, brand, createdDate, false, search)
-                                    .stream()
+                            mapper.counts(account, brand, createdDate, false, search).stream()
                                     .mapToLong(CatalogCleaningMapper.Count::total)
                                     .sum();
                     long eligible =
                             mapper.eligibleCount(
-                                    tenant,
-                                    account,
-                                    brand,
-                                    createdDate,
-                                    false,
-                                    includeReviews,
-                                    null);
+                                    account, brand, createdDate, false, includeReviews, null);
                     return new Preview(items, count, eligible);
                 });
     }
@@ -276,7 +251,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
             String keyword,
             int page,
             int size) {
-        var admin = access.requireAdmin(session);
+        access.requireAdmin(session);
         if (brand != null) {
             validateBrand(brand);
         }
@@ -287,12 +262,10 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         String search = keyword(keyword);
         return tx.execute(
                 ignored -> {
-                    String tenant = admin.getTenantKey();
                     String account = config.getSourceKey();
                     var items =
                             mapper
                                     .results(
-                                            tenant,
                                             account,
                                             brand,
                                             createdDate,
@@ -305,7 +278,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                     .map(this::storedResult)
                                     .toList();
                     var counts = emptyCounts();
-                    mapper.counts(tenant, account, brand, createdDate, unknownDate, search)
+                    mapper.counts(account, brand, createdDate, unknownDate, search)
                             .forEach(row -> counts.put(row.status(), row.total()));
                     long all = counts.values().stream().mapToLong(Long::longValue).sum();
                     counts.put("PENDING", counts.get("PENDING") + counts.get("PROCESSING"));
@@ -330,8 +303,8 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     @Override
     public Detail detail(CurrentUserResponse session, long id) {
-        UserInfo admin = access.requireAdmin(session);
-        return toDetail(requireSource(admin, id, false));
+        access.requireAdmin(session);
+        return toDetail(requireSource(id, false));
     }
 
     @Override
@@ -342,12 +315,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         }
         return tx.execute(
                 ignored -> {
-                    var source = requireSource(admin, id, true);
+                    var source = requireSource(id, true);
                     checkSource(source, request.recordVersion(), Status.REVIEW_REQUIRED);
                     if (source.getCleanJobId() == null) {
                         throw conflict("CATALOG_SOURCE_CHANGED", "该商品尚无可审核的结果。");
                     }
-                    var job = requireJob(admin, source.getCleanJobId());
+                    var job = requireJob(source.getCleanJobId());
                     Candidate previous = readCandidate(source);
                     Candidate candidate =
                             previous == null ? CatalogCleaningRule.parse(source) : previous;
@@ -365,8 +338,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 Status.EXCLUDED,
                                 new Mapping("EXCLUDED", null, null, null),
                                 admin,
-                                reason,
-                                "EXCLUDE");
+                                reason);
                     } else {
                         if (CatalogCleaningRule.EXCLUSION.equals(candidate.code())) {
                             throw conflict("CATALOG_CLEAN_RULE_EXCLUSION", "该商品命中政策排除规则。");
@@ -380,7 +352,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 || candidate.colorName().matches(".*[/、|].*")) {
                             throw invalid("标准系列须以系列结尾，型号、配置和一个明确的颜色均须填写。");
                         }
-                        var mapping = resolve(job, source, candidate, "MANUAL");
+                        var mapping = resolve(source, candidate, "MANUAL");
                         persist(
                                 job,
                                 source,
@@ -388,24 +360,22 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 Status.MANUAL_PASSED,
                                 mapping,
                                 admin,
-                                reason,
-                                "CORRECT");
+                                reason);
                     }
-                    return toDetail(requireSource(admin, id, false));
+                    return toDetail(requireSource(id, false));
                 });
     }
 
     @Override
     public Job retrySource(CurrentUserResponse session, long id, int version, String requestKey) {
         var admin = access.requireAdmin(session);
-        var initial = requireSource(admin, id, false);
+        var initial = requireSource(id, false);
         var desired = newJob(admin, initial.getBrandName(), requestKey);
         desired.setTargetSourceId(id);
         return create(
                 desired,
-                admin,
                 () -> {
-                    var source = requireSource(admin, id, true);
+                    var source = requireSource(id, true);
                     checkSource(source, version, Status.ERROR);
                     String importStatus = mapper.importStatus(source.getLastSeenJobId());
                     if (!"SUCCEEDED".equals(importStatus) && !"CANCELLED".equals(importStatus)) {
@@ -416,57 +386,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     @Override
-    public Page<Log> logs(CurrentUserResponse session, long id, int page, int size) {
-        var admin = access.requireAdmin(session);
-        long offset = offset(page, size);
-        return tx.execute(
-                ignored -> {
-                    var job = requireJob(admin, id);
-                    String batch = batch(job);
-                    return new Page<>(
-                            mapper.logs(job.getTenantKey(), batch, size, offset).stream()
-                                    .map(this::toLog)
-                                    .toList(),
-                            mapper.countLogs(job.getTenantKey(), batch));
-                });
-    }
-
-    @Override
-    public Page<Log> sourceLogs(CurrentUserResponse session, long id, int page, int size) {
-        var admin = access.requireAdmin(session);
-        long offset = offset(page, size);
-        return tx.execute(
-                ignored -> {
-                    requireSource(admin, id, false);
-                    String tenant = admin.getTenantKey();
-                    return new Page<>(
-                            mapper.sourceLogs(tenant, id, size, offset).stream()
-                                    .map(this::toLog)
-                                    .toList(),
-                            mapper.countSourceLogs(tenant, id));
-                });
-    }
-
-    private Log toLog(CatalogCleaningMapper.Audit row) {
-        return new Log(
-                id(row.id()),
-                "SOURCE_GOODS_ITEM".equals(row.entityType()) ? id(row.entityId()) : null,
-                row.actorType(),
-                row.operatorName(),
-                row.action(),
-                row.reason(),
-                readTree(row.before()),
-                readTree(row.after()),
-                row.createdAt());
-    }
-
-    @Override
     public void processNextBatch() {
         if (!config.hasImportScope()) {
             return;
         }
         try {
-            var job = mapper.due(config.getTenantKey(), config.getSourceKey());
+            var job = mapper.due(config.getSourceKey());
             String token = UUID.randomUUID().toString();
             if (job == null || mapper.claim(job, token) != 1) {
                 return;
@@ -504,7 +429,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     private void processMember(CatalogCleaningJob job, String token, Member member) {
         Candidate candidate = null;
         try {
-            var source = mapper.source(job.getTenantKey(), job.getSourceKey(), member.sourceId());
+            var source = mapper.source(job.getSourceKey(), member.sourceId(), null);
             if (matchesMember(job, member, source)) {
                 candidate = CatalogCleaningRule.parse(source);
             }
@@ -530,22 +455,9 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         tx.executeWithoutResult(
                 ignored -> {
                     lockClaim(job, token);
-                    var source =
-                            mapper.lockSource(
-                                    job.getTenantKey(), job.getSourceKey(), member.sourceId());
+                    var source = mapper.lockSource(job.getSourceKey(), member.sourceId());
                     if (!matchesMember(job, member, source)) {
                         checked(mapper.finishMember(job.getId(), member.sourceId(), "SKIPPED"));
-                        checked(
-                                mapper.audit(
-                                        job,
-                                        null,
-                                        "SOURCE_GOODS_ITEM",
-                                        member.sourceId(),
-                                        "CLEAN_SKIP",
-                                        batch(job),
-                                        null,
-                                        null,
-                                        "源商品在确认后已更新，请重新选择范围。"));
                         return;
                     }
                     var outcome =
@@ -582,15 +494,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 List.of())
                         : CatalogCleaningRule.issue(
                                 candidate, "CLEAN_EXECUTION_FAILED", "清洗执行失败，可以重试。", "RETRY");
-        persist(
-                job,
-                source,
-                failure,
-                Status.ERROR,
-                null,
-                null,
-                failure.explanation(),
-                "CLEAN_ERROR");
+        persist(job, source, failure, Status.ERROR, null, null, failure.explanation());
         return Status.ERROR;
     }
 
@@ -601,8 +505,11 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         }
         Mapping mapping;
         try {
-            mapping = resolve(job, source, candidate, "AUTO");
+            mapping = resolve(source, candidate, "AUTO");
         } catch (ApiException conflict) {
+            if (conflict.getStatus() != HttpStatus.CONFLICT) {
+                throw conflict;
+            }
             return saveReview(
                     job,
                     source,
@@ -618,8 +525,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 status,
                 manual ? null : mapping,
                 null,
-                candidate.explanation(),
-                "CLEAN_AUTO");
+                candidate.explanation());
         return status;
     }
 
@@ -631,48 +537,88 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 Status.REVIEW_REQUIRED,
                 null,
                 null,
-                candidate.explanation(),
-                "CLEAN_REVIEW");
+                candidate.explanation());
         return Status.REVIEW_REQUIRED;
     }
 
-    private Mapping resolve(
-            CatalogCleaningJob job, SourceGoodsItem source, Candidate candidate, String origin) {
-        String tenant = job.getTenantKey();
-        String brand = source.getBrandName();
-        boolean protect = "AUTO".equals(origin) && source.getCatalogVariantId() != null;
-        var variant = mapper.variant(tenant, brand, candidate);
-        if (protect
-                && (variant == null
-                        || !Objects.equals(source.getCatalogVariantId(), variant.id()))) {
-            throw conflict("CATALOG_MAPPING_CHANGED", "候选规格与已生效映射不同，需要人工确认。");
+    private Mapping resolve(SourceGoodsItem source, Candidate candidate, String origin) {
+        var memory = CatalogCleaningRule.memory(candidate.spec());
+        if (memory == null) {
+            throw invalid("请填写有效的运行内存和机身存储，例如 16GB+512GB。");
         }
-        if (variant == null) {
-            checked(
-                    mapper.insertVariant(
-                            tenant,
-                            brand,
-                            candidate,
-                            UUID.randomUUID().toString(),
-                            candidate.modelName() + " " + candidate.spec()));
-            variant = mapper.variant(tenant, brand, candidate);
+        String brandName = source.getBrandName();
+        String edition = Objects.requireNonNullElse(candidate.edition(), "");
+        boolean protect = "AUTO".equals(origin) && source.getGoodsId() != null;
+        Long brand = goods.lockBrand(brandName);
+        var model = brand == null ? null : goods.lockModel(brand, candidate.modelName(), edition);
+        if (model != null && !candidate.seriesName().equals(model.seriesName())) {
+            throw conflict("CATALOG_SERIES_CONFLICT", "同一机型版本已归属其他系列，请核对系列。");
         }
-        if (!"ACTIVE".equals(variant.status())
-                || !candidate.seriesName().equals(variant.seriesName())) {
-            throw conflict("CATALOG_VARIANT_CONFLICT", "已有规格的系列或启用状态与候选不一致。");
+        Long color = goods.lockColor(candidate.colorName());
+        var existing =
+                model == null || color == null
+                        ? null
+                        : goods.lockGoods(model.id(), memory.ram(), memory.rom(), color);
+        if (protect && (existing == null || !Objects.equals(source.getGoodsId(), existing.id()))) {
+            throw conflict("CATALOG_MAPPING_CHANGED", "候选规格或颜色与已生效映射不同，需要人工确认。");
         }
-        var color = mapper.color(tenant, variant.id(), candidate.colorName());
-        if (protect && (color == null || !Objects.equals(source.getVariantColorId(), color.id()))) {
-            throw conflict("CATALOG_MAPPING_CHANGED", "候选颜色与已生效映射不同，需要人工确认。");
+        if (existing != null) {
+            if (!"ACTIVE".equals(existing.catalogStatus())) {
+                throw conflict("CATALOG_GOODS_INACTIVE", "该标准商品尚未启用，请先核对目录状态。");
+            }
+            if (existing.status() == null) {
+                checked(goods.defaultToOnSale(existing.id()));
+            }
+            return new Mapping("MAPPED", origin, brand, existing.id());
+        }
+
+        // 在确认目录无业务冲突后建档，避免待审结果留下部分目录记录。
+        if (brand == null) {
+            checked(goods.insertBrand(brandName));
+            brand = goods.lockBrand(brandName);
+        }
+        Long series =
+                model == null
+                        ? goods.lockSeries(brand, candidate.seriesName())
+                        : Long.valueOf(model.seriesId());
+        if (series == null) {
+            checked(goods.insertSeries(brand, candidate.seriesName()));
+            series = goods.lockSeries(brand, candidate.seriesName());
+        }
+        if (model == null) {
+            checked(goods.insertModel(brand, series, candidate.modelName(), edition));
+            model = goods.lockModel(brand, candidate.modelName(), edition);
         }
         if (color == null) {
-            checked(mapper.insertColor(tenant, variant.id(), candidate.colorName()));
-            color = mapper.color(tenant, variant.id(), candidate.colorName());
+            checked(goods.insertColor(candidate.colorName()));
+            color = goods.lockColor(candidate.colorName());
         }
-        if (!"ACTIVE".equals(color.status())) {
-            throw conflict("CATALOG_COLOR_DISABLED", "该规格颜色尚未启用，需要管理员处理。");
-        }
-        return new Mapping("MAPPED", origin, variant.id(), color.id());
+        String sku = "G-" + UUID.randomUUID();
+        String name =
+                String.join(
+                                " ",
+                                candidate.modelName(),
+                                memory.ram() + "+" + memory.rom(),
+                                candidate.colorName())
+                        + (edition.isEmpty() ? "" : "（" + edition + "）");
+        String productNo = source.getGoodsNo();
+        checked(
+                goods.insertGoods(
+                        sku,
+                        productNo == null || productNo.isBlank() ? null : productNo,
+                        brand,
+                        series,
+                        model.id(),
+                        name,
+                        memory.ram(),
+                        memory.rom(),
+                        color,
+                        1));
+        return new Mapping(
+                "MAPPED",
+                origin,
+                brand,
+                goods.lockGoods(model.id(), memory.ram(), memory.rom(), color).id());
     }
 
     private void persist(
@@ -682,8 +628,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
             Status status,
             Mapping mapping,
             UserInfo operator,
-            String reason,
-            String action) {
+            String reason) {
         var change =
                 new Change(
                         status.name(),
@@ -694,32 +639,9 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                         reason,
                         mapping == null ? null : mapping.status(),
                         mapping == null ? null : mapping.origin(),
-                        mapping == null ? null : mapping.variantId(),
-                        mapping == null ? null : mapping.colorId());
+                        mapping == null ? null : mapping.brandId(),
+                        mapping == null ? null : mapping.goodsId());
         checked(mapper.save(job, source, change, operator));
-        var before =
-                new AuditState(
-                        source.getCleanStatus(),
-                        readCandidate(source),
-                        id(source.getCatalogVariantId()),
-                        id(source.getVariantColorId()));
-        var after =
-                new AuditState(
-                        status.name(),
-                        candidate,
-                        id(mapping == null ? source.getCatalogVariantId() : mapping.variantId()),
-                        id(mapping == null ? source.getVariantColorId() : mapping.colorId()));
-        checked(
-                mapper.audit(
-                        job,
-                        operator,
-                        "SOURCE_GOODS_ITEM",
-                        source.getId(),
-                        action,
-                        batch(job),
-                        write(before),
-                        write(after),
-                        reason));
     }
 
     private Job snapshot(CatalogCleaningJob job) {
@@ -740,7 +662,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 job.isIncludeReviews(),
                 id(job.getTargetSourceId()),
                 job.getStatus(),
-                job.isLegacy(),
                 job.getRequesterName(),
                 job.getCreatedAt(),
                 total,
@@ -757,8 +678,8 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return counts;
     }
 
-    private CatalogCleaningJob requireJob(UserInfo admin, long id) {
-        var job = mapper.job(admin.getTenantKey(), config.getSourceKey(), id);
+    private CatalogCleaningJob requireJob(long id) {
+        var job = mapper.job(config.getSourceKey(), id);
         if (job == null) {
             throw new ApiException(
                     HttpStatus.NOT_FOUND, "CATALOG_CLEAN_JOB_NOT_FOUND", "未找到该清洗任务。");
@@ -766,11 +687,11 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return job;
     }
 
-    private SourceGoodsItem requireSource(UserInfo admin, long id, boolean lock) {
+    private SourceGoodsItem requireSource(long id, boolean lock) {
         var source =
                 lock
-                        ? mapper.lockSource(admin.getTenantKey(), config.getSourceKey(), id)
-                        : mapper.source(admin.getTenantKey(), config.getSourceKey(), id);
+                        ? mapper.lockSource(config.getSourceKey(), id)
+                        : mapper.source(config.getSourceKey(), id, null);
         if (source == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "CATALOG_SOURCE_NOT_FOUND", "未找到该来源商品。");
         }
@@ -797,8 +718,11 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 source.original(),
                 candidate,
                 source.getMappingStatus(),
-                id(source.getCatalogVariantId()),
-                id(source.getVariantColorId()));
+                id(source.getCatalogBrandId()),
+                id(source.getGoodsId()),
+                id(source.getReviewedBy()),
+                source.getReviewedAt(),
+                source.getReviewReason());
     }
 
     private Result storedResult(SourceGoodsItem source) {
@@ -826,10 +750,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 source.getCleanedAt());
     }
 
-    private static String batch(CatalogCleaningJob job) {
-        return (job.isLegacy() ? "CLN-" : "CLEAN-") + job.getId();
-    }
-
     private Candidate readCandidate(SourceGoodsItem source) {
         try {
             return source.getCleanCandidate() == null
@@ -837,14 +757,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                     : json.readValue(source.getCleanCandidate(), Candidate.class);
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("来源候选读取失败", error);
-        }
-    }
-
-    private JsonNode readTree(String value) {
-        try {
-            return value == null ? null : json.readTree(value);
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException("清洗审计读取失败", error);
         }
     }
 
@@ -881,10 +793,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return new ApiException(HttpStatus.BAD_REQUEST, "CATALOG_CLEAN_INVALID_REQUEST", reason);
     }
 
-    private record Mapping(String status, String origin, Long variantId, Long colorId) {}
-
-    private record AuditState(
-            String status, Candidate candidate, String catalogVariantId, String variantColorId) {}
+    private record Mapping(String status, String origin, Long brandId, Long goodsId) {}
 
     private static final class LeaseLost extends RuntimeException {}
 }

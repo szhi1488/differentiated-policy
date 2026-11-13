@@ -7,7 +7,6 @@ import lombok.Data;
 @Data
 public class CatalogCleaningJob {
     private Long id;
-    private String tenantKey;
     private String sourceKey;
     private String brandName;
     private LocalDate createdDate;
@@ -15,7 +14,6 @@ public class CatalogCleaningJob {
     private String requestKey;
     private Long targetSourceId;
     private boolean includeReviews;
-    private boolean legacy;
     private Long requesterId;
     private String requesterName;
     private LocalDateTime createdAt;

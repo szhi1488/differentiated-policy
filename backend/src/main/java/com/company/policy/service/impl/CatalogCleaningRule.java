@@ -19,7 +19,7 @@ final class CatalogCleaningRule {
     private static final Pattern SPACE = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern SKU =
             Pattern.compile(
-                    "([1-9][0-9]?)\\s*(?:GB?)?\\s*\\+\\s*([1-9][0-9]{0,3})\\s*(TB?|GB?)?",
+                    "([1-9][0-9]?)\\s*(?:GB?)?\\s*\\+\\s*([1-9][0-9]{0,7})\\s*(TB?|GB?)?",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern SPEC_IN_NAME =
             Pattern.compile(
@@ -146,7 +146,7 @@ final class CatalogCleaningRule {
                     "分类和商品名中的完整型号需要核对。",
                     evidence);
         }
-        if (spec == null || nameSpecs.size() != 1) {
+        if (spec == null || memory(spec) == null || nameSpecs.size() != 1) {
             return review(
                     series,
                     model,
@@ -157,7 +157,7 @@ final class CatalogCleaningRule {
                     "SKU 名或商品名中的配置无法唯一识别。",
                     evidence);
         }
-        if (!spec.equals(spec(nameSpecs.get(0)))) {
+        if (!sameMemory(spec, spec(nameSpecs.get(0)))) {
             return review(
                     series,
                     model,
@@ -201,7 +201,8 @@ final class CatalogCleaningRule {
                         "自定义字段 1 的别名需与完整型号和配置一致。",
                         evidence);
             }
-            if (hasPolicySpec && (!spec.equals(spec(policySpec)) || (alias && policySpec.find()))) {
+            if (hasPolicySpec
+                    && (!sameMemory(spec, spec(policySpec)) || (alias && policySpec.find()))) {
                 return review(
                         series,
                         model,
@@ -305,6 +306,10 @@ final class CatalogCleaningRule {
 
     static Candidate manual(Target target, Candidate original) {
         String spec = normalize(target.spec());
+        String edition = original.edition();
+        if (edition != null && spec.endsWith(edition)) {
+            spec = spec.substring(0, spec.length() - edition.length()).strip();
+        }
         Matcher parsed = SKU.matcher(spec);
         spec = parsed.matches() ? spec(parsed) : spec;
         return new Candidate(
@@ -428,6 +433,26 @@ final class CatalogCleaningRule {
                 : text.replaceFirst("(?i)^ONEPLUS\\s*", "一加 ");
     }
 
+    static Memory memory(String value) {
+        Matcher match = SKU.matcher(value);
+        if (!match.matches()) {
+            return null;
+        }
+        long storage = Long.parseLong(match.group(2));
+        String unit = match.group(3);
+        if (unit != null && Character.toUpperCase(unit.charAt(0)) == 'T') {
+            storage *= 1024;
+        }
+        return storage > 99_999_999 ? null : new Memory(match.group(1) + "GB", storage + "GB");
+    }
+
+    record Memory(String ram, String rom) {}
+
+    private static boolean sameMemory(String left, String right) {
+        Memory memory = memory(left);
+        return memory != null && memory.equals(memory(right));
+    }
+
     private static String spec(MatchResult match) {
         String unit = match.group(3);
         return match.group(1)
@@ -443,7 +468,7 @@ final class CatalogCleaningRule {
                 : null;
     }
 
-    private static String normalize(String value) {
+    static String normalize(String value) {
         return value == null
                 ? ""
                 : SPACE.matcher(Normalizer.normalize(value, Form.NFKC)).replaceAll(" ").strip();

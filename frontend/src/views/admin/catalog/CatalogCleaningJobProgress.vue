@@ -5,7 +5,7 @@ defineProps({ job: { type: Object, required: true } })
 </script>
 
 <template>
-  <section v-if="!job.legacy" class="cleaning-job-progress" aria-label="清洗进度">
+  <section class="cleaning-job-progress" aria-label="清洗进度">
     <div class="cleaning-job-heading">
       <strong>{{ GOODS_CLEAN_JOB_LABELS[job.status] }}</strong>
       <span>已处理 {{ job.processed }} / {{ job.total }} 条</span>

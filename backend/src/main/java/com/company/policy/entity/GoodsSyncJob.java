@@ -10,7 +10,6 @@ import lombok.Data;
 @Data
 public class GoodsSyncJob {
     private Long id;
-    private String tenantKey;
     private String sourceKey;
     private Long requesterId;
     private String brandName;

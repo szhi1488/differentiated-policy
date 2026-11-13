@@ -19,14 +19,14 @@ public interface SourceGoodsItemMapper {
     String CREATED_DATE_LOG =
             """
         FROM catalog_operation_log marker
-        WHERE marker.tenant_key = item.tenant_key AND marker.entity_type = 'SOURCE_GOODS_ITEM'
+        WHERE marker.entity_type = 'SOURCE_GOODS_ITEM'
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
           AND marker.batch_key LIKE 'CREATED-DATE-%' AND marker.action_type = 'CREATE'
         """;
     String CREATED_DATE_JOB =
             """
         FROM goods_sync_job dated
-        WHERE dated.tenant_key = item.tenant_key AND dated.source_key = item.source_key
+        WHERE dated.source_key = item.source_key
           AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
           AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
         """;
@@ -70,7 +70,7 @@ public interface SourceGoodsItemMapper {
         """;
     String FILTER =
             """
-        FROM source_goods_item item WHERE tenant_key = #{tenantKey} AND source_key = #{sourceKey}
+        FROM source_goods_item item WHERE source_key = #{sourceKey}
         <if test="brand != null">AND brand_name = #{brand}</if>
         <if test="keyword != null">
           AND (LOCATE(#{keyword}, goods_name) > 0 OR LOCATE(#{keyword}, goods_no) > 0
@@ -83,19 +83,18 @@ public interface SourceGoodsItemMapper {
     @Select(
             """
         SELECT * FROM source_goods_item
-        WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-          AND sku_id = #{skuId}
+        WHERE sku_id = #{skuId}
         FOR UPDATE
         """)
-    SourceGoodsItem lockSku(GoodsSyncJob job, String skuId);
+    SourceGoodsItem lockSku(String skuId);
 
     @Insert(
             """
         INSERT INTO source_goods_item
-          (tenant_key, source_key, brand_name, goods_name, goods_no, sku_name, cate_name, goods_field4,
+          (source_key, brand_name, goods_name, goods_no, sku_name, cate_name, goods_field4,
            goods_field1, goods_field5, sku_id, cate_full_name, gmt_modified, goods_gmt_modified,
            is_blockup, is_package_good, first_seen_job_id, last_seen_job_id)
-        VALUES (#{job.tenantKey}, #{job.sourceKey}, #{job.brandName}, #{goods.goodsName}, #{goods.goodsNo},
+        VALUES (#{job.sourceKey}, #{job.brandName}, #{goods.goodsName}, #{goods.goodsNo},
           #{goods.skuName}, #{goods.cateName}, #{goods.goodsField4}, #{goods.goodsField1}, #{goods.goodsField5},
           #{goods.skuId}, #{goods.cateFullName}, #{goods.gmtModified}, #{goods.goodsGmtModified},
           #{goods.isBlockup}, #{goods.isPackageGood}, #{job.id}, #{job.id})
@@ -114,8 +113,8 @@ public interface SourceGoodsItemMapper {
             clean_status = 'PENDING', clean_job_id = NULL,
             clean_candidate = NULL, clean_error_code = NULL, cleaned_at = NULL,
           </if>
-          last_seen_job_id = #{job.id}, record_version = record_version + 1
-        WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+          last_seen_job_id = #{job.id}, updated_at = CURRENT_TIMESTAMP, record_version = record_version + 1
+        WHERE source_key = #{job.sourceKey}
           AND brand_name = #{job.brandName} AND id = #{item.id}
           AND record_version = #{item.recordVersion}
         </script>
@@ -124,8 +123,8 @@ public interface SourceGoodsItemMapper {
 
     @Update(
             """
-        UPDATE source_goods_item SET last_seen_job_id = #{job.id}, record_version = record_version + 1
-        WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+        UPDATE source_goods_item SET last_seen_job_id = #{job.id}
+        WHERE source_key = #{job.sourceKey}
           AND brand_name = #{job.brandName} AND id = #{id} AND last_seen_job_id <> #{job.id}
         """)
     int markSeen(GoodsSyncJob job, long id);
@@ -133,30 +132,30 @@ public interface SourceGoodsItemMapper {
     @Insert(
             """
         INSERT INTO catalog_operation_log
-          (tenant_key, actor_type, entity_type, entity_id, action_type, batch_key, before_data, after_data, reason)
-        VALUES (#{job.tenantKey}, 'SYSTEM', 'SOURCE_GOODS_ITEM', #{id}, 'UPDATE',
+          (actor_type, entity_type, entity_id, action_type, batch_key, before_data, after_data, reason)
+        VALUES ('SYSTEM', 'SOURCE_GOODS_ITEM', #{id}, 'UPDATE',
           #{batchKey}, #{before}, #{after}, '吉客云 SKU 来源字段更新。')
         """)
-    int auditUpdate(GoodsSyncJob job, long id, String batchKey, String before, String after);
+    int auditUpdate(long id, String batchKey, String before, String after);
 
     @Insert(
             """
         <script>
         INSERT INTO catalog_operation_log
-          (tenant_key, actor_type, entity_type, entity_id, action_type, batch_key, reason)
-        SELECT DISTINCT item.tenant_key, 'SYSTEM', 'SOURCE_GOODS_ITEM',
+          (actor_type, entity_type, entity_id, action_type, batch_key, reason)
+        SELECT DISTINCT 'SYSTEM', 'SOURCE_GOODS_ITEM',
                item.id, 'CREATE', CONCAT('CREATED-DATE-', dated.sync_date), '吉客云按建档日查询命中。'
         FROM source_goods_item item
         JOIN goods_sync_job dated
-          ON dated.tenant_key = item.tenant_key AND dated.source_key = item.source_key
+          ON dated.source_key = item.source_key
           AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
           AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
         LEFT JOIN catalog_operation_log marker
-          ON marker.tenant_key = item.tenant_key AND marker.entity_type = 'SOURCE_GOODS_ITEM'
+          ON marker.entity_type = 'SOURCE_GOODS_ITEM'
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
           AND marker.action_type = 'CREATE'
           AND marker.batch_key = CONCAT('CREATED-DATE-', dated.sync_date)
-        WHERE item.tenant_key = #{job.tenantKey} AND item.source_key = #{job.sourceKey}
+        WHERE item.source_key = #{job.sourceKey}
           AND item.brand_name = #{job.brandName}
           AND marker.id IS NULL AND item.sku_id IN
           <foreach collection="skuIds" item="skuId" open="(" separator="," close=")">
@@ -167,12 +166,7 @@ public interface SourceGoodsItemMapper {
     int recordCreatedDates(GoodsSyncJob job, List<String> skuIds);
 
     @Select("<script> SELECT COUNT(*) " + FILTER + "</script>")
-    long count(
-            String tenantKey,
-            String sourceKey,
-            String brand,
-            String keyword,
-            LocalDate createdDate);
+    long count(String sourceKey, String brand, String keyword, LocalDate createdDate);
 
     @Select(
             "<script> SELECT "
@@ -182,7 +176,6 @@ public interface SourceGoodsItemMapper {
                     + FILTER
                     + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset} </script>")
     List<SourceGoodsItem> page(
-            String tenantKey,
             String sourceKey,
             String brand,
             String keyword,

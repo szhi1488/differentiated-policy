@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.dto.JackyunGoodsQuery;
+import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
@@ -44,7 +45,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "spring.sql.init.schema-locations=classpath:user-info-schema.sql,classpath:catalog-import-schema.sql",
             "jackyun.app-key=test-app-key",
             "jackyun.app-secret=test-secret",
-            "jackyun.tenant-key=test-tenant",
+            "feishu.tenant-key=test-tenant",
             "jackyun.import-scheduling-enabled=false",
             "jackyun.clean-scheduling-enabled=false"
         })
@@ -52,6 +53,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class GoodsSyncIntegrationTest {
     private static final String JOBS = "/api/admin/goods-sync/jobs";
     private static final String CLEANING = "/api/admin/catalog/cleaning";
+    private static final String GOODS = "/api/admin/catalog/goods";
     private static final String SOURCES = "/api/admin/source-goods";
     private static final String OPPO = "OPPO手机";
     private static final String ONEPLUS = "一加手机";
@@ -102,8 +104,11 @@ class GoodsSyncIntegrationTest {
         jdbc.update("DELETE FROM source_goods_item");
         jdbc.update("DELETE FROM catalog_clean_job");
         jdbc.update("DELETE FROM goods_sync_job");
-        jdbc.update("DELETE FROM catalog_variant_color");
-        jdbc.update("DELETE FROM catalog_variant");
+        jdbc.update("DELETE FROM goods");
+        jdbc.update("DELETE FROM color_dict");
+        jdbc.update("DELETE FROM spu");
+        jdbc.update("DELETE FROM series");
+        jdbc.update("DELETE FROM brand");
         admin = session("test-tenant", "admin", "ADMIN");
     }
 
@@ -219,9 +224,7 @@ class GoodsSyncIntegrationTest {
         long source = sourceId("RENO-W");
         Long mappedColor =
                 jdbc.queryForObject(
-                        "SELECT variant_color_id FROM source_goods_item WHERE id=?",
-                        Long.class,
-                        source);
+                        "SELECT goods_id FROM source_goods_item WHERE id=?", Long.class, source);
         assertThat(mappedColor).isNotNull();
 
         var date = LocalDate.of(2025, 5, 28);
@@ -294,7 +297,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.result.colorName").value("月夜黑"));
         assertThat(
                         jdbc.queryForObject(
-                                "SELECT variant_color_id FROM source_goods_item WHERE id=?",
+                                "SELECT goods_id FROM source_goods_item WHERE id=?",
                                 Long.class,
                                 source))
                 .isEqualTo(mappedColor);
@@ -468,8 +471,7 @@ class GoodsSyncIntegrationTest {
                     .andExpect(jsonPath("$.result.suggestedAction").value("EXCLUDE"))
                     .andExpect(jsonPath("$.result.colorName").value("冰月白"));
         }
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant", Integer.class))
-                .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isZero();
     }
 
     private static Goods withPath(
@@ -587,6 +589,425 @@ class GoodsSyncIntegrationTest {
         verifyNoInteractions(upstream);
     }
 
+    @Test
+    void sharesMergedStandardGoodsAcrossAdminsAndKeepsCleanStateOnIdenticalDatedReplay()
+            throws Exception {
+        var original =
+                goods(
+                        "Find X8 星耀黑 16+1TB",
+                        "X8-ONE",
+                        "16+1024",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+1TB",
+                        null);
+        var alias =
+                goods(
+                        "Find X8 星耀黑 16+1024",
+                        "X8-TWO",
+                        "16+1TB",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+1024",
+                        null);
+        importForCleaning(List.of(original, alias));
+        String job = startClean(OPPO, null, false, 2);
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/" + job).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resultCounts.AUTO_PASSED").value(2));
+        long source = sourceId("X8-ONE");
+        long goodsId =
+                jdbc.queryForObject(
+                        "SELECT goods_id FROM source_goods_item WHERE id=?", Long.class, source);
+        String spuId =
+                jdbc.queryForObject("SELECT spu_id FROM goods WHERE id=?", String.class, goodsId);
+        var updated = java.sql.Timestamp.valueOf("2026-11-12 12:00:00");
+        jdbc.update("UPDATE source_goods_item SET updated_at=? WHERE id=?", updated, source);
+        var sourceVersion =
+                jdbc.queryForObject(
+                        "SELECT record_version FROM source_goods_item WHERE id=?",
+                        Integer.class,
+                        source);
+
+        var teammate = session("test-tenant", "catalog-teammate", "ADMIN");
+        mvc.perform(get(CLEANING + "/jobs/" + job).session(teammate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resultCounts.AUTO_PASSED").value(2));
+        mvc.perform(
+                        get(GOODS)
+                                .session(teammate)
+                                .param("brandName", OPPO)
+                                .param("seriesName", "Find")
+                                .param("modelName", "X8")
+                                .param("catalogStatus", "ACTIVE")
+                                .param("status", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(Long.toString(goodsId)))
+                .andExpect(jsonPath("$.items[0].skuId").isString())
+                .andExpect(jsonPath("$.items[0].sourceSkuId").value(original.skuId()))
+                .andExpect(jsonPath("$.items[0].ram").value("16GB"))
+                .andExpect(jsonPath("$.items[0].rom").value("1024GB"))
+                .andExpect(jsonPath("$.items[0].goodsName").value("Find X8 16GB+1024GB 星耀黑"))
+                .andExpect(jsonPath("$.items[0].status").value(1));
+        mvc.perform(get(GOODS + "/" + goodsId).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.brandName").value(OPPO))
+                .andExpect(jsonPath("$.colorName").value("星耀黑"))
+                .andExpect(jsonPath("$.sourceSkuId").value(original.skuId()))
+                .andExpect(jsonPath("$.sourceName").value(original.goodsName()));
+        mvc.perform(get(GOODS).session(teammate).param("keyword", alias.skuId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].sourceSkuId").value(original.skuId()));
+        mvc.perform(get(GOODS + "/summary").session(teammate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.active").value(1))
+                .andExpect(jsonPath("$.series[0].seriesId").isString())
+                .andExpect(jsonPath("$.series[0].seriesName").value("Find系列"))
+                .andExpect(jsonPath("$.series[0].total").value(1))
+                .andExpect(jsonPath("$.models[0].spuId").value(spuId))
+                .andExpect(jsonPath("$.models[0].modelName").value("Find X8"))
+                .andExpect(jsonPath("$.models[0].active").value(1))
+                .andExpect(jsonPath("$.models[0].total").value(1))
+                .andExpect(jsonPath("$.configurations[0].rom").value("1024GB"));
+        mvc.perform(get(GOODS).session(teammate).param("spuId", spuId).param("status", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].spuId").value(spuId));
+        mvc.perform(get(GOODS).session(teammate).param("spuId", spuId).param("brandName", ONEPLUS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(GOODS).session(teammate).param("spuId", "0"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(GOODS).session(teammate).param("ram", "16GB").param("rom", "1024GB"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get(GOODS).session(teammate).param("ram", "16GB").param("rom", "512GB"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(GOODS).session(teammate).param("ram", "16GB"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(GOODS).session(session("other-tenant", "catalog-outsider", "ADMIN")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(GOODS).session(teammate).param("catalogStatus", "INVALID"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(GOODS + "/0").session(teammate)).andExpect(status().isNotFound());
+
+        LocalDate date = LocalDate.of(2026, 11, 12);
+        var query = new JackyunGoodsQuery(OPPO, 50, "0", true, Phase.CREATED, date);
+        when(upstream.queryPage(query))
+                .thenReturn(new JackyunGoodsPage(OPPO, List.of(original), original.skuId()));
+        when(upstream.queryPage(
+                        new JackyunGoodsQuery(
+                                OPPO, 50, original.skuId(), true, Phase.CREATED, date)))
+                .thenReturn(new JackyunGoodsPage(OPPO, List.of(), original.skuId()));
+        var scope =
+                new GoodsSyncRequest(
+                        OPPO, UUID.randomUUID().toString(), GoodsSyncRequest.Mode.CREATED, date);
+        var response =
+                mvc.perform(mutation(JOBS).content(json.writeValueAsBytes(scope)))
+                        .andExpect(status().isAccepted())
+                        .andReturn()
+                        .getResponse();
+        String replay =
+                json.readTree(response.getContentAsString(StandardCharsets.UTF_8))
+                        .path("id")
+                        .asText();
+        step(replay);
+        step(replay);
+        mvc.perform(get(SOURCES).session(teammate).param("createdDate", date.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(Long.toString(source)))
+                .andExpect(jsonPath("$.items[0].cleanStatus").value("AUTO_PASSED"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT record_version FROM source_goods_item WHERE id=?",
+                                Integer.class,
+                                source))
+                .isEqualTo(sourceVersion);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT updated_at FROM source_goods_item WHERE id=?",
+                                java.sql.Timestamp.class,
+                                source))
+                .isEqualTo(updated);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM catalog_operation_log WHERE action_type='UPDATE'",
+                                Integer.class))
+                .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT content_count FROM goods_sync_job WHERE id=?",
+                                Long.class,
+                                replay))
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void defaultsUnknownSalesStatusWhenReusingGoodsAndPreservesExplicitStatus() throws Exception {
+        var original =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "X8-FIRST",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        null);
+        importForCleaning(List.of(original));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        long id = jdbc.queryForObject("SELECT id FROM goods", Long.class);
+
+        jdbc.update("UPDATE goods SET status=NULL WHERE id=?", id);
+        var second =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "X8-SECOND",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        null);
+        importForCleaning(List.of(second));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(GOODS + "/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value(1));
+
+        jdbc.update("UPDATE goods SET status=3 WHERE id=?", id);
+        var third =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "X8-THIRD",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        null);
+        importForCleaning(List.of(third));
+        String job = startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/" + job).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resultCounts.AUTO_PASSED").value(1));
+        mvc.perform(get(GOODS + "/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value(3));
+    }
+
+    @Test
+    void maintainsSharedDictionaryAndRejectsStaleAndReferencedChanges() throws Exception {
+        String path = "/api/admin/catalog/dictionary";
+        mvc.perform(mutation(path + "/brand").content("{\"name\":\"测试品牌\"}"))
+                .andExpect(status().isNoContent());
+        String brand = jdbc.queryForObject("SELECT id FROM brand WHERE name='测试品牌'", String.class);
+        mvc.perform(
+                        mutation(path + "/series")
+                                .content(
+                                        json.writeValueAsString(
+                                                java.util.Map.of(
+                                                        "name", "测试系列", "parentId", brand))))
+                .andExpect(status().isNoContent());
+        mvc.perform(mutation(path + "/color").content("{\"name\":\"星耀黑\"}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(mutation(path + "/color").content("{\"name\":\"星耀黑\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_DUPLICATE"));
+
+        var teammate = session("test-tenant", "dictionary-teammate", "ADMIN");
+        mvc.perform(get(path).session(teammate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].type").value("brand"))
+                .andExpect(jsonPath("$[0].inUse").value(true))
+                .andExpect(jsonPath("$[2].type").value("series"))
+                .andExpect(jsonPath("$[2].parentId").value(brand));
+        mvc.perform(get(path).session(session("test-tenant", "dictionary-applicant", "APPLICANT")))
+                .andExpect(status().isForbidden());
+        mvc.perform(
+                        delete(path + "/brand/" + brand)
+                                .session(admin)
+                                .header("Origin", "http://localhost:5173")
+                                .header("X-Policy-Request", "1")
+                                .param("expectedName", "测试品牌"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_IN_USE"));
+
+        String color =
+                jdbc.queryForObject(
+                        "SELECT id FROM color_dict WHERE color_name='星耀黑'", String.class);
+        String colorPath = path + "/color/" + color;
+        mvc.perform(
+                        put(colorPath)
+                                .session(admin)
+                                .header("Origin", "http://localhost:5173")
+                                .header("X-Policy-Request", "1")
+                                .contentType("application/json")
+                                .content("{\"name\":\"深黑色\",\"expectedName\":\"星耀黑\"}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(
+                        delete(colorPath)
+                                .session(admin)
+                                .header("Origin", "http://localhost:5173")
+                                .header("X-Policy-Request", "1")
+                                .param("expectedName", "星耀黑"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_CHANGED"));
+        mvc.perform(
+                        delete(colorPath)
+                                .session(admin)
+                                .header("Origin", "http://localhost:5173")
+                                .header("X-Policy-Request", "1")
+                                .param("expectedName", "深黑色"))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(path).session(teammate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.type == 'color')]").isEmpty());
+    }
+
+    @Test
+    void createsStandardGoodsWithSeparateCapacityAndRejectsEquivalentDuplicate() throws Exception {
+        String dictionary = "/api/admin/catalog/dictionary";
+        mvc.perform(mutation(dictionary + "/brand").content("{\"name\":\"OPPO手机\"}"))
+                .andExpect(status().isNoContent());
+        String brand = jdbc.queryForObject("SELECT id FROM brand", String.class);
+        mvc.perform(
+                        mutation(dictionary + "/series")
+                                .content(
+                                        json.writeValueAsString(
+                                                java.util.Map.of(
+                                                        "name", "Find系列", "parentId", brand))))
+                .andExpect(status().isNoContent());
+        mvc.perform(mutation(dictionary + "/color").content("{\"name\":\"钛色\"}"))
+                .andExpect(status().isNoContent());
+        String series = jdbc.queryForObject("SELECT id FROM series", String.class);
+        String color = jdbc.queryForObject("SELECT id FROM color_dict", String.class);
+        var body =
+                json.createObjectNode()
+                        .put("name", "Find X9 16GB+1T 钛色")
+                        .put("brandId", brand)
+                        .put("seriesId", series)
+                        .put("colorId", color)
+                        .put("modelName", "Find X9")
+                        .put("ram", "16GB")
+                        .put("rom", "1T")
+                        .put("status", 2);
+        var response =
+                mvc.perform(mutation(GOODS).content(body.toString()))
+                        .andExpect(status().isCreated())
+                        .andExpect(jsonPath("$.goodsName").value("Find X9 16GB+1T 钛色"))
+                        .andExpect(jsonPath("$.ram").value("16GB"))
+                        .andExpect(jsonPath("$.rom").value("1024GB"))
+                        .andExpect(jsonPath("$.edition").value(""))
+                        .andExpect(jsonPath("$.status").value(2))
+                        .andExpect(jsonPath("$.skuId").isString())
+                        .andExpect(jsonPath("$.sourceSkuId").isEmpty())
+                        .andExpect(jsonPath("$.productNo").isEmpty())
+                        .andReturn();
+        String id =
+                json.readTree(response.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                        .path("id")
+                        .asText();
+        body.put("rom", "1024GB");
+        mvc.perform(mutation(GOODS).content(body.toString()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_DUPLICATE"));
+        body.put("ram", "1T");
+        mvc.perform(mutation(GOODS).content(body.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_INVALID"));
+        body.put("ram", "16").put("rom", "97657TB");
+        mvc.perform(mutation(GOODS).content(body.toString())).andExpect(status().isBadRequest());
+        body.put("rom", "1TB").put("seriesId", Long.parseLong(series) + 1);
+        mvc.perform(mutation(GOODS).content(body.toString())).andExpect(status().isBadRequest());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isOne();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM spu", Integer.class)).isOne();
+        mvc.perform(
+                        get(GOODS + "/" + id)
+                                .session(session("test-tenant", "goods-teammate", "ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.catalogStatus").value("ACTIVE"));
+        mvc.perform(
+                        mutation(GOODS)
+                                .session(session("test-tenant", "goods-applicant", "APPLICANT"))
+                                .content(body.put("seriesId", series).toString()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void deletesByDisablingGoodsAndPreservesSourceMapping() throws Exception {
+        var original =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "X8-REMOVE",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        null);
+        importForCleaning(List.of(original));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        long id = jdbc.queryForObject("SELECT id FROM goods", Long.class);
+        String path = GOODS + "/" + id;
+        mvc.perform(delete(path).session(admin)).andExpect(status().isForbidden());
+        mvc.perform(
+                        delete(path)
+                                .session(session("test-tenant", "remove-applicant", "APPLICANT"))
+                                .header("Origin", "http://localhost:5173")
+                                .header("X-Policy-Request", "1"))
+                .andExpect(status().isForbidden());
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(
+                            delete(path)
+                                    .session(admin)
+                                    .header("Origin", "http://localhost:5173")
+                                    .header("X-Policy-Request", "1"))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(jdbc.queryForObject("SELECT goods_id FROM source_goods_item", Long.class))
+                .isEqualTo(id);
+        mvc.perform(get(path).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.catalogStatus").value("DISABLED"));
+        mvc.perform(get(GOODS).session(admin).param("status", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(GOODS + "/summary").session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0))
+                .andExpect(jsonPath("$.active").value(0))
+                .andExpect(jsonPath("$.models").isEmpty());
+        mvc.perform(get(GOODS).session(admin).param("catalogStatus", "DISABLED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(Long.toString(id)));
+
+        var alias =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "X8-REMOVE-ALIAS",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        null);
+        importForCleaning(List.of(alias));
+        String job = startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/" + job).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resultCounts.REVIEW_REQUIRED").value(1));
+        mvc.perform(get(path).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.catalogStatus").value("DISABLED"));
+    }
+
     private String start(String brand, String key) throws Exception {
         var result =
                 mvc.perform(startRequest(brand, key))
@@ -653,8 +1074,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.total").value(7))
                 .andExpect(jsonPath("$.eligible").value(7))
                 .andExpect(jsonPath("$.items[0].status").value("PENDING"));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant", Integer.class))
-                .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isZero();
         String batch = startClean(OPPO, null, false, 7);
         cleaning.processNextBatch();
         mvc.perform(get(CLEANING + "/jobs/" + batch).session(admin))
@@ -671,8 +1091,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].issueCode").value("SPEC_CONFLICT"));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant_color", Integer.class))
-                .isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM color_dict", Integer.class)).isOne();
         long excluded = sourceId("R12-X");
         mvc.perform(get(SOURCES + "/" + excluded).session(admin))
                 .andExpect(status().isOk())
@@ -701,13 +1120,22 @@ class GoodsSyncIntegrationTest {
                  "target":{"seriesName":"Reno系列","modelName":"Reno16","spec":"12GB+256GB 简装版","colorName":"星河紫"}}
                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.result.status").value("MANUAL_PASSED"));
-        mvc.perform(get(CLEANING + "/jobs/" + batch + "/logs").session(admin))
+                .andExpect(jsonPath("$.result.status").value("MANUAL_PASSED"))
+                .andExpect(jsonPath("$.goodsId").isString())
+                .andExpect(jsonPath("$.reviewedBy").isString())
+                .andExpect(jsonPath("$.reviewReason").value("审核通过"));
+        mvc.perform(get(GOODS).session(admin).param("keyword", "R16-Z"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(10))
-                .andExpect(jsonPath("$.items[0].actorType").value("USER"))
-                .andExpect(jsonPath("$.items[0].reason").value("审核通过"))
-                .andExpect(jsonPath("$.items[1].reason").value("审核不通过"));
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].productNo").value("R16-Z"))
+                .andExpect(jsonPath("$.items[0].status").value(1))
+                .andExpect(jsonPath("$.items[0].edition").value("简装版"))
+                .andExpect(jsonPath("$.items[0].goodsName").value("Reno16 12GB+256GB 星河紫（简装版）"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM catalog_operation_log WHERE entity_type = 'CLEAN_JOB' OR action_type LIKE 'CLEAN_%'",
+                                Integer.class))
+                .isZero();
         mvc.perform(
                         get(SOURCES + "/" + shortPack)
                                 .session(session("other-tenant", "other-cleaning", "ADMIN")))
@@ -737,17 +1165,16 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_ACTIVE"));
         jdbc.execute(
-                "ALTER TABLE catalog_variant_color ADD CONSTRAINT ck_test_color CHECK (color_name <> '星耀黑')");
+                "ALTER TABLE goods ADD CONSTRAINT ck_test_goods CHECK (product_no <> 'K10-H')");
         try {
             cleaning.processNextBatch();
-            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant", Integer.class))
-                    .isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isZero();
             mvc.perform(get(CLEANING + "/jobs/" + batch).session(admin))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("FAILED"))
                     .andExpect(jsonPath("$.resultCounts.ERROR").value(1));
         } finally {
-            jdbc.execute("ALTER TABLE catalog_variant_color DROP CONSTRAINT ck_test_color");
+            jdbc.execute("ALTER TABLE goods DROP CONSTRAINT ck_test_goods");
         }
         long source = sourceId("K10-H");
         mvc.perform(
@@ -760,8 +1187,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.result.status").value("AUTO_PASSED"))
                 .andExpect(jsonPath("$.result.modelName").value("K10活力版"))
                 .andExpect(jsonPath("$.result.colorName").value("星耀黑"));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant_color", Integer.class))
-                .isOne();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM color_dict", Integer.class)).isOne();
     }
 
     @Test
@@ -849,7 +1275,7 @@ class GoodsSyncIntegrationTest {
         jdbc.update(
                 """
                 UPDATE source_goods_item SET mapping_status='UNMAPPED', mapping_origin=NULL,
-                  catalog_variant_id=NULL, variant_color_id=NULL
+                  catalog_brand_id=NULL, goods_id=NULL
                 WHERE goods_no IN ('ALIAS', 'ALIAS-PRO')
                 """);
         mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))

@@ -4,7 +4,6 @@ import com.company.policy.dto.CatalogCleaningRequest.Review;
 import com.company.policy.dto.CatalogCleaningRequest.Start;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Log;
 import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Results;
@@ -44,10 +43,6 @@ public interface CatalogCleaningService {
     Detail review(CurrentUserResponse session, long id, Review request);
 
     Job retrySource(CurrentUserResponse session, long id, int version, String requestKey);
-
-    Page<Log> logs(CurrentUserResponse session, long id, int page, int size);
-
-    Page<Log> sourceLogs(CurrentUserResponse session, long id, int page, int size);
 
     void processNextBatch();
 }

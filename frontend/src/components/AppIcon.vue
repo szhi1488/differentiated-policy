@@ -18,6 +18,7 @@ const paths = {
   settings: 'M9 3h6l1 4 4 1v8l-4 1-1 4H9l-1-4-4-1V8l4-1z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
   search: 'M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0z M14.5 14.5 20 20',
   download: 'M12 3v12 m-4-4 4 4 4-4 M4 16v4h16v-4',
+  copy: 'M9 9h12v12H9z M15 6V3H3v12h3',
   filter: 'M4 5h16l-6 7v5l-4 2v-7z',
   stop: 'M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0z M8 12h8',
 }

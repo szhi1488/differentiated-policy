@@ -42,6 +42,10 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
             throw new ApiException(
                     HttpStatus.SERVICE_UNAVAILABLE, "FEISHU_NOT_CONFIGURED", "请先配置后端飞书应用凭证。");
         }
+        if (!properties.hasCompanyTenant()) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "FEISHU_TENANT_NOT_CONFIGURED", "请先配置公司飞书租户。");
+        }
         var startedAt = clock.instant();
         var body =
                 new HashMap<>(
@@ -72,6 +76,10 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
                 || data.path("tenant_key").asText().isBlank()) {
             throw ApiException.upstream();
         }
+        String tenant = data.path("tenant_key").asText();
+        if (!properties.getTenantKey().equals(tenant)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "FEISHU_TENANT_DENIED", "当前飞书账号不属于本公司。");
+        }
         // 仅保留已核验的身份，不保存访问令牌、刷新令牌，也不将其发送给浏览器。
         var expiresAt =
                 startedAt.plusSeconds(
@@ -85,7 +93,7 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
                         : null;
         var user =
                 users.saveVerifiedIdentity(
-                        data.path("tenant_key").asText(),
+                        tenant,
                         data.path("open_id").asText(),
                         unionId,
                         data.path("name").asText("飞书用户"));

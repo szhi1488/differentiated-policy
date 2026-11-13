@@ -1,6 +1,6 @@
 # 商品管理接口契约
 
-更新日期：2026-11-13。旧结构下的源商品导入、清洗、来源审核、技术重试和清洗日志接口已实现。新基线改用公司共用目录，保留清洗结果及任务进度。接入时移除清洗日志接口。标准目录接口见后续设计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期：2026-11-13。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、停用和数据字典维护已接入十四表基线。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
@@ -38,9 +38,7 @@
 | GET | /api/admin/catalog/cleaning/jobs | 分页查看本账套清洗历史 |
 | GET | /api/admin/catalog/cleaning/jobs/active | 获取进行中任务，无活动任务返回 204 |
 | GET | /api/admin/catalog/cleaning/jobs/{id} | 查看任务范围、发起人、状态、进度和统计 |
-| GET | /api/admin/catalog/cleaning/jobs/{id}/logs | 分页查看旧版任务处理日志，适配新基线时移除 |
-| GET | /api/admin/source-goods/{id} | 查看原文、候选、命中证据、当前规格及颜色映射 |
-| GET | /api/admin/source-goods/{id}/clean-logs | 分页查看旧版来源清洗日志，适配新基线时移除 |
+| GET | /api/admin/source-goods/{id} | 查看原文、候选、命中证据、当前标准商品映射（`catalogBrandId`、`goodsId`）及最近审核信息 |
 | POST | /api/admin/source-goods/{id}/review | 带 `recordVersion` 和 `decision` 审核，支持通过 `APPROVE` 和不通过 `EXCLUDE` |
 | POST | /api/admin/source-goods/{id}/clean-retry | 带 `recordVersion` 和 `requestKey` 重试一条 `ERROR`，返回 202 |
 
@@ -48,15 +46,38 @@
 
 开始清洗指定一个品牌，日期为空时涵盖该品牌全部已入库 SKU。实际纳入已完成导入或已结束导入中已落库的待清洗 SKU，可选未映射的待审 SKU。进行中或暂停的最近导入需先完成或结束。确认数量必须大于 0；实际数量变化返回 `409 CATALOG_CLEAN_SCOPE_CHANGED`。幂等请求键同账套唯一，重复请求返回已有任务，活动任务范围相同可直接返回该任务。其他范围在同账套有运行任务时返回 `409 CATALOG_CLEAN_ACTIVE`。
 
-清洗任务独立于导入任务，ID 为字符串。任务返回 `brandName`、`createdDate`、`includeReviews`、`targetSourceId`、`status`、`requesterName`、`createdAt`、`total`、`processed`、`progress` 和 `resultCounts`。新基线任务状态为 `RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。现有旧接口另支持 `legacy` 和 `INTERRUPTED`，适配时一并移除。待人工审核算作已分流，确认后发生来源变化的成员记为 `SKIPPED`，保留在本轮统计中。
+清洗任务独立于导入任务，ID 为字符串。任务返回 `brandName`、`createdDate`、`includeReviews`、`targetSourceId`、`status`、`requesterName`、`createdAt`、`total`、`processed`、`progress` 和 `resultCounts`。新基线任务状态为 `RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。待人工审核算作已分流，确认后发生来源变化的成员记为 `SKIPPED`，保留在本轮统计中。
 
 结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。命中排除规则的来源只允许审核不通过。兼容旧请求的可选 `reason`，省略或留空时服务端按决定记录「审核通过」或「审核不通过」。旧记录版本或不允许的状态返回 409。
 
-## 待接入的标准商品目录
+## 已实现的标准商品目录
 
-商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。商品响应包含本地 SKU、货品编号、清洗后的商品名称、RAM、ROM、销售状态和目录状态。吉客云 SKU、来源货号及原文通过已授权的来源详情查询。商品列表按品牌、系列、机型、关键词和状态分页，服务端返回公司共用目录。
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | /api/admin/catalog/goods | 新增标准商品，成功返回 201 和商品详情 |
+| GET | /api/admin/catalog/goods | 按 `brandName` 精确匹配品牌，`seriesName`、`modelName` 按子串匹配；`keyword` 匹配标准商品名称、货品编号、标准 SKU、关联来源 SKU 或颜色名称。可按 `seriesId` 精确筛选系列，按 `spuId` 精确筛选机型版本，`ram` 和 `rom` 同时传入时精确筛选配置。支持 `catalogStatus`、`status` 及 `page`、`size`，返回 `items` 和 `total` |
+| GET | /api/admin/catalog/goods/summary | 返回商品总数、在售数、停产数、品牌系列及机型版本的总数和在售数、可选配置组合 |
+| DELETE | /api/admin/catalog/goods/{id} | 停用商品并保留引用，成功或已停用返回 204 |
+| GET | /api/admin/catalog/goods/{id} | 按标准商品 ID 查详情，商品不存在返回 404。详情和列表均返回代表性关联来源的 `sourceSkuId`、`sourceName` |
 
-清洗和审核通过后，在同一事务内创建或复用标准目录、写入来源 `goodsId`、更新来源和任务成员结果。自动清洗的审核人为空，人工审核记录实际操作人。重复处理复用同配置同颜色的商品。修改现有映射按来源版本校验，冲突返回 409。商品中心和字典维护的写接口待接入。
+`catalogStatus` 取 `DRAFT`、`ACTIVE`、`DISABLED`。省略时列表仅返回可选和草稿商品，统计也排除已停用商品。停用记录仍可按目录状态或 ID 查询，并继续占用规格唯一键。销售 `status` 取 1 在售、2 待上架、3 已下架、4 已停产，响应可为 null（未知）。分页从 1 开始，默认 20 条，最多 100 条。按更新时间和 ID 降序，`ascending=true` 时升序。更新时间按北京时间精确到秒。
+
+商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。商品响应包含本地 SKU、货品编号、标准商品名称、RAM、ROM、销售状态和目录状态。响应中的 `skuId` 为本地标准 SKU，`sourceSkuId` 为关联来源的吉客云 SKU 字符串。多条来源归并时，`sourceSkuId` 与 `sourceName` 均取本地来源 ID 最小的一条，名称使用来源原文 `goodsName`。缺少来源时两项均为 null。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
+
+自动清洗通过时，标准目录、来源 `goodsId` 和任务成员结果同事务写入。人工审核通过时，同事务保存标准目录、来源映射和审核信息，本轮任务成员保留当时的分流结果。自动清洗的审核人为空，人工审核记录实际操作人。重复处理复用同配置同颜色的商品。修改现有映射按来源版本校验，冲突返回 409。商品编辑及批量导入接口待接入。
+
+新增商品提交 `name`、`brandId`、`seriesId`、`modelName`、`ram`、`rom`、`colorId` 和销售 `status`，`edition` 可空。RAM 支持正整数 GB，ROM 支持正整数 GB、T 或 TB，省略单位时按 GB 处理。ROM 的 1T 与 1024GB 统一存为 1024GB。同品牌同机型版本必须归属同一系列，同机型版本、RAM、ROM 和颜色重复返回 409。新增商品目录状态为 ACTIVE，由服务端生成本地标准 SKU，来源关联和货号留空。
+
+## 商品数据字典
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | /api/admin/catalog/dictionary | 返回品牌、系列和颜色，含字符串 `id`、`parentId`、`type`、`name` 和引用标记 `inUse` |
+| POST | /api/admin/catalog/dictionary/{type} | 新增字典项。系列须传所属品牌的 `parentId`。成功返回 204 |
+| PUT | /api/admin/catalog/dictionary/{type}/{id} | 修改未被引用字典项的名称，提交 `name` 和读取时的 `expectedName`。成功返回 204 |
+| DELETE | /api/admin/catalog/dictionary/{type}/{id} | 删除未被引用的字典项，查询参数 `expectedName` 为读取时的名称。成功返回 204 |
+
+`type` 取 `brand`、`series`、`color`。系列创建后固定所属品牌。同名、引用或旧名称冲突返回 409。修改和删除在事务内检查当前名称和引用关系，外键保护已有映射。字典读写沿用公司管理员权限与写请求来源校验。
 
 ## 待接入的申请人目录
 

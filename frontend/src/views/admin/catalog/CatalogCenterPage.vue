@@ -1,25 +1,27 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
-import { useCatalogCenterPreview } from '../../../composables/useCatalogCenterPreview'
-import { useCatalogDictionaryPreview } from '../../../composables/useCatalogDictionaryPreview'
-import { catalogCenterSamples } from '../../../mocks/fixtures/catalog-center'
+import { useCatalogCenter } from '../../../composables/useCatalogCenter'
+import { useCatalogDictionary } from '../../../composables/useCatalogDictionary'
+import { CATALOG_SALES_STATES as statuses } from '../../../constants/catalog'
 import { catalogConfigLabel as specLabel } from '../../../utils/catalog-dictionary'
 import CatalogDictionaryPanel from './CatalogDictionaryPanel.vue'
 import CatalogPhonePreview from './CatalogPhonePreview.vue'
 import CatalogProductEditor from './CatalogProductEditor.vue'
 import './catalog-center.css'
 
-const statuses = {
-  active: { label: '在售', type: 'success' },
-  pending: { label: '待上架', type: 'warning' },
-  offline: { label: '已下架', type: 'info' },
-  stopped: { label: '已停产', type: 'info' },
-}
-const dictionary = useCatalogDictionaryPreview(catalogCenterSamples)
-const { entries: dictionaryEntries, saveEntry, removeEntry } = dictionary
 const {
-  usedEntryIds,
+  entries: dictionaryEntries,
+  loading: dictionaryLoading,
+  error: dictionaryError,
+  load: loadDictionary,
+  save: saveEntry,
+  remove: removeEntry,
+} = useCatalogDictionary()
+const {
   filters,
   applied,
   categoryKeyword,
@@ -28,52 +30,70 @@ const {
   activeOnly,
   seriesOptions,
   configurations,
-  categoryRows,
+  categoryTotal,
   categoryBranches,
-  matches,
+  total,
   visibleRows,
   page,
   size,
+  list,
+  summary,
+  detail: detailQuery,
+  detailId,
+  load,
+  loadSummary,
+  loadDetail,
+  createProduct,
+  deleteProduct,
   changeBrand,
+  changeSeries,
+  changeStatus,
+  changeConfig,
   search,
   reset,
   selectCategory,
   toggleActiveOnly,
   resize,
   sort,
-  savePreviewProduct,
-} = useCatalogCenterPreview(dictionary)
+} = useCatalogCenter()
+const { loading: listLoading, error: listError } = list
+const { loading: summaryLoading, error: summaryError } = summary
+const { data: detail, loading: detailLoading, error: detailError } = detailQuery
+const unknownStatus = { label: '未知', type: 'info' }
 
 const moreFilters = ref(false)
 const activeTab = ref('products')
 const categoryPanels = ref(window.matchMedia('(max-width: 600px)').matches ? [] : ['categories'])
 const collapsed = ref([])
+const expandedSeries = ref(new Set())
 const selected = ref([])
 const table = ref()
 const dialogOpen = ref(false)
 const dialogTitle = ref('')
 const dialogNote = ref('')
-const detail = ref(null)
 const productEditor = ref(null)
-const createNotice = ref('')
+const deletingProductId = ref('')
 const metrics = computed(() => [
   {
     label: '商品总数',
-    value: stats.value.total,
+    value: summaryLoading.value || summaryError.value ? '—' : stats.value.total,
     icon: 'box',
     tone: 'blue',
-    note: `覆盖 ${brands.value.length} 个品牌`,
+    note: summaryLoading.value || summaryError.value ? '' : `覆盖 ${brands.value.length} 个品牌`,
   },
   {
     label: '在售商品',
-    value: stats.value.active,
+    value: summaryLoading.value || summaryError.value ? '—' : stats.value.active,
     icon: 'check',
     tone: 'green',
-    note: `占全部商品 ${(stats.value.active / stats.value.total).toLocaleString('zh-CN', { style: 'percent', maximumFractionDigits: 1 })}`,
+    note:
+      summaryLoading.value || summaryError.value
+        ? ''
+        : `占全部商品 ${(stats.value.total ? stats.value.active / stats.value.total : 0).toLocaleString('zh-CN', { style: 'percent', maximumFractionDigits: 1 })}`,
   },
   {
     label: '已停产',
-    value: stats.value.stopped,
+    value: summaryLoading.value || summaryError.value ? '—' : stats.value.stopped,
     icon: 'stop',
     tone: 'slate',
     note: '历史机型 / 已终止销售',
@@ -91,45 +111,58 @@ const detailFields = computed(() => {
   const row = detail.value
   return row
     ? [
-        ['货号', row.id],
-        ['SKU', row.sku],
+        ['SKU ID', row.sku ?? '—'],
+        ['货号', row.productNo ?? '—'],
         ['来源名称', row.source || '—'],
         ['品牌 / 系列', `${row.brand} / ${row.series}`],
         ['配置', specLabel(row.config)],
         ['颜色', row.color],
-        ['版本', row.version],
+        ['版本', row.version || '—'],
         ['更新时间', `${row.date} ${row.time}`],
       ]
     : []
 })
 
-function toggleBranch(brand) {
-  collapsed.value = collapsed.value.includes(brand)
-    ? collapsed.value.filter((value) => value !== brand)
-    : [...collapsed.value, brand]
+function toggleBranch(key) {
+  collapsed.value = collapsed.value.includes(key)
+    ? collapsed.value.filter((value) => value !== key)
+    : [...collapsed.value, key]
+}
+
+function toggleSeries(id) {
+  if (expandedSeries.value.has(id)) {
+    expandedSeries.value.delete(id)
+  } else {
+    expandedSeries.value.add(id)
+  }
+}
+
+function selectSeries(brand, series) {
+  expandedSeries.value.add(series)
+  applyAndClear(selectCategory, brand, series)
 }
 
 function showDetail(row) {
-  detail.value = row
+  detailId.value = row.id
   dialogTitle.value = '商品详情'
   dialogNote.value = ''
   dialogOpen.value = true
 }
 
 function showNote(title, note) {
-  detail.value = null
+  detailId.value = ''
   dialogTitle.value = title
   dialogNote.value = note
   dialogOpen.value = true
 }
 
-function downloadSample(template = false) {
+function downloadProducts(template = false) {
   const headers = ['货号', 'SKU', '商品名称', '品牌', '系列', '机型', '配置', '颜色', '版本']
   const rows = template
     ? []
-    : matches.value.map((row) => [
-        row.id,
-        row.sku,
+    : visibleRows.value.map((row) => [
+        row.productNo ?? '',
+        row.sku ?? '',
         row.name,
         row.brand,
         row.series,
@@ -138,13 +171,15 @@ function downloadSample(template = false) {
         row.color,
         row.version,
       ])
-  const csv = [headers, ...rows]
-    .map((row) => row.map((value) => '"' + value.replaceAll('"', '""') + '"').join(','))
-    .join('\r\n')
+  const csvCell = (value) => {
+    const safe = /^[\s]*[=+@-]/.test(value) || /^[\t\r\n]/.test(value) ? "'" + value : value
+    return '"' + safe.replaceAll('"', '""') + '"'
+  }
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = template ? '商品导入模板-示例.csv' : '商品中心-示例数据.csv'
+  link.download = template ? '商品导入模板-示例.csv' : '商品中心-当前页.csv'
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
@@ -154,16 +189,72 @@ function applyAndClear(action, ...args) {
   action(...args)
 }
 
-function openProductEditor(product = null) {
-  createNotice.value = ''
-  productEditor.value = { product }
+async function copyProductNo(productNo) {
+  try {
+    await navigator.clipboard.writeText(productNo)
+    ElMessage.success('货号已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制货号')
+  }
 }
 
-function saveProduct(id, fields) {
-  const created = savePreviewProduct(id, fields)
-  if (created) {
-    activeTab.value = 'products'
-    createNotice.value = created.visible ? '已新增预览商品' : '已新增预览商品。重置筛选后可查看。'
+const editorEntries = computed(() => {
+  const row = productEditor.value?.product
+  if (!row) {
+    return dictionaryEntries.value
+  }
+  const selectedEntries = [
+    { id: row.brandId, type: 'brand', name: row.brand, parentId: null },
+    { id: row.seriesId, type: 'series', name: row.series, parentId: row.brandId },
+    { id: row.colorId, type: 'color', name: row.color, parentId: null },
+  ]
+  const existing = new Set(dictionaryEntries.value.map(({ id }) => id))
+  return [...dictionaryEntries.value, ...selectedEntries.filter(({ id }) => !existing.has(id))]
+})
+
+function refreshDictionary() {
+  if (!dictionaryLoading.value) {
+    void loadDictionary()
+  }
+}
+
+function openProductEditor(product = null) {
+  refreshDictionary()
+  productEditor.value = {
+    product: product && {
+      ...product,
+      brandId: 'brand-' + product.brandId,
+      seriesId: 'series-' + product.seriesId,
+      colorId: 'color-' + product.colorId,
+    },
+  }
+}
+function onProductCreated() {
+  ElMessage.success('商品已新增')
+}
+
+async function confirmDeleteProduct(row) {
+  if (deletingProductId.value) {
+    return
+  }
+  deletingProductId.value = row.id
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `确定删除「${row.name}」？确认后商品将停用，并从商品列表移除。`,
+        '删除商品',
+        { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+    await deleteProduct(row.id)
+    table.value?.toggleRowSelection(row, false)
+    ElMessage.success('商品已删除')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    deletingProductId.value = ''
   }
 }
 </script>
@@ -174,18 +265,17 @@ function saveProduct(id, fields) {
       <div>
         <div class="catalog-center-title">
           <h1 id="catalog-center-title">商品中心</h1>
-          <el-tag size="small" effect="light">静态预览</el-tag>
         </div>
         <p>集中查看手机商品、规格和销售状态</p>
       </div>
       <div class="catalog-center-actions">
-        <el-button size="small" @click="downloadSample(true)">
+        <el-button size="small" @click="downloadProducts(true)">
           <AppIcon name="download" :size="14" />
           下载导入模板
         </el-button>
         <el-button
           size="small"
-          @click="showNote('批量导入', '可下载示例模板查看字段。静态预览暂不导入商品。')"
+          @click="showNote('批量导入', '批量导入待接入，可先下载导入模板查看字段。')"
         >
           <AppIcon name="upload" :size="14" />
           批量导入
@@ -201,14 +291,16 @@ function saveProduct(id, fields) {
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item @click="downloadSample()">导出当前示例列表</el-dropdown-item>
+              <el-dropdown-item :disabled="!visibleRows.length" @click="downloadProducts()">
+                导出当前页
+              </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
     </header>
 
-    <div class="catalog-center-metrics" aria-label="示例商品统计">
+    <div class="catalog-center-metrics" aria-label="商品统计">
       <article
         v-for="metric in metrics"
         :key="metric.label"
@@ -227,16 +319,23 @@ function saveProduct(id, fields) {
       </article>
     </div>
 
-    <el-tabs v-model="activeTab" class="catalog-center-tabs" aria-label="商品中心视图">
+    <el-tabs
+      v-model="activeTab"
+      class="catalog-center-tabs"
+      aria-label="商品中心视图"
+      @tab-change="(tab) => tab === 'dictionary' && refreshDictionary()"
+    >
       <el-tab-pane label="商品列表" name="products">
         <el-alert
-          v-if="createNotice"
-          :title="createNotice"
-          type="success"
+          v-if="summaryError"
+          :title="summaryError.message"
+          type="error"
+          :closable="false"
           show-icon
           class="catalog-center-create-notice"
-          @close="createNotice = ''"
-        />
+        >
+          <el-button link type="primary" @click="loadSummary">重试读取商品统计</el-button>
+        </el-alert>
         <div class="catalog-center-grid">
           <el-collapse
             v-model="categoryPanels"
@@ -252,8 +351,8 @@ function saveProduct(id, fields) {
                   v-model="categoryKeyword"
                   size="small"
                   clearable
-                  aria-label="搜索品牌或系列"
-                  placeholder="搜索品牌或系列"
+                  aria-label="搜索品牌、系列或机型"
+                  placeholder="搜索品牌、系列或机型"
                 >
                   <template #prefix><AppIcon name="search" :size="14" /></template>
                 </el-input>
@@ -274,9 +373,12 @@ function saveProduct(id, fields) {
                 >
                   <AppIcon name="list" :size="14" />
                   全部商品
-                  <small>{{ categoryRows.length }}</small>
+                  <small>{{ categoryTotal }}</small>
                 </el-button>
-                <p v-if="!categoryBranches.length" class="catalog-center-category-empty">
+                <p
+                  v-if="!summaryLoading && !summaryError && !categoryBranches.length"
+                  class="catalog-center-category-empty"
+                >
                   暂无匹配分类
                 </p>
                 <div
@@ -308,20 +410,49 @@ function saveProduct(id, fields) {
                     </el-button>
                   </div>
                   <div v-show="categoryKeyword.trim() || !collapsed.includes(branch.brand)">
-                    <el-button
-                      v-for="series in branch.series"
-                      :key="series.name"
-                      text
-                      class="catalog-center-tree-row catalog-center-series"
-                      :aria-pressed="
-                        applied.brand === branch.brand && applied.series === series.name
-                      "
-                      @click="applyAndClear(selectCategory, branch.brand, series.name)"
-                    >
-                      <AppIcon name="box" :size="13" />
-                      {{ series.name }}
-                      <small>{{ series.count }}</small>
-                    </el-button>
+                    <div v-for="series in branch.series" :key="series.id">
+                      <div class="catalog-center-branch-heading catalog-center-series">
+                        <el-button
+                          v-if="series.models.length"
+                          text
+                          class="catalog-center-branch-toggle"
+                          :aria-label="`${series.name} 机型`"
+                          :aria-expanded="
+                            Boolean(categoryKeyword.trim()) || expandedSeries.has(series.id)
+                          "
+                          :disabled="Boolean(categoryKeyword.trim())"
+                          @click="toggleSeries(series.id)"
+                        >
+                          <AppIcon name="chevron" :size="14" />
+                        </el-button>
+                        <el-button
+                          text
+                          class="catalog-center-tree-row"
+                          :aria-pressed="applied.series === series.id && !applied.model"
+                          @click="selectSeries(branch.brand, series.id)"
+                        >
+                          <span class="catalog-center-category-name" :title="series.name">
+                            {{ series.name }}
+                          </span>
+                          <small>{{ series.count }}</small>
+                        </el-button>
+                      </div>
+                      <div v-show="categoryKeyword.trim() || expandedSeries.has(series.id)">
+                        <el-button
+                          v-for="model in series.models"
+                          :key="model.id"
+                          text
+                          class="catalog-center-tree-row catalog-center-model"
+                          :aria-pressed="applied.model === model.id"
+                          @click="applyAndClear(selectCategory, branch.brand, series.id, model.id)"
+                        >
+                          <span class="catalog-center-category-name" :title="model.name">
+                            {{ model.name }}
+                          </span>
+                          <small>{{ model.count }}</small>
+                        </el-button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -339,6 +470,7 @@ function saveProduct(id, fields) {
                   <el-input
                     v-model="filters.keyword"
                     clearable
+                    @clear="applyAndClear(search)"
                     maxlength="128"
                     aria-label="商品关键词"
                     placeholder="搜索商品名称、货号、SKU…"
@@ -351,14 +483,20 @@ function saveProduct(id, fields) {
                     :model-value="filters.brand"
                     placeholder="全部"
                     aria-label="品牌"
-                    @change="changeBrand"
+                    filterable
+                    @change="applyAndClear(changeBrand, $event)"
                   >
                     <el-option label="全部" value="" />
                     <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="商品状态">
-                  <el-select v-model="filters.status" placeholder="全部" aria-label="商品状态">
+                  <el-select
+                    :model-value="filters.status"
+                    placeholder="全部"
+                    aria-label="商品状态"
+                    @change="applyAndClear(changeStatus, $event)"
+                  >
                     <el-option label="全部" value="" />
                     <el-option
                       v-for="(state, key) in statuses"
@@ -393,18 +531,30 @@ function saveProduct(id, fields) {
                 class="catalog-center-filter-row catalog-center-extra"
               >
                 <el-form-item label="系列">
-                  <el-select v-model="filters.series" placeholder="全部" aria-label="系列">
+                  <el-select
+                    :model-value="filters.series"
+                    placeholder="全部"
+                    aria-label="系列"
+                    filterable
+                    @change="applyAndClear(changeSeries, $event)"
+                  >
                     <el-option label="全部" value="" />
                     <el-option
                       v-for="series in seriesOptions"
-                      :key="series"
-                      :label="series"
-                      :value="series"
+                      :key="series.seriesId"
+                      :label="series.seriesName"
+                      :value="series.seriesId"
                     />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="配置">
-                  <el-select v-model="filters.config" placeholder="全部" aria-label="配置">
+                  <el-select
+                    :model-value="filters.config"
+                    placeholder="全部"
+                    aria-label="配置"
+                    filterable
+                    @change="applyAndClear(changeConfig, $event)"
+                  >
                     <el-option label="全部" value="" />
                     <el-option
                       v-for="config in configurations"
@@ -418,14 +568,30 @@ function saveProduct(id, fields) {
             </el-form>
 
             <div class="catalog-center-panel catalog-center-table">
+              <el-alert
+                v-if="listError"
+                :title="listError.message"
+                type="error"
+                :closable="false"
+                show-icon
+              >
+                <el-button link type="primary" @click="load">重新读取</el-button>
+              </el-alert>
               <el-table
+                v-loading="listLoading"
                 ref="table"
                 :data="visibleRows"
                 row-key="id"
                 size="small"
                 border
                 aria-label="商品列表"
-                empty-text="暂无符合条件的商品"
+                :empty-text="
+                  listLoading
+                    ? '正在读取商品…'
+                    : listError
+                      ? '商品列表读取失败'
+                      : '暂无符合条件的商品'
+                "
                 :default-sort="{ prop: 'date', order: 'descending' }"
                 @sort-change="sort"
                 @selection-change="selected = $event"
@@ -433,13 +599,29 @@ function saveProduct(id, fields) {
                 <el-table-column type="selection" width="35" :resizable="false" reserve-selection />
                 <el-table-column
                   label="商品信息"
-                  min-width="124"
+                  min-width="160"
                   label-class-name="catalog-center-resizable"
                 >
                   <template #default="{ row }">
-                    <div class="catalog-center-item" :title="`货号 ${row.id} · SKU ${row.sku}`">
-                      <strong>{{ row.id }}</strong>
-                      <small>SKU {{ row.sku }}</small>
+                    <div
+                      class="catalog-center-item"
+                      :title="`SKU ID ${row.sku ?? '—'} · 货号 ${row.productNo ?? '—'}`"
+                    >
+                      <strong>{{ row.sku ?? '—' }}</strong>
+                      <div class="catalog-center-product-no">
+                        <small>货号 {{ row.productNo ?? '—' }}</small>
+                        <el-button
+                          v-if="row.productNo"
+                          link
+                          type="primary"
+                          class="catalog-center-copy"
+                          aria-label="复制货号"
+                          title="复制货号"
+                          @click.stop="copyProductNo(row.productNo)"
+                        >
+                          <AppIcon name="copy" :size="13" />
+                        </el-button>
+                      </div>
                     </div>
                   </template>
                 </el-table-column>
@@ -450,7 +632,6 @@ function saveProduct(id, fields) {
                 >
                   <template #default="{ row }">
                     <strong>{{ row.name }}</strong>
-                    <small>{{ specLabel(row.config) }} · {{ row.color }}</small>
                   </template>
                 </el-table-column>
                 <el-table-column
@@ -466,7 +647,7 @@ function saveProduct(id, fields) {
                     <span v-if="prop === 'config'" class="catalog-center-spec">
                       {{ specLabel(row.config) }}
                     </span>
-                    <template v-else>{{ row[prop] }}</template>
+                    <template v-else>{{ row[prop] || '—' }}</template>
                   </template>
                 </el-table-column>
                 <el-table-column
@@ -475,9 +656,13 @@ function saveProduct(id, fields) {
                   label-class-name="catalog-center-resizable"
                 >
                   <template #default="{ row }">
-                    <el-tag :type="statuses[row.status].type" size="small" disable-transitions>
+                    <el-tag
+                      :type="(statuses[row.status] ?? unknownStatus).type"
+                      size="small"
+                      disable-transitions
+                    >
                       <i class="catalog-center-dot"></i>
-                      {{ statuses[row.status].label }}
+                      {{ (statuses[row.status] ?? unknownStatus).label }}
                     </el-tag>
                   </template>
                 </el-table-column>
@@ -494,7 +679,7 @@ function saveProduct(id, fields) {
                     <small>{{ row.time }}</small>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="76" fixed="right" :resizable="false">
+                <el-table-column label="操作" width="102" fixed="right" :resizable="false">
                   <template #default="{ row }">
                     <div class="catalog-center-row-actions">
                       <el-button link type="primary" size="small" @click="showDetail(row)">
@@ -503,6 +688,15 @@ function saveProduct(id, fields) {
                       <el-button link type="primary" size="small" @click="openProductEditor(row)">
                         编辑
                       </el-button>
+                      <el-button
+                        link
+                        type="danger"
+                        size="small"
+                        :disabled="Boolean(deletingProductId)"
+                        @click="confirmDeleteProduct(row)"
+                      >
+                        删除
+                      </el-button>
                     </div>
                   </template>
                 </el-table-column>
@@ -510,14 +704,14 @@ function saveProduct(id, fields) {
               <footer class="catalog-center-footer">
                 <span aria-live="polite">
                   共
-                  <strong>{{ matches.length }}</strong>
+                  <strong>{{ total }}</strong>
                   条商品
                   <span v-if="selected.length">· 已选 {{ selected.length }} 条</span>
                 </span>
                 <el-pagination
                   v-model:current-page="page"
                   :page-size="size"
-                  :total="matches.length"
+                  :total="total"
                   :page-sizes="[10, 20, 30]"
                   :pager-count="5"
                   layout="prev, pager, next, sizes"
@@ -533,9 +727,11 @@ function saveProduct(id, fields) {
       <el-tab-pane label="数据字典" name="dictionary">
         <CatalogDictionaryPanel
           :entries="dictionaryEntries"
-          :used-entry-ids="usedEntryIds"
+          :loading="dictionaryLoading"
+          :load-error="dictionaryError?.message"
           :save-entry="saveEntry"
-          :remove-entry="(id) => removeEntry(id, usedEntryIds)"
+          :remove-entry="removeEntry"
+          @reload="refreshDictionary"
         />
       </el-tab-pane>
     </el-tabs>
@@ -544,9 +740,13 @@ function saveProduct(id, fields) {
       v-if="productEditor"
       :key="productEditor.product?.id ?? 'new-product'"
       :product="productEditor.product"
-      :entries="dictionaryEntries"
+      :entries="editorEntries"
+      :dictionary-loading="dictionaryLoading"
+      :dictionary-error="dictionaryError?.message"
+      @reload-dictionary="refreshDictionary"
       :statuses="statuses"
-      @save="saveProduct"
+      :create-product="createProduct"
+      @created="onProductCreated"
       @close="productEditor = null"
     />
 
@@ -555,19 +755,30 @@ function saveProduct(id, fields) {
       :title="dialogTitle"
       width="min(520px, calc(100% - 24px))"
       destroy-on-close
+      @close="detailId = ''"
     >
-      <div v-if="detail" class="catalog-center-detail">
-        <CatalogPhonePreview :tint="detail.tint" />
+      <p v-if="detailId && detailLoading" aria-live="polite">正在读取商品详情…</p>
+      <el-alert
+        v-else-if="detailId && detailError"
+        :title="detailError.message"
+        type="error"
+        :closable="false"
+        show-icon
+      >
+        <el-button link type="primary" @click="loadDetail">重新读取详情</el-button>
+      </el-alert>
+      <div v-else-if="detailId && detail" class="catalog-center-detail">
+        <CatalogPhonePreview tint="#7d9cbf" />
         <div>
           <strong>{{ detail.name }}</strong>
           <p>{{ specLabel(detail.config) }} · {{ detail.color }}</p>
         </div>
-        <el-tag :type="statuses[detail.status].type" size="small">
-          {{ statuses[detail.status].label }}
+        <el-tag :type="(statuses[detail.status] ?? unknownStatus).type" size="small">
+          {{ (statuses[detail.status] ?? unknownStatus).label }}
         </el-tag>
       </div>
       <p v-if="dialogNote">{{ dialogNote }}</p>
-      <dl v-if="detail" class="catalog-center-fields">
+      <dl v-if="detailId && detail" class="catalog-center-fields">
         <div v-for="[label, value] in detailFields" :key="label">
           <dt>{{ label }}</dt>
           <dd>{{ value }}</dd>

@@ -3,11 +3,9 @@ import {
   readActiveCleaningJob,
   readCleaningJob,
   readCleaningJobs,
-  readCleaningLogs,
   readCleaningPreview,
   readCleaningResults,
   readCleaningSource,
-  readCleaningSourceLogs,
   retryCleaningSource,
   reviewCleaningSource,
   startCleaningJob,
@@ -22,7 +20,6 @@ const previewDefaults = {
   createdDate: null,
   includeReviews: false,
 }
-const emptyLogs = { items: [], total: 0 }
 
 export function useCatalogCleaning() {
   const filters = reactive({ ...emptyFilters })
@@ -54,10 +51,6 @@ export function useCatalogCleaning() {
   const historySize = 10
   const active = ref(null)
   const progressError = ref('')
-  const logTarget = ref(null)
-  const logs = useLatestQuery()
-  const logsPage = ref(1)
-  const logsSize = 10
   const detailId = ref('')
   const detail = useLatestQuery()
   const reviewError = ref('')
@@ -217,9 +210,6 @@ export function useCatalogCleaning() {
       ) {
         void loadResults()
         void loadHistory()
-        if (logTarget.value?.type === 'job' && logTarget.value.id === previous?.id) {
-          void loadLogs()
-        }
       }
       progressError.value = ''
     } catch (error) {
@@ -348,22 +338,6 @@ export function useCatalogCleaning() {
     )
   }
 
-  function loadLogs() {
-    const target = logTarget.value
-    if (!target) {
-      return logs.run(async () => emptyLogs)
-    }
-    const read = target.type === 'job' ? readCleaningLogs : readCleaningSourceLogs
-    return logs.run((signal) => read(target.id, logsPage.value, logsSize, signal))
-  }
-
-  watch([logTarget, logsPage], loadLogs)
-
-  function openLogs(type, id) {
-    logsPage.value = 1
-    logTarget.value = { type, id }
-  }
-
   async function runWrite(name, operation, onError) {
     if (busy.value) {
       return false
@@ -447,11 +421,5 @@ export function useCatalogCleaning() {
     review,
     reviewError,
     reviewConflict,
-    logTarget,
-    logs,
-    logsPage,
-    logsSize,
-    openLogs,
-    loadLogs,
   }
 }

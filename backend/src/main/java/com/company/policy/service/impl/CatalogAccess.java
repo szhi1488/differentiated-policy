@@ -1,6 +1,6 @@
 package com.company.policy.service.impl;
 
-import com.company.policy.common.config.JackyunProperties;
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserInfoMapper;
@@ -15,9 +15,9 @@ class CatalogAccess {
     static final List<String> BRANDS = List.of("OPPO手机", "一加手机");
 
     private final UserInfoMapper users;
-    private final JackyunProperties config;
+    private final FeishuProperties config;
 
-    CatalogAccess(UserInfoMapper users, JackyunProperties config) {
+    CatalogAccess(UserInfoMapper users, FeishuProperties config) {
         this.users = users;
         this.config = config;
     }
@@ -31,12 +31,12 @@ class CatalogAccess {
             throw new ApiException(
                     HttpStatus.FORBIDDEN, "CATALOG_ADMIN_REQUIRED", "只有有效管理员可以访问商品管理。");
         }
-        if (!config.hasImportScope()) {
+        if (!config.hasCompanyTenant()) {
             throw new ApiException(
-                    HttpStatus.SERVICE_UNAVAILABLE, "CATALOG_SCOPE_MISSING", "请先配置吉客云账套与飞书租户的绑定。");
+                    HttpStatus.SERVICE_UNAVAILABLE, "CATALOG_SCOPE_MISSING", "请先配置公司飞书租户。");
         }
         if (!config.getTenantKey().equals(user.getTenantKey())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "CATALOG_SCOPE_DENIED", "当前租户未授权访问此商品账套。");
+            throw new ApiException(HttpStatus.FORBIDDEN, "CATALOG_SCOPE_DENIED", "当前飞书账号不属于本公司。");
         }
         return user;
     }

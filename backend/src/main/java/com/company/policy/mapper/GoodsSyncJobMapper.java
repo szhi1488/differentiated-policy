@@ -13,12 +13,12 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface GoodsSyncJobMapper {
     String FIELDS = "*, next_request_at <= CURRENT_TIMESTAMP AS ready";
-    String SCOPE = "tenant_key = #{tenantKey} AND source_key = #{sourceKey}";
+    String SCOPE = "source_key = #{sourceKey}";
     String DUE =
             "status IN ('QUEUED', 'RUNNING') AND next_request_at <= CURRENT_TIMESTAMP "
                     + "AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)";
     String OWNED =
-            "id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey} "
+            "id = #{job.id} AND source_key = #{job.sourceKey} "
                     + "AND status = 'RUNNING' AND record_version = #{job.recordVersion} "
                     + "AND worker_token = #{token} AND lease_until > CURRENT_TIMESTAMP";
 
@@ -30,10 +30,10 @@ public interface GoodsSyncJobMapper {
                     + " AND id = (SELECT MAX(id) FROM goods_sync_job WHERE "
                     + SCOPE
                     + " AND brand_name = #{brand})")
-    GoodsSyncJob latest(String tenantKey, String sourceKey, String brand);
+    GoodsSyncJob latest(String sourceKey, String brand);
 
     @Select("SELECT " + FIELDS + " FROM goods_sync_job WHERE " + SCOPE + " AND id = #{id}")
-    GoodsSyncJob find(String tenantKey, String sourceKey, long id);
+    GoodsSyncJob find(String sourceKey, long id);
 
     @Select(
             "SELECT "
@@ -41,7 +41,7 @@ public interface GoodsSyncJobMapper {
                     + " FROM goods_sync_job WHERE "
                     + SCOPE
                     + " AND idempotency_key = #{key}")
-    GoodsSyncJob findByKey(String tenantKey, String sourceKey, String key);
+    GoodsSyncJob findByKey(String sourceKey, String key);
 
     @Select(
             "SELECT "
@@ -53,14 +53,14 @@ public interface GoodsSyncJobMapper {
                     + " AND NOT EXISTS (SELECT 1 FROM goods_sync_job WHERE "
                     + SCOPE
                     + " AND status = 'CANCELLED' AND error_code IS NOT NULL AND next_request_at > CURRENT_TIMESTAMP)")
-    GoodsSyncJob findDue(String tenantKey, String sourceKey);
+    GoodsSyncJob findDue(String sourceKey);
 
     @Insert(
             """
         INSERT INTO goods_sync_job
-          (tenant_key, source_key, requester_id, brand_name, idempotency_key,
+          (source_key, requester_id, brand_name, idempotency_key,
            page_size, include_blockup, sync_mode, sync_date, sync_phase, next_request_at)
-        VALUES (#{job.tenantKey}, #{job.sourceKey}, #{job.requesterId}, #{job.brandName}, #{job.idempotencyKey},
+        VALUES (#{job.sourceKey}, #{job.requesterId}, #{job.brandName}, #{job.idempotencyKey},
            #{job.pageSize}, #{job.includeBlockup}, #{job.syncMode}, #{job.syncDate}, #{job.syncPhase},
            TIMESTAMPADD(SECOND, #{delaySeconds}, CURRENT_TIMESTAMP))
         """)
@@ -71,12 +71,12 @@ public interface GoodsSyncJobMapper {
             "SELECT MAX(next_request_at) > CURRENT_TIMESTAMP FROM goods_sync_job WHERE "
                     + SCOPE
                     + " AND status = 'CANCELLED' AND error_code IS NOT NULL")
-    Boolean coolingDown(String tenantKey, String sourceKey);
+    Boolean coolingDown(String sourceKey);
 
     @Insert(
             """
-        INSERT INTO catalog_operation_log (tenant_key, operator_id, operator_name, entity_type, entity_id, action_type)
-        VALUES (#{user.tenantKey}, #{user.id}, #{user.name}, 'SYNC_JOB', #{id}, #{action})
+        INSERT INTO catalog_operation_log (operator_id, operator_name, entity_type, entity_id, action_type)
+        VALUES (#{user.id}, #{user.name}, 'SYNC_JOB', #{id}, #{action})
         """)
     int audit(UserInfo user, long id, String action);
 
@@ -86,7 +86,7 @@ public interface GoodsSyncJobMapper {
           lease_until = TIMESTAMPADD(SECOND, 90, CURRENT_TIMESTAMP),
           started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
           fencing_token = fencing_token + 1, record_version = record_version + 1
-        WHERE id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+        WHERE id = #{job.id} AND source_key = #{job.sourceKey}
           AND record_version = #{job.recordVersion} AND
         """
                     + DUE)
@@ -133,7 +133,7 @@ public interface GoodsSyncJobMapper {
           error_code = CASE WHEN #{status} = 'CANCELLED' THEN error_code ELSE NULL END,
           finished_at = CASE WHEN #{status} = 'CANCELLED' THEN CURRENT_TIMESTAMP ELSE NULL END,
           record_version = record_version + 1
-        WHERE id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+        WHERE id = #{job.id} AND source_key = #{job.sourceKey}
           AND record_version = #{job.recordVersion} AND status = 'PAUSED'
           AND (#{status} = 'CANCELLED' OR next_request_at <= CURRENT_TIMESTAMP)
         """)

@@ -1,6 +1,6 @@
 # 系统整体架构
 
-更新日期：2026-11-12。源码现状与已确认但未实现能力分别标注。
+更新日期：2026-11-13。源码现状与已确认但未实现能力分别标注。
 
 商品读取已接入后端 `JackyunGoodsService`，并实测一加、OPPO 两品牌的单页查询及续拉。已实现按 SKU 更新原文、建档日追溯、手动启动清洗及异常审核。管理员在源商品库右上角打开导入弹窗，选品牌并发起全量或按建档日期导入。[商品方案](catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
@@ -8,7 +8,7 @@
 
 系统是嵌入飞书的公司内部 ERP，支持飞书客户端和普通浏览器访问，包含申请人与采购管理员两类角色。客户端通过 JS-SDK 免登，浏览器提供飞书扫码与网页 OAuth 授权，使用同一套服务端身份核验及会话。先完成申请、审核、查询闭环；不扩展结算、打款、库存或多级审批。
 
-飞书登录后按服务端 `user.roleType` 分流。ADMIN 进入「商品 → 源商品库」，其他角色沿用申请人工作台。申请人侧栏为「政策提交 → 提交政策 / 我的提交」，同一表单切换零售和百亿。管理员可从商品导航打开「商品清洗与识别」查看实际任务和处理结果，也可打开「商品中心」查看静态原型。[管理员工作台](admin-workspace.md)
+飞书登录后按服务端 `user.roleType` 分流。ADMIN 进入「商品 → 源商品库」，其他角色沿用申请人工作台。申请人侧栏为「政策提交 → 提交政策 / 我的提交」，同一表单切换零售和百亿。管理员可从商品导航打开「商品清洗与识别」查看实际任务和处理结果，也可打开「商品中心」查看标准商品。[管理员工作台](admin-workspace.md)
 
 ```mermaid
 flowchart LR
@@ -22,7 +22,7 @@ flowchart LR
     S --> L[飞书鉴权 API]
 ```
 
-现有源码已接入用户和旧商品同步、清洗结构。十四表空库基线的标准商品写入待适配。政策三表的 Mapper、Service 和 Controller 尚未实现。
+用户、源商品导入、手动清洗、审核及标准商品目录查询与维护已接入十四表空库基线。政策三表的 Mapper、Service 和 Controller 尚未实现。
 
 吉客云只读服务独立于页面和数据库写入。服务端按 `brandName` 请求单页，校验返回品牌和游标顺序，向后续同步任务提供 SKU 原文、分类路径、修改时间、状态和下一页游标。[单页查询联调](catalog-admin-design.md#单页查询联调)
 
@@ -47,8 +47,8 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 | `src/App.vue` | ConfigProvider 配置中文，统一会话按角色加载工作台 |
 | `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
 | `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 单一商品导航、分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
-| `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和日志 |
-| `views/admin/catalog/CatalogCenterPage.vue` | 独立静态预览，使用本地示例商品展示统计、分类、列表和详情 |
+| `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和任务结果统计 |
+| `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、停用和字典维护 |
 | `views/apply/PolicyApplicationPage.vue` | `/apply` 页面入口，组装基础信息、时间、明细与附件区块；工作台确认渠道切换、取消平台及清空表单 |
 | `views/apply/components/PolicyDetailsTable.vue` | Table 使用稳定行 key、横向滚动和右侧固定操作列；Input、Select 编辑明细，Empty 显示无明细提示 |
 | `layouts/ApplicantLayout.vue` | 保留业务侧栏和横幅；持有表单状态，路由切换保留填写；身份变化及失效清理 |
@@ -76,7 +76,7 @@ frontend/src/
   views/auth/                  飞书登录页
   views/apply/                 政策申请页及我的提交占位页
     components/                基础、时间、明细和附件表单区块
-  views/admin/catalog/         源商品库、商品清洗与识别
+  views/admin/catalog/         源商品库、商品清洗与识别、商品中心
 
 backend/src/main/java/com/company/policy/
   controller/                  请求、校验与接口说明
@@ -108,7 +108,7 @@ backend/src/main/java/com/company/policy/
 
 ## 当前实现与验证边界
 
-源商品库与商品清洗均已接入后端。2026-11-12 的导入弹窗改版通过前端 68 项测试及生产构建，Chrome 模拟管理员在桌面、平板和手机尺寸完成弹窗、筛选和路由往返验收。建档日后端在隔离 H2 通过 70 项测试，2 项外部环境测试跳过。[管理员工作台](admin-workspace.md)
+商品模块的历次验证见管理员工作台。2026-11-13 商品停用迭代的 Maven verify 通过 77 项，跳过 2 项外部环境测试。后续即时筛选迭代通过前端 72 项测试及生产构建，Chrome 使用模拟会话和商品接口验证桌面、平板和手机布局。目标 MySQL 和真实飞书会话留待联调。[管理员工作台](admin-workspace.md)
 
 前序工作台和申请布局重构的验证记录见前端规范，真实飞书授权与扫码验证按身份流程单独记录。[前端规范第 9 节](frontend-development.md#9-验证记录与维护) · [飞书鉴权](feishu-auth-flow.md)
 
@@ -123,10 +123,11 @@ backend/src/main/java/com/company/policy/
 | 机型读取、共享补贴批量操作、上传 | 待接入 |
 | 吉客云货品读取 | 已实测两品牌查询和续拉。服务端支持全量、按建档日和按修改日，同 SKU 更新原行 |
 | 管理员源商品库 | 导入弹窗支持全量和按建档日，提供续跑、建档日查看和组合筛选分页 |
-| 管理员商品清洗 | 已接入手动清洗、SKU 预览、跨品牌结果、审核、重试和日志 |
+| 管理员商品中心 | 已接入列表、详情、统计、三级分类、即时筛选、手工新增、停用及字典维护；商品修改保存和标准商品批量导入待接入 |
+| 管理员商品清洗 | 已接入手动清洗、SKU 预览、跨品牌结果、审核、重试和任务统计 |
 | 审核、覆盖计算和生效 | 待实现，覆盖口径待确认；展示版不执行决定 |
 
-项目未启用 Flyway 或自动建表。本次由用户在 Navicat 对空库执行十四表基线，应用适配新表后再联调。目标库结构和实际导入结果以用户提供的 Navicat 或运行页面结果为准。[数据库设计与字段字典](../sql/database-design.md)
+项目未启用 Flyway 或自动建表。本次由用户在 Navicat 对空库执行十四表基线，应用已适配基线，目标库待联调。目标库结构和实际导入结果以用户提供的 Navicat 或运行页面结果为准。[数据库设计与字段字典](../sql/database-design.md)
 
 此前 2026-11-10 代码检查记录：前端 27 项测试及 lint、格式、构建通过；后端 40 项常规测试及打包、Spotless 通过，1 项真实 MySQL 专项当轮跳过。更早真实 MySQL 回滚及独立 HTTP 检查通过。这些是既往记录，本次文档整理不代表重新运行。命令及验证范围见 [项目 README](../../README.md)。
 

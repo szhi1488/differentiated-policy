@@ -8,7 +8,7 @@
 
 当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`。管理员可在「商品 → 源商品库」分别导入 OPPO、一加，查询当前 SKU 原文、完整分类路径和修改时间，或在「商品 → 商品清洗与识别」启动清洗并处理异常。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。[管理员工作台](docs/architecture/admin-workspace.md)
 
-已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。管理员业务接口尚未开发。
+已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。商品管理接口已接入十四表基线，政策提交和审核接口待接入。
 
 后端包结构约定：`controller` 接收请求，`dto` 定义请求对象，`vo` 定义响应对象，`entity` 映射数据库，`mapper` 执行持久化操作。服务接口放在 `service`，对应实现放在 `service.impl` 并命名为 `接口名Impl`；Controller 和服务之间通过接口注入，组件及事务注解放在实现类。`common.config` 负责配置注册，`common.interceptor` 承担登录态与请求来源校验。登录 challenge 响应独立为 `LoginChallengeResponse`。
 
@@ -86,11 +86,11 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。应用适配公司共用目录及清洗结果写入后再接入新库。空库首次登录生成申请人账号，管理员角色由用户在 Navicat 对已确认账号配置后重新登录。
-2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `JACKYUN_TENANT_KEY` 为授权管理员的 `user_info.tenant_key`。`JACKYUN_SOURCE_KEY` 是本地账套标识，默认 `jackyun`；更换实际账套时用新标识，避免混用原文及断点。
+1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。使用适配十四表基线的后端连接新库。空库首次登录生成申请人账号，管理员角色由用户在 Navicat 对已确认账号配置后重新登录。
+2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `FEISHU_TENANT_KEY` 为公司的飞书租户标识，原有 `JACKYUN_TENANT_KEY` 可回退使用。`JACKYUN_SOURCE_KEY` 是稳定的本地账套标识，默认 `jackyun`。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 
-首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。导入完成后，管理员在清洗页面选择品牌和建档日范围，预览 SKU 后二次确认。清洗记录可查看任务进度，结果页可跨品牌查询、审核和重试。公司内管理员共用商品数据，新基线只保存清洗结果和任务进度。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
+首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。导入完成后，管理员在清洗页面选择品牌和建档日范围，预览 SKU 后二次确认。清洗记录可查看任务进度，结果页可跨品牌查询、审核和重试。「商品中心」分页查看标准商品及详情。公司内管理员共用商品数据，新基线只保存清洗结果和任务进度。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
 
 仅核对 API 时，可在 `backend/` 将凭证临时设为进程环境变量，设置 `JACKYUN_LIVE_CHECK=1`，运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dtest=JackyunGoodsLiveTest' test`。该测试每品牌查询 3 条，只输出字段统计，不连接数据库。
 
@@ -98,7 +98,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 后续功能迭代、缺陷修复和代码审查先读 [AGENTS.md](AGENTS.md) 与 [AI 辅助全栈开发规范](docs/architecture/ai-development.md)，其中包含代码示例、跨层契约、测试要求和迭代需求模板。
 
-前端开发从 [frontend/README.md](frontend/README.md) 进入，目录职责、组件数据流、接口模型、会话路由、样式及整改验收见[前端架构与开发规范](docs/architecture/frontend-development.md)。前三阶段适用整改已实施，政策与商品业务接口接入仍待完成；当前能力以源码和整体架构的实现记录为准。
+前端开发从 [frontend/README.md](frontend/README.md) 进入，目录职责、组件数据流、接口模型、会话路由、样式及整改验收见[前端架构与开发规范](docs/architecture/frontend-development.md)。前三阶段适用整改已实施，管理员商品链路已接入，政策业务接口待完成；当前能力以源码和整体架构的实现记录为准。
 
 九张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 

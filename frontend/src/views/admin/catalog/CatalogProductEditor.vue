@@ -2,28 +2,43 @@
 import { reactive, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message-box/style/css'
-import { CATALOG_CONFIG_PATTERN, dictionaryOptions } from '../../../utils/catalog-dictionary'
+import {
+  CATALOG_RAM_PATTERN,
+  CATALOG_ROM_PATTERN,
+  catalogConfigLabel,
+  dictionaryOptions,
+} from '../../../utils/catalog-dictionary'
 
 const props = defineProps({
   product: { type: Object, default: null },
   entries: { type: Array, required: true },
   statuses: { type: Object, required: true },
+  createProduct: { type: Function, required: true },
+  dictionaryLoading: Boolean,
+  dictionaryError: { type: String, default: '' },
 })
-const emit = defineEmits(['save', 'close'])
+const emit = defineEmits(['created', 'close', 'reload-dictionary'])
+const readOnly = Boolean(props.product)
+const [ram = '', rom = ''] = props.product
+  ? catalogConfigLabel(props.product.config).split('+')
+  : []
 
 const initial = {
   name: props.product?.name ?? '',
   brandId: props.product?.brandId ?? '',
   seriesId: props.product?.seriesId ?? '',
   model: props.product?.model ?? '',
-  config: props.product?.config ?? '',
+  ram,
+  rom,
   colorId: props.product?.colorId ?? '',
   version: props.product?.version ?? '',
-  status: props.product?.status ?? 'pending',
+  status: props.product ? props.product.status : 'pending',
 }
 const draft = reactive({ ...initial })
 const form = ref()
 const open = ref(true)
+const saving = ref(false)
+const saveError = ref('')
 const required = (label) => ({
   required: true,
   whitespace: true,
@@ -35,16 +50,12 @@ const rules = {
   brandId: { required: true, message: '请选择品牌', trigger: 'change' },
   seriesId: { required: true, message: '请选择系列', trigger: 'change' },
   model: required('机型'),
-  config: [
-    required('配置'),
-    {
-      pattern: CATALOG_CONFIG_PATTERN,
-      message: '请填写内存+存储容量，例如 12+256',
-      trigger: 'blur',
-    },
+  ram: [required('RAM'), { pattern: CATALOG_RAM_PATTERN, message: '例如 12GB', trigger: 'blur' }],
+  rom: [
+    required('ROM'),
+    { pattern: CATALOG_ROM_PATTERN, message: '例如 256GB 或 1T', trigger: 'blur' },
   ],
   colorId: { required: true, message: '请选择颜色', trigger: 'change' },
-  version: required('版本'),
   status: { required: true, message: '请选择商品状态', trigger: 'change' },
 }
 
@@ -54,26 +65,40 @@ function changeBrand(brandId) {
   form.value?.clearValidate('seriesId')
 }
 
-function save() {
-  form.value?.validate((valid) => {
-    if (!valid) {
+async function save() {
+  if (readOnly || saving.value || props.dictionaryLoading || props.dictionaryError) {
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  try {
+    if (!(await form.value?.validate().catch(() => false))) {
       return
     }
-    emit('save', props.product?.id ?? null, {
+    const created = await props.createProduct({
       name: draft.name.trim(),
-      brandId: draft.brandId,
-      seriesId: draft.seriesId,
-      model: draft.model.trim(),
-      config: draft.config.replace(/\s/g, ''),
-      colorId: draft.colorId,
-      version: draft.version.trim(),
-      status: draft.status,
+      brandId: draft.brandId.slice('brand-'.length),
+      seriesId: draft.seriesId.slice('series-'.length),
+      modelName: draft.model.trim(),
+      edition: draft.version.trim(),
+      ram: draft.ram.trim(),
+      rom: draft.rom.trim(),
+      colorId: draft.colorId.slice('color-'.length),
+      status: props.statuses[draft.status].code,
     })
+    emit('created', created)
     open.value = false
-  })
+  } catch (error) {
+    saveError.value = error.message
+  } finally {
+    saving.value = false
+  }
 }
 
 async function close(done) {
+  if (saving.value) {
+    return
+  }
   if (Object.keys(initial).some((field) => draft[field] !== initial[field])) {
     try {
       await ElMessageBox.confirm('当前商品有未保存的修改，确定放弃吗？', '放弃修改', {
@@ -100,34 +125,36 @@ async function close(done) {
     size="min(480px, 100%)"
     :close-on-click-modal="false"
     :before-close="close"
+    :show-close="!saving"
+    :close-on-press-escape="!saving"
     @closed="emit('close')"
   >
     <div class="catalog-product-editor">
       <div v-if="product" class="catalog-product-editor-identity">
         <strong>{{ product.name }}</strong>
-        <span>货号 {{ product.id }} · SKU {{ product.sku }}</span>
+        <span>SKU ID {{ product.sku ?? '—' }} · 货号 {{ product.productNo ?? '—' }}</span>
       </div>
-      <p class="catalog-product-editor-note">
-        {{
-          product
-            ? '修改仅保留在当前预览页面。'
-            : '保存时生成示例货号和 SKU，仅保留在当前预览页面。'
-        }}
-      </p>
+      <p v-if="readOnly" class="catalog-product-editor-note">商品修改待接入。</p>
+      <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" show-icon />
+      <el-alert v-if="dictionaryError" :title="dictionaryError" type="error" :closable="false">
+        <el-button link type="primary" @click="emit('reload-dictionary')">重新读取字典</el-button>
+      </el-alert>
       <el-form
         ref="form"
         :model="draft"
         :rules="rules"
+        :disabled="readOnly || saving"
         label-position="top"
         class="catalog-product-editor-form"
         @submit.prevent="save"
       >
         <el-form-item label="商品名称" prop="name" class="catalog-product-editor-wide">
-          <el-input v-model="draft.name" maxlength="80" />
+          <el-input v-model="draft.name" maxlength="384" />
         </el-form-item>
         <el-form-item label="品牌" prop="brandId">
           <el-select
             :model-value="draft.brandId"
+            :loading="dictionaryLoading"
             placeholder="选择品牌"
             filterable
             @update:model-value="changeBrand"
@@ -157,10 +184,13 @@ async function close(done) {
           </el-select>
         </el-form-item>
         <el-form-item label="机型" prop="model">
-          <el-input v-model="draft.model" maxlength="40" />
+          <el-input v-model="draft.model" maxlength="100" />
         </el-form-item>
-        <el-form-item label="配置（GB）" prop="config">
-          <el-input v-model.trim="draft.config" maxlength="12" placeholder="例如 12+256" />
+        <el-form-item label="RAM（运行内存）" prop="ram">
+          <el-input v-model.trim="draft.ram" maxlength="20" placeholder="例如 12GB" />
+        </el-form-item>
+        <el-form-item label="ROM（存储容量）" prop="rom">
+          <el-input v-model.trim="draft.rom" maxlength="20" placeholder="例如 256GB 或 1T" />
         </el-form-item>
         <el-form-item label="颜色" prop="colorId">
           <el-select
@@ -178,10 +208,10 @@ async function close(done) {
           </el-select>
         </el-form-item>
         <el-form-item label="版本" prop="version">
-          <el-input v-model="draft.version" maxlength="30" />
+          <el-input v-model="draft.version" maxlength="64" placeholder="可选" />
         </el-form-item>
         <el-form-item label="商品状态" prop="status" class="catalog-product-editor-wide">
-          <el-select v-model="draft.status">
+          <el-select v-model="draft.status" :placeholder="readOnly ? '未知' : '选择商品状态'">
             <el-option
               v-for="(status, key) in statuses"
               :key="key"
@@ -193,8 +223,16 @@ async function close(done) {
       </el-form>
     </div>
     <template #footer>
-      <el-button @click="close()">取消</el-button>
-      <el-button type="primary" @click="save">保存</el-button>
+      <el-button :disabled="saving" @click="close()">{{ readOnly ? '关闭' : '取消' }}</el-button>
+      <el-button
+        v-if="!readOnly"
+        type="primary"
+        :loading="saving"
+        :disabled="dictionaryLoading || Boolean(dictionaryError)"
+        @click="save"
+      >
+        保存
+      </el-button>
     </template>
   </el-drawer>
 </template>

@@ -8,6 +8,7 @@ import lombok.Data;
 @Data
 public class SourceGoodsItem {
     private Long id;
+    private String sourceKey;
     private String brandName;
     private String goodsName;
     private String goodsNo;
@@ -30,10 +31,13 @@ public class SourceGoodsItem {
     private String cleanErrorCode;
     private String mappingStatus;
     private String mappingOrigin;
-    private Long catalogVariantId;
-    private Long variantColorId;
+    private Long catalogBrandId;
+    private Long goodsId;
     private int recordVersion;
     private LocalDateTime cleanedAt;
+    private Long reviewedBy;
+    private LocalDateTime reviewedAt;
+    private String reviewReason;
 
     public Goods original() {
         return new Goods(

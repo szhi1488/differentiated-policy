@@ -1,5 +1,12 @@
 export const GOODS_BRANDS = ['OPPO手机', '一加手机']
 
+export const CATALOG_SALES_STATES = {
+  active: { code: 1, label: '在售', type: 'success' },
+  pending: { code: 2, label: '待上架', type: 'warning' },
+  offline: { code: 3, label: '已下架', type: 'info' },
+  stopped: { code: 4, label: '已停产', type: 'info' },
+}
+
 export const GOODS_CLEAN_RESULTS = {
   AUTO_PASSED: { label: '自动通过', tone: 'passed', icon: 'check' },
   REVIEW_REQUIRED: { label: '待人工审核', tone: 'review', icon: 'alert' },
@@ -15,19 +22,6 @@ export const GOODS_CLEAN_JOB_LABELS = {
   COMPLETED: '清洗完成',
   PARTIAL: '部分未完成',
   FAILED: '清洗失败',
-  INTERRUPTED: '旧任务已中断',
-}
-
-export const GOODS_CLEAN_LOG_ACTIONS = {
-  START: '开始清洗',
-  CLEAN_AUTO: '自动通过',
-  CLEAN_REVIEW: '转人工审核',
-  CLEAN_ERROR: '技术失败',
-  CLEAN_RETRY: '重试',
-  CLEAN_SKIP: '源商品已更新',
-  CORRECT: '人工通过',
-  EXCLUDE: '确认排除',
-  UPDATE: '更新源商品',
 }
 
 export const GOODS_SYNC_STATUS = {
@@ -41,6 +35,7 @@ export const GOODS_SYNC_STATUS = {
 export const GOODS_SYNC_ERRORS = {
   CATALOG_INVALID_SKU: '吉客云未返回有效 SKU ID，任务已保留导入断点。',
   CATALOG_SKU_BRAND_CONFLICT: '同一个 SKU ID 已归属其他品牌，请核对吉客云分类。',
+  CATALOG_SKU_SOURCE_CONFLICT: '同一个 SKU ID 已归属其他账套，请核对服务端配置。',
   JACKYUN_RATE_LIMITED: '吉客云限制了请求频率，冷却结束后可继续。',
   JACKYUN_BUSINESS_ERROR: '吉客云拒绝了请求，请检查接口授权或账套配置。',
   JACKYUN_HTTP_ERROR: '吉客云响应异常，请检查服务状态。',

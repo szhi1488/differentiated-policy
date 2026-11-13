@@ -38,6 +38,7 @@ server:
     include-message: never
     include-stacktrace: never
 feishu:
+  tenant-key: ${FEISHU_TENANT_KEY:${JACKYUN_TENANT_KEY:}}
   app-id: ${FEISHU_APP_ID:cli_aa64531940e15c1e}
   app-secret: ${FEISHU_APP_SECRET:}
   allowed-origins: ${FEISHU_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
@@ -45,7 +46,6 @@ jackyun:
   app-key: ${JACKYUN_APP_KEY:}
   app-secret: ${JACKYUN_APP_SECRET:}
   token: ${JACKYUN_TOKEN:}
-  tenant-key: ${JACKYUN_TENANT_KEY:}
   source-key: ${JACKYUN_SOURCE_KEY:jackyun}
   import-interval-seconds: ${JACKYUN_IMPORT_INTERVAL_SECONDS:5}
   import-max-pages: ${JACKYUN_IMPORT_MAX_PAGES:2000}

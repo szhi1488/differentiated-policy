@@ -15,7 +15,7 @@ const props = defineProps({
   error: { type: String, default: '' },
   reviewError: { type: String, default: '' },
 })
-const emit = defineEmits(['close', 'reload', 'review', 'history'])
+const emit = defineEmits(['close', 'reload', 'review'])
 const originalFields = RAW_GOODS_FIELDS.flatMap((field) =>
   field[0] === 'cateName' ? [field, CATEGORY_PATH_FIELD] : [field],
 )
@@ -102,6 +102,12 @@ function reject() {
         <el-descriptions-item v-if="detail.candidate?.edition" label="商品版本">
           {{ detail.candidate.edition }}
         </el-descriptions-item>
+        <el-descriptions-item v-if="detail.goodsId" label="标准商品 ID">
+          {{ detail.goodsId }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detail.reviewedAt" label="最近审核">
+          {{ detail.reviewReason }} · {{ detail.reviewedAt }}
+        </el-descriptions-item>
         <el-descriptions-item label="识别说明">{{ row.evidence || '—' }}</el-descriptions-item>
         <el-descriptions-item v-if="detail.candidate?.evidence?.length" label="命中证据">
           <ul class="cleaning-evidence">
@@ -137,7 +143,6 @@ function reject() {
     <template #footer>
       <div class="cleaning-dialog-footer">
         <div class="cleaning-page-actions">
-          <el-button v-if="row" :disabled="busy" @click="emit('history')">处理记录</el-button>
           <el-button :disabled="busy" @click="emit('close')">关闭</el-button>
         </div>
         <div v-if="reviewable" class="cleaning-page-actions">

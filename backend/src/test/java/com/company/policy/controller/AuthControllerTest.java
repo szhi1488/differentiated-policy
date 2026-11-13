@@ -28,6 +28,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
         properties = {
             "spring.config.import=",
             "feishu.app-id=test-app",
+            "feishu.tenant-key=tenant-test",
             "feishu.app-secret=test-secret",
             "feishu.allowed-origins=http://localhost:5173"
         })
@@ -55,6 +56,27 @@ class AuthControllerTest {
                 .thenReturn(
                         mapper.readTree(
                                 "{\"code\":0,\"data\":{\"open_id\":\"ou_verified\",\"tenant_key\":\"tenant-test\",\"name\":\"测试用户\"}}"));
+    }
+
+    @Test
+    void rejectsAnotherCompanyBeforeSavingOrEstablishingEitherSession() throws Exception {
+        when(transport.getUserInfo("private-token"))
+                .thenReturn(
+                        mapper.readTree(
+                                """
+                    {"code":0,"data":{"open_id":"ou_foreign","tenant_key":"other-company","name":"其他公司用户"}}
+                    """));
+        var client = new MockHttpSession();
+        var browser = new MockHttpSession();
+        mvc.perform(login(client, challenge(client)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FEISHU_TENANT_DENIED"));
+        mvc.perform(browserLogin(browser, browserState(browser)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FEISHU_TENANT_DENIED"));
+        mvc.perform(get("/api/auth/session").session(client)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/auth/session").session(browser)).andExpect(status().isUnauthorized());
+        verifyNoInteractions(users);
     }
 
     private MockHttpServletRequestBuilder mutation(String path) {

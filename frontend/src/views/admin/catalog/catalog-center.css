@@ -166,6 +166,7 @@
 }
 .catalog-center-tree-row > span {
   flex: 1;
+  min-width: 0;
 }
 .catalog-center-tree-row small {
   margin-left: auto;
@@ -178,7 +179,15 @@
   font-weight: 700;
 }
 .catalog-center .catalog-center-series {
-  padding-left: 21px;
+  padding-left: 16px;
+}
+.catalog-center .catalog-center-model {
+  padding-left: 37px;
+}
+.catalog-center-category-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .catalog-center .catalog-center-branch-toggle {
   padding: 0 3px;
@@ -210,10 +219,11 @@
   margin: 0;
 }
 .catalog-center-keyword {
-  flex: 1 1 175px;
+  flex: 0 1 260px;
+  min-width: 0;
 }
 .catalog-center-filter-row .el-select {
-  width: 79px;
+  width: 104px;
 }
 .catalog-center-filter-actions {
   margin-left: auto;
@@ -224,7 +234,7 @@
   border-top: 1px solid var(--center-line);
 }
 .catalog-center-extra .el-select {
-  width: 112px;
+  width: 144px;
 }
 .catalog-center-table {
   flex: 1;
@@ -273,9 +283,26 @@
 .catalog-center-item {
   white-space: nowrap;
 }
+.catalog-center-item strong,
 .catalog-center-item small {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.catalog-center-product-no {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.catalog-center .catalog-center-copy {
+  flex: none;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+}
+.catalog-center-copy:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 .catalog-center-spec {
   font-size: 11px;

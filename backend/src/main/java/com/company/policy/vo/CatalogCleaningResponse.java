@@ -2,7 +2,6 @@ package com.company.policy.vo;
 
 import com.company.policy.vo.JackyunGoodsPage.Goods;
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -28,7 +27,6 @@ public final class CatalogCleaningResponse {
             boolean includeReviews,
             String targetSourceId,
             String status,
-            boolean legacy,
             String requesterName,
             @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime createdAt,
             long total,
@@ -83,19 +81,11 @@ public final class CatalogCleaningResponse {
             Goods original,
             Candidate candidate,
             String mappingStatus,
-            String catalogVariantId,
-            String variantColorId) {}
-
-    public record Log(
-            String id,
-            String sourceId,
-            String actorType,
-            String operatorName,
-            String action,
-            String reason,
-            JsonNode before,
-            JsonNode after,
-            @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime createdAt) {}
+            String catalogBrandId,
+            String goodsId,
+            String reviewedBy,
+            @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime reviewedAt,
+            String reviewReason) {}
 
     public record Page<T>(List<T> items, long total) {}
 

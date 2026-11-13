@@ -36,6 +36,32 @@ SELECT source_key, COUNT(*) AS active_jobs
 FROM catalog_clean_job WHERE status = 'RUNNING'
 GROUP BY source_key HAVING COUNT(*) > 1;
 
+-- 清洗后检查最近任务的本轮结果，人工审核结果另保存在来源行。
+SELECT job.id, job.brand_name, job.status, COUNT(item.source_id) AS total,
+       COUNT(CASE WHEN item.outcome = 'AUTO_PASSED' THEN 1 END) AS auto_passed,
+       COUNT(CASE WHEN item.outcome = 'REVIEW_REQUIRED' THEN 1 END) AS review_required,
+       COUNT(CASE WHEN item.outcome = 'ERROR' THEN 1 END) AS errors,
+       COUNT(CASE WHEN item.outcome = 'SKIPPED' THEN 1 END) AS skipped
+FROM (SELECT id, brand_name, status FROM catalog_clean_job ORDER BY id DESC LIMIT 20) job
+LEFT JOIN catalog_clean_job_item item ON item.job_id = job.id
+GROUP BY job.id, job.brand_name, job.status
+ORDER BY job.id DESC;
+
+-- 对照来源、最近审核与商品中心。多条来源可指向同一个 goods_id。
+SELECT item.id AS source_id, item.sku_id AS source_sku, item.goods_no AS source_goods_no,
+       item.clean_status, item.reviewed_by, item.reviewed_at, item.review_reason,
+       g.id AS goods_id, g.sku_id AS catalog_sku, g.product_no, g.goods_name,
+       b.name AS brand_name, s.name AS series_name, p.name AS model_name, p.edition,
+       g.ram, g.rom, c.color_name, g.catalog_status, g.status AS sales_status
+FROM source_goods_item item
+JOIN goods g ON g.id = item.goods_id AND g.brand_id = item.catalog_brand_id
+JOIN brand b ON b.id = g.brand_id
+JOIN series s ON s.id = g.series_id
+JOIN spu p ON p.id = g.spu_id
+JOIN color_dict c ON c.id = g.color_id
+ORDER BY item.id DESC
+LIMIT 30;
+
 -- 核对活动唯一索引、幂等唯一索引和明细执行索引。
 SHOW INDEX FROM catalog_clean_job WHERE Key_name IN ('uk_clean_job_active', 'uk_clean_job_request');
 SHOW INDEX FROM catalog_clean_job_item WHERE Key_name = 'idx_clean_item_pending';

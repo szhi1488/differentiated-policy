@@ -11,7 +11,6 @@ import {
 import { useCatalogCleaning } from '../../../composables/useCatalogCleaning'
 import CatalogCleaningDetailDialog from './CatalogCleaningDetailDialog.vue'
 import CatalogCleaningJobProgress from './CatalogCleaningJobProgress.vue'
-import CatalogCleaningLogDialog from './CatalogCleaningLogDialog.vue'
 import './catalog-cleaning.css'
 
 const {
@@ -58,19 +57,12 @@ const {
   review,
   reviewError,
   reviewConflict,
-  logTarget,
-  logs,
-  logsPage,
-  logsSize,
-  openLogs,
-  loadLogs,
 } = useCatalogCleaning()
 
 const { data: resultPage, loading: tableLoading, error: tableError } = table
 const { data: previewData, loading: previewLoading, error: previewError } = preview
 const { data: historyData, loading: historyLoading, error: historyError } = history
 const { data: sourceDetail, loading: detailLoading, error: detailError } = detail
-const { data: logPage, loading: logsLoading, error: logsError } = logs
 const confirming = ref(false)
 const formatCount = new Intl.NumberFormat('zh-CN').format
 const tabs = [
@@ -92,9 +84,6 @@ function recognized(row) {
 }
 
 function jobScope(job) {
-  if (job.legacy) {
-    return job.createdDate || '旧导入批次'
-  }
   if (job.targetSourceId) {
     return '单条技术重试'
   }
@@ -318,9 +307,6 @@ async function submitReview(body) {
       <template v-if="submittedJob">
         <div class="cleaning-job-heading">
           <strong>{{ submittedJob.brandName }} · {{ jobScope(submittedJob) }}</strong>
-          <el-button link type="primary" @click="openLogs('job', submittedJob.id)">
-            处理日志
-          </el-button>
         </div>
         <CatalogCleaningJobProgress :job="submittedJob" />
         <el-alert
@@ -475,7 +461,6 @@ async function submitReview(body) {
       <template v-if="active">
         <div class="cleaning-job-heading">
           <strong>{{ active.brandName }} · {{ jobScope(active) }}</strong>
-          <el-button link type="primary" @click="openLogs('job', active.id)">处理日志</el-button>
         </div>
         <CatalogCleaningJobProgress :job="active" />
       </template>
@@ -507,13 +492,14 @@ async function submitReview(body) {
           <template #default="{ row }">{{ GOODS_CLEAN_JOB_LABELS[row.status] }}</template>
         </el-table-column>
         <el-table-column label="进度" width="92">
-          <template #default="{ row }">
-            {{ row.legacy ? '—' : row.processed + ' / ' + row.total }}
-          </template>
+          <template #default="{ row }">{{ row.processed }} / {{ row.total }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90">
+        <el-table-column label="处理结果" min-width="228">
           <template #default="{ row }">
-            <el-button type="primary" link @click="openLogs('job', row.id)">日志</el-button>
+            通过
+            {{ (row.resultCounts?.AUTO_PASSED ?? 0) + (row.resultCounts?.MANUAL_PASSED ?? 0) }} ·
+            待审 {{ row.resultCounts?.REVIEW_REQUIRED ?? 0 }} · 失败
+            {{ row.resultCounts?.ERROR ?? 0 }} · 跳过 {{ row.resultCounts?.SKIPPED ?? 0 }}
           </template>
         </el-table-column>
       </el-table>
@@ -540,20 +526,7 @@ async function submitReview(body) {
       :review-error="reviewError"
       @close="detailId = ''"
       @reload="loadDetail"
-      @history="openLogs('source', detailId)"
       @review="submitReview"
-    />
-    <CatalogCleaningLogDialog
-      :open="Boolean(logTarget)"
-      :title="logTarget?.type === 'source' ? '商品处理记录' : '清洗处理日志'"
-      :data="logPage"
-      :loading="logsLoading"
-      :error="logsError?.message"
-      :page="logsPage"
-      :size="logsSize"
-      @update:page="logsPage = $event"
-      @close="logTarget = null"
-      @reload="loadLogs"
     />
   </section>
 </template>
