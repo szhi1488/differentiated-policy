@@ -11,11 +11,11 @@ export const GOODS_CLEAN_RESULTS = {
 }
 
 export const GOODS_CLEAN_JOB_LABELS = {
-  NOT_STARTED: '等待清洗',
   RUNNING: '清洗中',
   COMPLETED: '清洗完成',
-  PARTIAL: '部分技术失败',
+  PARTIAL: '部分未完成',
   FAILED: '清洗失败',
+  INTERRUPTED: '旧任务已中断',
 }
 
 export const GOODS_CLEAN_LOG_ACTIONS = {
@@ -24,6 +24,7 @@ export const GOODS_CLEAN_LOG_ACTIONS = {
   CLEAN_REVIEW: '转人工审核',
   CLEAN_ERROR: '技术失败',
   CLEAN_RETRY: '重试',
+  CLEAN_SKIP: '源商品已更新',
   CORRECT: '人工通过',
   EXCLUDE: '确认排除',
   UPDATE: '更新源商品',
@@ -72,9 +73,11 @@ export const RAW_GOODS_FIELDS = [
   ['goodsField5', '自定义字段 5', 112],
 ]
 
+export const CATEGORY_PATH_FIELD = ['cateFullName', '完整分类路径', 240]
+
 export const SOURCE_GOODS_FIELDS = [
   ['skuId', 'SKU ID', 180],
-  ['cateFullName', '完整分类路径', 240],
+  CATEGORY_PATH_FIELD,
   ['createdDate', '建档日', 126],
   ['gmtModified', 'SKU 修改时间', 170],
   ['goodsGmtModified', '商品修改时间', 170],

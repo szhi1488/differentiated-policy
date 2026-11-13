@@ -8,7 +8,6 @@ CREATE TABLE goods_sync_job (
     sync_phase VARCHAR(16) NOT NULL DEFAULT 'FULL',
     last_max_id VARCHAR(32) NOT NULL DEFAULT '0', page_size INT NOT NULL, include_blockup TINYINT NOT NULL,
     page_count INT NOT NULL DEFAULT 0, read_count BIGINT NOT NULL DEFAULT 0, content_count BIGINT NOT NULL DEFAULT 0,
-    clean_status VARCHAR(16) NOT NULL DEFAULT 'NOT_STARTED', clean_rule_version VARCHAR(64),
     failure_count INT NOT NULL DEFAULT 0,
     error_code VARCHAR(64), worker_token VARCHAR(64), lease_until DATETIME, next_request_at DATETIME NOT NULL,
     fencing_token BIGINT NOT NULL DEFAULT 0, record_version INT NOT NULL DEFAULT 0,
@@ -28,9 +27,9 @@ CREATE TABLE source_goods_item (
     first_seen_job_id BIGINT NOT NULL,
     last_seen_job_id BIGINT NOT NULL, record_version INT NOT NULL DEFAULT 0,
     clean_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    clean_job_id BIGINT, clean_rule_version VARCHAR(64), clean_candidate VARCHAR,
-    clean_error_code VARCHAR(64), cleaned_at DATETIME, clean_run_key VARCHAR(64),
-    clean_lease_until DATETIME, clean_attempts INT NOT NULL DEFAULT 0,
+    clean_job_id BIGINT, clean_candidate VARCHAR,
+    clean_error_code VARCHAR(64), cleaned_at DATETIME,
+    clean_attempts INT NOT NULL DEFAULT 0,
     mapping_status VARCHAR(16) NOT NULL DEFAULT 'UNMAPPED', mapping_origin VARCHAR(16),
     catalog_variant_id BIGINT, variant_color_id BIGINT, mapping_remark VARCHAR(512),
     reviewed_by BIGINT, reviewed_at DATETIME, review_reason VARCHAR(512),
@@ -42,12 +41,12 @@ CREATE TABLE source_goods_item (
 CREATE TABLE catalog_operation_log (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     tenant_key VARCHAR(64) NOT NULL, operator_id BIGINT, operator_name VARCHAR(64),
-    actor_type VARCHAR(16) NOT NULL DEFAULT 'USER', rule_version VARCHAR(64),
+    actor_type VARCHAR(16) NOT NULL DEFAULT 'USER',
     entity_type VARCHAR(32) NOT NULL, entity_id BIGINT NOT NULL, action_type VARCHAR(32) NOT NULL,
     batch_key VARCHAR(64), before_data VARCHAR, after_data VARCHAR, reason VARCHAR(512),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK ((actor_type = 'USER' AND operator_id IS NOT NULL)
-        OR (actor_type = 'SYSTEM' AND operator_id IS NULL AND rule_version IS NOT NULL))
+        OR (actor_type = 'SYSTEM' AND operator_id IS NULL AND operator_name IS NULL))
 );
 
 CREATE TABLE catalog_variant (
@@ -63,4 +62,28 @@ CREATE TABLE catalog_variant_color (
     tenant_key VARCHAR(64) NOT NULL, variant_id BIGINT NOT NULL REFERENCES catalog_variant(id),
     color_name VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL,
     UNIQUE (tenant_key, variant_id, color_name)
+);
+
+
+CREATE TABLE catalog_clean_job (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tenant_key VARCHAR(64) NOT NULL, source_key VARCHAR(64) NOT NULL, brand_name VARCHAR(32) NOT NULL,
+    created_date DATE, include_reviews TINYINT NOT NULL DEFAULT 0, target_source_id BIGINT,
+    request_key VARCHAR(64) NOT NULL, requester_id BIGINT NOT NULL, requester_name VARCHAR(64),
+    status VARCHAR(16) NOT NULL, legacy TINYINT NOT NULL DEFAULT 0,
+    worker_token VARCHAR(64), lease_until DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status = 'RUNNING' THEN 1 ELSE NULL END),
+    UNIQUE (tenant_key, source_key, request_key), UNIQUE (tenant_key, source_key, active_slot),
+    UNIQUE (id, tenant_key, source_key, brand_name)
+);
+
+ALTER TABLE source_goods_item ADD FOREIGN KEY (clean_job_id, tenant_key, source_key, brand_name)
+    REFERENCES catalog_clean_job (id, tenant_key, source_key, brand_name);
+
+CREATE TABLE catalog_clean_job_item (
+    job_id BIGINT NOT NULL REFERENCES catalog_clean_job(id),
+    source_id BIGINT NOT NULL REFERENCES source_goods_item(id),
+    source_version INT NOT NULL,
+    outcome VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    PRIMARY KEY (job_id, source_id)
 );

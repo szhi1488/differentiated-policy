@@ -1,92 +1,84 @@
 import { computed, onScopeDispose, reactive, ref, watch } from 'vue'
 import {
+  readActiveCleaningJob,
+  readCleaningJob,
+  readCleaningJobs,
   readCleaningLogs,
+  readCleaningPreview,
   readCleaningResults,
   readCleaningSource,
-  readLatestCleaningJob,
-  reprocessCleaningReviews,
-  retryCleaningJob,
+  readCleaningSourceLogs,
   retryCleaningSource,
   reviewCleaningSource,
   startCleaningJob,
 } from '../api/catalog'
-import { GOODS_BRANDS } from '../constants/catalog'
+import { createRequestId } from '../utils/request-id'
 import { useLatestQuery } from './useLatestQuery'
 
-const emptyFilters = { status: '', ruleVersion: '', keyword: '' }
-const changed = (before, after) =>
-  before?.status !== after?.status ||
-  before?.recordVersion !== after?.recordVersion ||
-  before?.processed !== after?.processed ||
-  before?.total !== after?.total ||
-  before?.reprocessable !== after?.reprocessable ||
-  Object.entries(after?.resultCounts ?? {}).some(
-    ([status, count]) => before?.resultCounts[status] !== count,
-  )
+const emptyFilters = { brandName: '', dateMode: 'ALL', createdDate: null, keyword: '' }
+const previewDefaults = {
+  brandName: '',
+  dateMode: 'DATE',
+  createdDate: null,
+  includeReviews: false,
+}
+const emptyLogs = { items: [], total: 0 }
 
 export function useCatalogCleaning() {
   const filters = reactive({ ...emptyFilters })
   const applied = ref({ ...emptyFilters })
-  const brand = ref('')
-  const tab = ref('all')
+  const tab = ref('')
   const page = ref(1)
-  const size = ref(10)
-  const total = ref(0)
-  const jobs = ref([])
-  const jobsLoading = ref(true)
-  const jobsError = ref('')
+  const size = ref(20)
+  const table = useLatestQuery()
+  const total = computed(() => table.data.value?.total ?? 0)
+
+  const startOpen = ref(false)
+  const scope = reactive({ ...previewDefaults })
+  const preview = useLatestQuery()
+  const previewPage = ref(1)
+  const previewSize = 10
+  const previewSearch = ref('')
+  const previewKeyword = ref('')
+  const previewReady = computed(() =>
+    Boolean(scope.brandName && (scope.dateMode === 'ALL' || scope.createdDate)),
+  )
+  const submittedJob = ref(null)
   const action = ref('')
   const actionError = ref('')
+  const busy = computed(() => Boolean(action.value))
+
+  const historyOpen = ref(false)
+  const history = useLatestQuery()
+  const historyPage = ref(1)
+  const historySize = 10
+  const active = ref(null)
+  const progressError = ref('')
+  const logTarget = ref(null)
+  const logs = useLatestQuery()
+  const logsPage = ref(1)
+  const logsSize = 10
+  const detailId = ref('')
+  const detail = useLatestQuery()
   const reviewError = ref('')
   const reviewConflict = ref(false)
-  const detailId = ref('')
-  const logsJobId = ref('')
-  const logsPage = ref(1)
-  const logsTotal = ref(0)
-  const logsSize = 10
-  const table = useLatestQuery()
-  const detail = useLatestQuery()
-  const logs = useLatestQuery()
   let timer
-  let jobRead
+  let readProgress
   let write
   let disposed = false
-
-  const job = computed(() => {
-    if (brand.value) {
-      return jobs.value.find((item) => item.brandName === brand.value)
-    }
-    return jobs.value.reduce(
-      (latest, item) =>
-        !latest || BigInt(item.importJobId) > BigInt(latest.importJobId) ? item : latest,
-      null,
-    )
-  })
-  const jobId = computed(() => job.value?.importJobId ?? '')
-  const ruleVersions = computed(() => [...new Set(jobs.value.map((item) => item.ruleVersion))])
-  const busy = computed(() => Boolean(action.value))
-  const canChangeTask = computed(() => Boolean(brand.value) && !jobsError.value && !busy.value)
-  const canStart = computed(() => canChangeTask.value && job.value?.status === 'NOT_STARTED')
-  const canRetryJob = computed(
-    () =>
-      canChangeTask.value &&
-      ['FAILED', 'PARTIAL'].includes(job.value?.status) &&
-      job.value.resultCounts.ERROR > 0,
-  )
-  const canReprocess = computed(
-    () => canChangeTask.value && job.value?.status !== 'RUNNING' && job.value?.reprocessable > 0,
-  )
+  let startRequest
+  let retryRequest
 
   function loadResults() {
-    if (!jobId.value) {
-      return table.run(async () => ({ items: [], total: 0 }))
-    }
+    const { brandName, dateMode, createdDate, keyword } = applied.value
     return table.run((signal) =>
       readCleaningResults(
         {
-          ...applied.value,
-          status: tab.value === 'all' ? applied.value.status : tab.value,
-          importJobId: jobId.value,
+          brandName,
+          createdDate: dateMode === 'DATE' ? createdDate : null,
+          unknownDate: dateMode === 'UNKNOWN',
+          keyword,
+          status: tab.value,
           page: page.value,
           size: size.value,
         },
@@ -95,46 +87,29 @@ export function useCatalogCleaning() {
     )
   }
 
-  watch(
-    jobId,
-    () => {
-      page.value = 1
-      total.value = 0
-    },
-    { flush: 'sync' },
-  )
-  watch([jobId, applied, tab, page, size], loadResults)
+  watch([applied, tab, page, size], loadResults, { immediate: true })
   watch(table.data, (result) => {
     if (result) {
-      total.value = result.total
-      page.value = Math.min(page.value, Math.max(1, Math.ceil(total.value / size.value)))
+      page.value = Math.min(page.value, Math.max(1, Math.ceil(result.total / size.value)))
     }
   })
 
   function search() {
-    page.value = 1
-    if (filters.status) {
-      tab.value = 'all'
+    if (filters.dateMode === 'DATE' && !filters.createdDate) {
+      return
     }
+    page.value = 1
     applied.value = { ...filters, keyword: filters.keyword.trim() }
   }
 
   function reset() {
     Object.assign(filters, emptyFilters)
-    tab.value = 'all'
+    tab.value = ''
     search()
-  }
-
-  function selectBrand(value) {
-    brand.value = value ?? ''
-    actionError.value = ''
-    reset()
   }
 
   function selectTab(value) {
     tab.value = value
-    filters.status = ''
-    applied.value = { ...applied.value, status: '' }
     page.value = 1
   }
 
@@ -143,12 +118,206 @@ export function useCatalogCleaning() {
     size.value = value
   }
 
-  function loadDetail() {
-    if (detailId.value) {
-      reviewError.value = ''
-      reviewConflict.value = false
-      return detail.run((signal) => readCleaningSource(detailId.value, signal))
+  function openStart() {
+    if (busy.value) {
+      return
     }
+    Object.assign(scope, previewDefaults, { brandName: applied.value.brandName })
+    if (applied.value.dateMode === 'DATE') {
+      scope.createdDate = applied.value.createdDate
+    }
+    previewSearch.value = ''
+    previewKeyword.value = ''
+    previewPage.value = 1
+    submittedJob.value = null
+    actionError.value = ''
+    startOpen.value = true
+  }
+
+  function loadPreview() {
+    if (!startOpen.value || !previewReady.value || submittedJob.value) {
+      return preview.run(async () => null)
+    }
+    return preview.run((signal) =>
+      readCleaningPreview(
+        {
+          brandName: scope.brandName,
+          createdDate: scope.dateMode === 'DATE' ? scope.createdDate : null,
+          includeReviews: scope.includeReviews,
+          keyword: previewKeyword.value,
+          page: previewPage.value,
+          size: previewSize,
+        },
+        signal,
+      ),
+    )
+  }
+
+  watch(
+    () => [scope.brandName, scope.dateMode, scope.createdDate, scope.includeReviews],
+    () => {
+      previewPage.value = 1
+    },
+    { flush: 'sync' },
+  )
+  watch([scope, previewKeyword, previewPage, startOpen], loadPreview)
+  watch(preview.data, (result) => {
+    if (result) {
+      previewPage.value = Math.min(
+        previewPage.value,
+        Math.max(1, Math.ceil(result.total / previewSize)),
+      )
+    }
+  })
+
+  function searchPreview() {
+    previewPage.value = 1
+    previewKeyword.value = previewSearch.value.trim()
+  }
+
+  function loadHistory() {
+    if (historyOpen.value) {
+      return history.run((signal) => readCleaningJobs(historyPage.value, historySize, signal))
+    }
+  }
+
+  watch([historyOpen, historyPage], loadHistory)
+
+  function openHistory() {
+    historyOpen.value = true
+    void pollProgress()
+  }
+
+  async function pollProgress() {
+    clearTimeout(timer)
+    readProgress?.abort()
+    const read = new AbortController()
+    readProgress = read
+    try {
+      const previous = active.value
+      const current = await readActiveCleaningJob(read.signal)
+      if (disposed || read.signal.aborted) {
+        return
+      }
+      active.value = current
+      const shown = submittedJob.value
+      if (shown && shown.status === 'RUNNING') {
+        const next =
+          current?.id === shown.id ? current : await readCleaningJob(shown.id, read.signal)
+        if (disposed || read.signal.aborted) {
+          return
+        }
+        if (submittedJob.value?.id === shown.id) {
+          submittedJob.value = next
+        }
+      }
+      if (
+        (previous?.id && previous.id !== current?.id) ||
+        previous?.processed !== current?.processed
+      ) {
+        void loadResults()
+        void loadHistory()
+        if (logTarget.value?.type === 'job' && logTarget.value.id === previous?.id) {
+          void loadLogs()
+        }
+      }
+      progressError.value = ''
+    } catch (error) {
+      if (!disposed && !read.signal.aborted) {
+        progressError.value = error.message
+      }
+    } finally {
+      if (!disposed && !read.signal.aborted) {
+        timer = setTimeout(
+          pollProgress,
+          active.value || historyOpen.value || startOpen.value ? 2500 : 10000,
+        )
+      }
+    }
+  }
+
+  function confirmedScope() {
+    const expectedTotal = preview.data.value?.eligible ?? 0
+    if (
+      !startOpen.value ||
+      !previewReady.value ||
+      submittedJob.value ||
+      busy.value ||
+      !expectedTotal
+    ) {
+      return null
+    }
+    return {
+      brandName: scope.brandName,
+      createdDate: scope.dateMode === 'DATE' ? scope.createdDate : null,
+      includeReviews: scope.includeReviews,
+      expectedTotal,
+    }
+  }
+
+  async function start(confirmed) {
+    const current = confirmedScope()
+    if (!current || JSON.stringify(current) !== JSON.stringify(confirmed)) {
+      return false
+    }
+    const identity = JSON.stringify(current)
+    if (startRequest?.identity !== identity) {
+      startRequest = { identity, key: createRequestId() }
+    }
+    return runWrite(
+      'start',
+      async (signal) => {
+        const job = await startCleaningJob({ ...current, requestKey: startRequest.key }, signal)
+        if (disposed) {
+          return
+        }
+        startRequest = null
+        submittedJob.value = job
+        track(job)
+      },
+      (error) => {
+        if (error.code === 'CATALOG_CLEAN_SCOPE_CHANGED') {
+          startRequest = null
+          void loadPreview()
+        }
+      },
+    )
+  }
+
+  async function retry(row) {
+    const identity = row.id + ':' + row.recordVersion
+    if (retryRequest?.identity !== identity) {
+      retryRequest = { identity, key: createRequestId() }
+    }
+    return runWrite(row.id, async (signal) => {
+      const job = await retryCleaningSource(
+        {
+          id: row.id,
+          recordVersion: row.recordVersion,
+          requestKey: retryRequest.key,
+        },
+        signal,
+      )
+      if (disposed) {
+        return
+      }
+      retryRequest = null
+      historyOpen.value = true
+      track(job)
+    })
+  }
+
+  function track(job) {
+    active.value = job.status === 'RUNNING' ? job : null
+    void loadResults()
+    void loadHistory()
+    void pollProgress()
+  }
+
+  function loadDetail() {
+    reviewError.value = ''
+    reviewConflict.value = false
+    return detail.run((signal) => readCleaningSource(detailId.value, signal))
   }
 
   function openDetail(row) {
@@ -156,191 +325,133 @@ export function useCatalogCleaning() {
     void loadDetail()
   }
 
-  function loadLogs() {
-    if (logsJobId.value) {
-      return logs.run((signal) =>
-        readCleaningLogs(logsJobId.value, logsPage.value, logsSize, signal),
-      )
-    }
-  }
-
-  function openLogs() {
-    logsTotal.value = 0
-    logsPage.value = 1
-    logsJobId.value = jobId.value
-  }
-
-  watch([logsJobId, logsPage], loadLogs)
-  watch(logs.data, (result) => {
-    if (result) {
-      logsTotal.value = result.total
-    }
-  })
-
-  async function refreshJobs({ refresh = false } = {}) {
-    if (disposed || busy.value) {
-      return
-    }
-    clearTimeout(timer)
-    jobRead?.abort()
-    const controller = new AbortController()
-    jobRead = controller
-    try {
-      const next = await Promise.all(
-        GOODS_BRANDS.map((brand) => readLatestCleaningJob(brand, controller.signal)),
-      )
-      if (controller.signal.aborted) {
-        return
-      }
-      const before = job.value
-      jobs.value = next.filter(Boolean)
-      jobsError.value = ''
-      if (before?.importJobId === jobId.value && (refresh || changed(before, job.value))) {
-        void loadResults()
-      }
-      if (logsJobId.value && (refresh || changed(before, job.value))) {
-        void loadLogs()
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        jobsError.value = error.message
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        jobsLoading.value = false
-        timer = setTimeout(
-          refreshJobs,
-          jobs.value.some((item) => item.status === 'RUNNING') ? 2000 : 10000,
-        )
-      }
-    }
-  }
-
-  async function mutate(key, send) {
-    if (busy.value || disposed) {
+  async function review(body) {
+    const row = detail.data.value?.result
+    if (!row || reviewConflict.value) {
       return false
     }
-    clearTimeout(timer)
-    jobRead?.abort()
-    action.value = key
-    actionError.value = ''
     reviewError.value = ''
-    write = new AbortController()
-    try {
-      const result = await send(write.signal)
-      if (disposed) {
-        return false
-      }
-      if (key === 'review') {
+    return runWrite(
+      'review',
+      async (signal) => {
+        await reviewCleaningSource(row.id, { ...body, recordVersion: row.recordVersion }, signal)
+        if (disposed) {
+          return
+        }
         detailId.value = ''
-      } else {
-        jobs.value = jobs.value.map((item) =>
-          item.importJobId === result.importJobId ? result : item,
-        )
-      }
-      return true
+        void loadResults()
+      },
+      (error) => {
+        reviewError.value = error.message
+        reviewConflict.value = error.status === 409
+      },
+    )
+  }
+
+  function loadLogs() {
+    const target = logTarget.value
+    if (!target) {
+      return logs.run(async () => emptyLogs)
+    }
+    const read = target.type === 'job' ? readCleaningLogs : readCleaningSourceLogs
+    return logs.run((signal) => read(target.id, logsPage.value, logsSize, signal))
+  }
+
+  watch([logTarget, logsPage], loadLogs)
+
+  function openLogs(type, id) {
+    logsPage.value = 1
+    logTarget.value = { type, id }
+  }
+
+  async function runWrite(name, operation, onError) {
+    if (busy.value) {
+      return false
+    }
+    write = new AbortController()
+    action.value = name
+    actionError.value = ''
+    try {
+      await operation(write.signal)
+      return !disposed
     } catch (error) {
-      if (!disposed) {
-        const message =
-          error.kind === 'business' ? error.message : '暂无法确认操作结果，请核对处理状态后再试。'
-        if (key === 'review') {
-          reviewError.value = message
-          reviewConflict.value = error.status === 409
-        } else {
-          actionError.value = message
+      if (!disposed && error.kind !== 'cancelled') {
+        if (name !== 'review') {
+          actionError.value = ['timeout', 'network', 'parse'].includes(error.kind)
+            ? '提交结果待确认，请先在清洗记录核对是否已受理。'
+            : error.message
+        }
+        onError?.(error)
+        if (name !== 'review') {
+          void pollProgress()
         }
       }
       return false
     } finally {
       if (!disposed) {
         action.value = ''
-        void refreshJobs({ refresh: true })
       }
     }
   }
 
-  function start() {
-    if (canStart.value) {
-      const selected = job.value
-      return mutate('start', (signal) => startCleaningJob(selected, signal))
-    }
-    if (canRetryJob.value) {
-      const selected = job.value
-      return mutate('batch-retry', (signal) => retryCleaningJob(selected, signal))
-    }
-  }
-
-  function retry(row) {
-    if (row.status === 'ERROR' && job.value?.status !== 'RUNNING' && !jobsError.value) {
-      return mutate(row.id, (signal) => retryCleaningSource(row, signal))
-    }
-  }
-
-  function reprocess() {
-    if (canReprocess.value) {
-      const selected = job.value
-      return mutate('reprocess', (signal) => reprocessCleaningReviews(selected, signal))
-    }
-  }
-
-  function review(body) {
-    const row = detail.data.value?.result
-    if (row?.id === detailId.value && row.status === 'REVIEW_REQUIRED' && !reviewConflict.value) {
-      return mutate('review', (signal) =>
-        reviewCleaningSource(row.id, { ...body, recordVersion: row.recordVersion }, signal),
-      )
-    }
-  }
-
-  void refreshJobs()
   onScopeDispose(() => {
     disposed = true
     clearTimeout(timer)
-    jobRead?.abort()
+    readProgress?.abort()
     write?.abort()
   })
 
+  void pollProgress()
+
   return {
-    brand,
-    selectBrand,
     filters,
     tab,
     page,
     size,
     total,
+    table,
+    loadResults,
     search,
     reset,
     selectTab,
     resize,
-    job,
-    jobsLoading,
-    jobsError,
-    ruleVersions,
-    refreshJobs,
-    canStart,
-    canRetryJob,
-    canReprocess,
-    table,
-    loadResults,
-    detail,
+    startOpen,
+    scope,
+    preview,
+    previewPage,
+    previewSize,
+    previewSearch,
+    previewReady,
+    submittedJob,
+    openStart,
+    loadPreview,
+    searchPreview,
+    confirmedScope,
+    start,
+    historyOpen,
+    history,
+    historyPage,
+    historySize,
+    openHistory,
+    loadHistory,
+    active,
+    progressError,
+    action,
+    actionError,
+    busy,
+    retry,
     detailId,
+    detail,
     openDetail,
     loadDetail,
     review,
     reviewError,
     reviewConflict,
+    logTarget,
     logs,
-    logsJobId,
     logsPage,
     logsSize,
-    logsTotal,
     openLogs,
     loadLogs,
-    action,
-    actionError,
-    busy,
-    start,
-    retry,
-    reprocess,
   }
 }

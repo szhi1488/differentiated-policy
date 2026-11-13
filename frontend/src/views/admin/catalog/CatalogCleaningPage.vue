@@ -1,117 +1,141 @@
 <script setup>
-import { computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
-import cleaningBanner from '../../../assets/catalog-cleaning-banner.png'
-import AppIcon from '../../../components/AppIcon.vue'
-import { useCatalogCleaning } from '../../../composables/useCatalogCleaning'
+import 'element-plus/es/components/message-box/style/css'
 import {
   GOODS_BRANDS,
   GOODS_CLEAN_JOB_LABELS,
-  GOODS_CLEAN_LOG_ACTIONS,
   GOODS_CLEAN_RESULTS,
 } from '../../../constants/catalog'
+import { useCatalogCleaning } from '../../../composables/useCatalogCleaning'
 import CatalogCleaningDetailDialog from './CatalogCleaningDetailDialog.vue'
+import CatalogCleaningJobProgress from './CatalogCleaningJobProgress.vue'
+import CatalogCleaningLogDialog from './CatalogCleaningLogDialog.vue'
 import './catalog-cleaning.css'
 
 const {
-  brand,
-  selectBrand,
   filters,
   tab,
   page,
   size,
   total,
+  table,
+  loadResults,
   search,
   reset,
   selectTab,
   resize,
-  job,
-  jobsLoading,
-  jobsError,
-  ruleVersions,
-  refreshJobs,
-  canStart,
-  canRetryJob,
-  canReprocess,
-  table,
-  loadResults,
-  detail,
+  startOpen,
+  scope,
+  preview,
+  previewPage,
+  previewSize,
+  previewSearch,
+  previewReady,
+  submittedJob,
+  openStart,
+  loadPreview,
+  searchPreview,
+  confirmedScope,
+  start,
+  historyOpen,
+  history,
+  historyPage,
+  historySize,
+  openHistory,
+  loadHistory,
+  active,
+  progressError,
+  action,
+  actionError,
+  busy,
+  retry,
   detailId,
+  detail,
   openDetail,
   loadDetail,
   review,
   reviewError,
   reviewConflict,
+  logTarget,
   logs,
-  logsJobId,
   logsPage,
   logsSize,
-  logsTotal,
   openLogs,
   loadLogs,
-  action,
-  actionError,
-  busy,
-  start,
-  retry,
-  reprocess,
 } = useCatalogCleaning()
+
 const { data: resultPage, loading: tableLoading, error: tableError } = table
+const { data: previewData, loading: previewLoading, error: previewError } = preview
+const { data: historyData, loading: historyLoading, error: historyError } = history
 const { data: sourceDetail, loading: detailLoading, error: detailError } = detail
 const { data: logPage, loading: logsLoading, error: logsError } = logs
-
+const confirming = ref(false)
 const formatCount = new Intl.NumberFormat('zh-CN').format
-const batchTotal = computed(() => job.value?.total ?? 0)
-const progress = computed(() => job.value?.progress ?? 0)
-const progressLabel = computed(() =>
-  job.value
-    ? GOODS_CLEAN_JOB_LABELS[job.value.status]
-    : jobsLoading.value
-      ? '正在读取'
-      : '暂无批次',
-)
-const results = computed(() =>
-  ['AUTO_PASSED', 'REVIEW_REQUIRED', 'ERROR'].map((status) => {
-    const count = job.value?.resultCounts[status] ?? 0
-    return {
-      ...GOODS_CLEAN_RESULTS[status],
-      status,
-      count,
-      percent: batchTotal.value ? ((count / batchTotal.value) * 100).toFixed(1) : '0.0',
-    }
-  }),
-)
-const taskFields = computed(() => [
-  ['任务编号', job.value?.id],
-  ['关联导入', job.value && `${job.value.brandName} · ${job.value.importJobId}`],
-  ['规则版本', job.value?.ruleVersion],
-  ['创建时间', job.value?.createdAt],
-])
-const recognizedFields = [
-  ['seriesName', '系列', 82],
-  ['modelName', '型号', 88],
-  ['spec', '配置', 104],
-  ['colorName', '颜色', 73],
+const tabs = [
+  ['', '全部'],
+  ['PENDING', '待清洗'],
+  ['REVIEW_REQUIRED', '待人工审核'],
+  ['PASSED', '已通过'],
+  ['ERROR', '技术失败'],
+  ['EXCLUDED', '已排除'],
 ]
-const brandLabels = { OPPO手机: 'OPPO', 一加手机: '一加' }
+const canStart = computed(() => !confirming.value && Boolean(confirmedScope()))
+const closeStart = computed(() => !confirming.value && action.value !== 'start')
 
-async function submitTask() {
-  const retrying = canRetryJob.value
-  if (await start()) {
-    ElMessage.success(retrying ? '重试已受理。' : '清洗已受理。')
+function recognized(row) {
+  const variant = [row.modelName, row.spec, row.colorName || row.colorCandidates?.join(' / ')]
+    .filter(Boolean)
+    .join(' · ')
+  return [row.seriesName, variant].filter(Boolean).join(' / ') || '—'
+}
+
+function jobScope(job) {
+  if (job.legacy) {
+    return job.createdDate || '旧导入批次'
+  }
+  if (job.targetSourceId) {
+    return '单条技术重试'
+  }
+  return job.createdDate || '该品牌全部已入库商品'
+}
+
+async function submitStart() {
+  const request = confirmedScope()
+  if (!request || confirming.value) {
+    return
+  }
+  const range = request.createdDate ? request.createdDate + ' 建档的商品' : '该品牌全部已入库商品'
+  const extra = request.includeReviews ? '，含未建立映射的待审商品' : ''
+  confirming.value = true
+  try {
+    await ElMessageBox.confirm(
+      '确认处理 ' +
+        request.brandName +
+        ' · ' +
+        range +
+        '，共 ' +
+        formatCount(request.expectedTotal) +
+        ' 条' +
+        extra +
+        '？',
+      '确认开始清洗',
+      { type: 'warning', confirmButtonText: '确认清洗', cancelButtonText: '返回预览' },
+    )
+    if (await start(request)) {
+      ElMessage.success('清洗任务已受理。')
+    }
+  } catch {
+    // 取消确认时保留原来的范围和预览。
+  } finally {
+    confirming.value = false
   }
 }
 
 async function submitRetry(row) {
   if (await retry(row)) {
     ElMessage.success('重试已受理。')
-  }
-}
-
-async function submitReprocess() {
-  if (await reprocess()) {
-    ElMessage.success('待审商品重新识别已受理。')
   }
 }
 
@@ -124,267 +148,149 @@ async function submitReview(body) {
 
 <template>
   <section class="catalog-cleaning" aria-labelledby="cleaning-title">
-    <header class="cleaning-banner">
-      <img :src="cleaningBanner" class="cleaning-banner-image" alt="" width="2172" height="724" />
-      <div class="cleaning-banner-copy">
-        <h1 id="cleaning-title">商品清洗与识别</h1>
-        <p>对已落库的吉客云源商品进行规则清洗，提取系列、型号、配置和颜色，并按结果分流处理。</p>
+    <header class="cleaning-page-heading">
+      <h1 id="cleaning-title">商品清洗与识别</h1>
+      <div class="cleaning-page-actions">
+        <el-button @click="openHistory">{{ active ? '清洗记录（进行中）' : '清洗记录' }}</el-button>
+        <el-button type="primary" :disabled="busy" @click="openStart">开始清洗</el-button>
       </div>
     </header>
 
-    <div class="cleaning-overview">
-      <section class="cleaning-card cleaning-task" aria-labelledby="cleaning-task-title">
-        <h2 id="cleaning-task-title" class="cleaning-section-title">清洗任务</h2>
-        <dl class="cleaning-task-fields">
-          <div class="cleaning-task-brand">
-            <dt>源商品品牌</dt>
-            <dd>
-              <el-select
-                :model-value="brand"
-                aria-label="源商品品牌"
-                placeholder="请选择品牌"
-                :disabled="busy"
-                size="small"
-                clearable
-                @update:model-value="selectBrand"
-              >
-                <el-option v-for="name in GOODS_BRANDS" :key="name" :label="name" :value="name" />
-              </el-select>
-            </dd>
-          </div>
-          <div
-            v-for="[label, value] in taskFields"
-            :key="label"
-            :class="{ 'cleaning-import-reference': label === '关联导入' }"
-          >
-            <dt>{{ label }}</dt>
-            <dd>{{ value ?? '—' }}</dd>
-          </div>
-        </dl>
-        <p v-if="!jobsLoading && !jobsError && !brand" class="cleaning-task-hint">
-          选择品牌后可启动该品牌的清洗任务。
-        </p>
-        <p v-else-if="!jobsLoading && !jobsError && !job" class="cleaning-task-hint">
-          该品牌暂无成功导入的批次。
-        </p>
-      </section>
+    <el-alert
+      v-if="actionError && !startOpen"
+      :title="actionError"
+      type="error"
+      :closable="false"
+      show-icon
+    />
 
-      <section class="cleaning-card cleaning-progress" aria-labelledby="cleaning-progress-title">
-        <div class="cleaning-progress-heading">
-          <h2 id="cleaning-progress-title" class="cleaning-section-title">清洗进度</h2>
-          <div class="cleaning-task-actions">
-            <el-button :disabled="!job" @click="openLogs">
-              <AppIcon name="document" :size="15" />
-              查看处理日志
-            </el-button>
-            <el-button
-              v-if="brand && (job?.reprocessable || action === 'reprocess')"
-              :disabled="!canReprocess"
-              :loading="action === 'reprocess'"
-              @click="submitReprocess"
-            >
-              重新识别待审{{ job?.reprocessable ? `（${formatCount(job.reprocessable)}）` : '' }}
-            </el-button>
-            <el-button
-              type="primary"
-              :disabled="!canStart && !canRetryJob"
-              :loading="action === 'start' || action === 'batch-retry'"
-              @click="submitTask"
-            >
-              <AppIcon name="sync" :size="15" />
-              {{ canRetryJob || action === 'batch-retry' ? '重试失败' : '开始清洗' }}
-            </el-button>
-          </div>
-        </div>
-        <div class="cleaning-progress-content">
-          <el-progress
-            type="circle"
-            :percentage="progress"
-            :width="108"
-            :stroke-width="8"
-            color="#10a43a"
-            aria-label="清洗进度"
-          >
-            <div class="cleaning-progress-text">
-              <strong>{{ progress }}%</strong>
-              <span>{{ progressLabel }}</span>
-            </div>
-          </el-progress>
-          <div class="cleaning-summary">
-            <p class="cleaning-total">
-              处理总数
-              <span>{{ formatCount(job?.processed ?? 0) }} / {{ formatCount(batchTotal) }}</span>
-            </p>
-            <div class="cleaning-stats">
-              <div
-                v-for="result in results"
-                :key="result.status"
-                class="cleaning-stat"
-                :class="`cleaning-stat--${result.tone}`"
-              >
-                <p>
-                  <AppIcon :name="result.icon" :size="15" />
-                  {{ result.label }}
-                </p>
-                <strong>{{ formatCount(result.count) }}</strong>
-                <small>({{ result.percent }}%)</small>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <div v-if="jobsError || actionError" class="cleaning-error">
-      <el-alert :title="actionError || jobsError" type="error" :closable="false" show-icon />
-      <el-button v-if="jobsError" link type="primary" @click="refreshJobs()">刷新任务</el-button>
-    </div>
-
-    <section class="cleaning-card cleaning-results" aria-label="清洗结果">
-      <div class="cleaning-results-heading">
-        <el-tabs :model-value="tab" aria-label="清洗结果分类" @update:model-value="selectTab">
-          <el-tab-pane name="all" :label="`全部（${formatCount(batchTotal)}）`" />
-          <el-tab-pane
-            v-for="result in results"
-            :key="result.status"
-            :name="result.status"
-            :label="`${result.label}（${formatCount(result.count)}）`"
-          />
-        </el-tabs>
-      </div>
-
+    <section class="cleaning-card" aria-label="清洗结果">
       <el-form class="cleaning-filters" size="small" @submit.prevent="search">
-        <el-form-item label="处理结果">
-          <el-select v-model="filters.status" placeholder="全部">
-            <el-option label="全部" value="" />
-            <el-option
-              v-for="(result, status) in GOODS_CLEAN_RESULTS"
-              :key="status"
-              :label="result.label"
-              :value="status"
-            />
+        <el-form-item label="品牌">
+          <el-select
+            v-model="filters.brandName"
+            aria-label="筛选品牌"
+            class="cleaning-brand-select"
+            :empty-values="[null, undefined]"
+          >
+            <el-option label="全部品牌" value="" />
+            <el-option v-for="brand in GOODS_BRANDS" :key="brand" :label="brand" :value="brand" />
           </el-select>
         </el-form-item>
-        <el-form-item label="规则版本">
-          <el-select v-model="filters.ruleVersion" placeholder="全部">
-            <el-option label="全部" value="" />
-            <el-option
-              v-for="version in ruleVersions"
-              :key="version"
-              :label="version"
-              :value="version"
-            />
+        <el-form-item label="建档日期">
+          <el-select
+            v-model="filters.dateMode"
+            aria-label="筛选建档日期范围"
+            class="cleaning-date-select"
+          >
+            <el-option label="不限" value="ALL" />
+            <el-option label="指定一天" value="DATE" />
+            <el-option label="建档日未知" value="UNKNOWN" />
           </el-select>
         </el-form-item>
-        <el-form-item class="cleaning-search">
+        <el-form-item v-if="filters.dateMode === 'DATE'">
+          <el-date-picker
+            v-model="filters.createdDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择建档日期"
+            aria-label="筛选建档日期"
+          />
+        </el-form-item>
+        <el-form-item class="cleaning-keyword">
           <el-input
             v-model="filters.keyword"
-            placeholder="搜索商品名称或货号"
             aria-label="商品关键词"
+            placeholder="商品名称或货号"
             maxlength="128"
             clearable
-          >
-            <template #prefix>
-              <AppIcon name="search" :size="14" />
-            </template>
-          </el-input>
+          />
         </el-form-item>
         <div class="cleaning-filter-actions">
           <el-button @click="reset">重置</el-button>
-          <el-button native-type="submit" type="primary">查询</el-button>
+          <el-button
+            native-type="submit"
+            type="primary"
+            :disabled="filters.dateMode === 'DATE' && !filters.createdDate"
+          >
+            查询
+          </el-button>
         </div>
       </el-form>
 
-      <div v-if="tableError" class="cleaning-error">
+      <el-tabs
+        :model-value="tab"
+        class="cleaning-tabs"
+        aria-label="清洗结果分类"
+        @update:model-value="selectTab"
+      >
+        <el-tab-pane
+          v-for="[key, label] in tabs"
+          :key="key"
+          :name="key"
+          :label="
+            resultPage
+              ? label + '（' + formatCount(resultPage.counts[key || 'ALL'] ?? 0) + '）'
+              : label
+          "
+        />
+      </el-tabs>
+
+      <div v-if="tableError" class="cleaning-inline-error">
         <el-alert :title="tableError.message" type="error" :closable="false" show-icon />
         <el-button link type="primary" @click="loadResults">重新查询</el-button>
       </div>
       <el-table
-        v-loading="tableLoading || jobsLoading"
+        v-else
+        v-loading="tableLoading"
         :data="resultPage?.items ?? []"
         row-key="id"
-        :empty-text="job ? '暂无符合条件的商品' : '暂无成功导入的批次'"
-        class="cleaning-table"
+        empty-text="暂无符合条件的商品"
         aria-label="清洗识别结果"
       >
-        <el-table-column
-          type="index"
-          label="序号"
-          width="52"
-          :index="(index) => (page - 1) * size + index + 1"
-        />
-        <el-table-column label="品牌" width="66">
-          <template #default="{ row }">{{ brandLabels[row.brandName] }}</template>
+        <el-table-column prop="brandName" label="品牌" width="102" />
+        <el-table-column prop="goodsName" label="商品名称" min-width="230" show-overflow-tooltip />
+        <el-table-column prop="goodsNo" label="货号" width="128" show-overflow-tooltip />
+        <el-table-column label="建档日期" width="112">
+          <template #default="{ row }">{{ row.createdDate || '未知' }}</template>
         </el-table-column>
-        <el-table-column
-          prop="goodsName"
-          label="商品名称（goodsName）"
-          min-width="178"
-          show-overflow-tooltip
-        />
-        <el-table-column label="货号（goodsNo）" width="120">
-          <template #default="{ row }">
-            <span class="cleaning-goods-no">{{ row.goodsNo }}</span>
-          </template>
+        <el-table-column label="识别结果" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ recognized(row) }}</template>
         </el-table-column>
-        <el-table-column label="清洗识别结果（结构化数据）" header-align="center">
-          <el-table-column
-            v-for="[field, label, width] in recognizedFields"
-            :key="field"
-            :label="label"
-            :width="width"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              {{ row[field] || (field === 'colorName' && row.colorCandidates?.join(' / ')) || '—' }}
-            </template>
-          </el-table-column>
-        </el-table-column>
-        <el-table-column label="处理结果" width="108">
+        <el-table-column label="状态" width="116">
           <template #default="{ row }">
             <el-tag
               size="small"
-              effect="light"
               disable-transitions
-              class="cleaning-result-tag"
-              :class="`cleaning-result-tag--${GOODS_CLEAN_RESULTS[row.status]?.tone ?? 'neutral'}`"
+              :type="
+                { passed: 'success', review: 'warning', failed: 'danger', neutral: 'info' }[
+                  GOODS_CLEAN_RESULTS[row.status]?.tone
+                ]
+              "
             >
               {{ GOODS_CLEAN_RESULTS[row.status]?.label ?? row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column
-          prop="evidence"
-          label="识别说明 / 命中证据"
-          min-width="158"
-          show-overflow-tooltip
-        />
-        <el-table-column label="操作" width="102" align="center">
+        <el-table-column label="操作" width="118" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'ERROR'"
               type="primary"
               link
-              :disabled="busy || job?.status === 'RUNNING' || Boolean(jobsError)"
+              :disabled="busy || Boolean(active)"
               :loading="action === row.id"
               @click="submitRetry(row)"
             >
               重试
             </el-button>
-            <el-button
-              v-if="row.status === 'REVIEW_REQUIRED'"
-              type="primary"
-              link
-              @click="openDetail(row)"
-            >
-              审核
+            <el-button type="primary" link @click="openDetail(row)">
+              {{ row.status === 'REVIEW_REQUIRED' ? '审核' : '查看' }}
             </el-button>
-            <el-button v-else type="primary" link @click="openDetail(row)">查看</el-button>
           </template>
         </el-table-column>
       </el-table>
-
-      <footer class="cleaning-pagination">
+      <footer v-if="resultPage" class="cleaning-pagination">
         <span>共 {{ formatCount(total) }} 条</span>
         <el-pagination
           v-model:current-page="page"
@@ -400,6 +306,230 @@ async function submitReview(body) {
       </footer>
     </section>
 
+    <el-dialog
+      v-model="startOpen"
+      title="开始清洗"
+      width="min(1060px, calc(100vw - 24px))"
+      class="cleaning-dialog"
+      :close-on-click-modal="false"
+      :show-close="closeStart"
+      :close-on-press-escape="closeStart"
+    >
+      <template v-if="submittedJob">
+        <div class="cleaning-job-heading">
+          <strong>{{ submittedJob.brandName }} · {{ jobScope(submittedJob) }}</strong>
+          <el-button link type="primary" @click="openLogs('job', submittedJob.id)">
+            处理日志
+          </el-button>
+        </div>
+        <CatalogCleaningJobProgress :job="submittedJob" />
+        <el-alert
+          v-if="progressError"
+          :title="progressError"
+          type="error"
+          :closable="false"
+          show-icon
+        />
+      </template>
+      <template v-else>
+        <el-form
+          class="cleaning-scope-form"
+          label-position="top"
+          :disabled="busy || confirming"
+          @submit.prevent="searchPreview"
+        >
+          <div class="cleaning-scope-fields">
+            <el-form-item label="品牌" required>
+              <el-select v-model="scope.brandName" aria-label="清洗品牌" placeholder="请选择品牌">
+                <el-option
+                  v-for="brand in GOODS_BRANDS"
+                  :key="brand"
+                  :label="brand"
+                  :value="brand"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="清洗范围" required>
+              <el-select v-model="scope.dateMode" aria-label="清洗范围">
+                <el-option label="指定建档日期" value="DATE" />
+                <el-option label="该品牌全部已入库商品" value="ALL" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="scope.dateMode === 'DATE'" label="建档日期" required>
+              <el-date-picker
+                v-model="scope.createdDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                placeholder="请选择建档日期"
+                aria-label="清洗建档日期"
+              />
+            </el-form-item>
+          </div>
+          <el-checkbox v-model="scope.includeReviews">同时重新识别未建立映射的待审商品</el-checkbox>
+          <div v-if="previewReady" class="cleaning-preview-heading">
+            <h3>商品预览</h3>
+            <div class="cleaning-preview-search">
+              <el-input
+                v-model="previewSearch"
+                aria-label="预览商品关键词"
+                placeholder="商品名称或货号"
+                maxlength="128"
+                clearable
+                @clear="searchPreview"
+              />
+              <el-button native-type="submit">查询</el-button>
+            </div>
+          </div>
+        </el-form>
+        <p v-if="!previewReady" class="cleaning-hint">选好品牌和清洗范围后查看对应商品。</p>
+        <div v-else-if="previewError" class="cleaning-inline-error">
+          <el-alert :title="previewError.message" type="error" :closable="false" show-icon />
+          <el-button link type="primary" @click="loadPreview">重新读取</el-button>
+        </div>
+        <template v-else>
+          <el-table
+            v-loading="previewLoading"
+            :data="previewData?.items ?? []"
+            row-key="id"
+            empty-text="暂无符合条件的商品"
+            max-height="380"
+            aria-label="待清洗范围商品预览"
+          >
+            <el-table-column
+              prop="goodsName"
+              label="商品名称"
+              min-width="220"
+              show-overflow-tooltip
+            />
+            <el-table-column prop="goodsNo" label="货号" width="130" show-overflow-tooltip />
+            <el-table-column
+              prop="skuName"
+              label="SKU 名称"
+              min-width="140"
+              show-overflow-tooltip
+            />
+            <el-table-column label="建档日期" width="112">
+              <template #default="{ row }">{{ row.createdDate || '未知' }}</template>
+            </el-table-column>
+            <el-table-column label="已识别机型" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">{{ recognized(row) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="112">
+              <template #default="{ row }">
+                {{ GOODS_CLEAN_RESULTS[row.status]?.label ?? row.status }}
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-if="previewData" class="cleaning-pagination">
+            <span>预览共 {{ formatCount(previewData.total) }} 条</span>
+            <el-pagination
+              v-model:current-page="previewPage"
+              :page-size="previewSize"
+              :total="previewData.total"
+              :pager-count="5"
+              size="small"
+              layout="prev, pager, next"
+              :disabled="busy || confirming"
+            />
+          </div>
+        </template>
+        <el-alert
+          v-if="actionError"
+          :title="actionError"
+          type="error"
+          :closable="false"
+          show-icon
+        />
+      </template>
+      <template #footer>
+        <div class="cleaning-dialog-footer">
+          <span v-if="!submittedJob && previewData" aria-live="polite">
+            {{
+              previewData.eligible
+                ? '本次待清洗 ' + formatCount(previewData.eligible) + ' 条'
+                : '当前范围暂无可清洗商品'
+            }}
+          </span>
+          <div class="cleaning-page-actions">
+            <el-button :disabled="!closeStart" @click="startOpen = false">关闭</el-button>
+            <el-button
+              v-if="!submittedJob"
+              type="primary"
+              :disabled="!canStart"
+              :loading="action === 'start'"
+              @click="submitStart"
+            >
+              清洗
+            </el-button>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="historyOpen"
+      title="清洗记录"
+      width="min(900px, calc(100vw - 24px))"
+      class="cleaning-dialog"
+    >
+      <template v-if="active">
+        <div class="cleaning-job-heading">
+          <strong>{{ active.brandName }} · {{ jobScope(active) }}</strong>
+          <el-button link type="primary" @click="openLogs('job', active.id)">处理日志</el-button>
+        </div>
+        <CatalogCleaningJobProgress :job="active" />
+      </template>
+      <el-alert
+        v-if="progressError"
+        :title="progressError"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+      <div v-if="historyError" class="cleaning-inline-error">
+        <el-alert :title="historyError.message" type="error" :closable="false" show-icon />
+        <el-button link type="primary" @click="loadHistory">重新读取</el-button>
+      </div>
+      <el-table
+        v-else
+        v-loading="historyLoading"
+        :data="historyData?.items ?? []"
+        row-key="id"
+        empty-text="暂无清洗记录"
+      >
+        <el-table-column prop="createdAt" label="发起时间" width="164" />
+        <el-table-column prop="brandName" label="品牌" width="100" />
+        <el-table-column label="范围" min-width="165">
+          <template #default="{ row }">{{ jobScope(row) }}</template>
+        </el-table-column>
+        <el-table-column prop="requesterName" label="发起人" width="100" show-overflow-tooltip />
+        <el-table-column label="状态" width="128">
+          <template #default="{ row }">{{ GOODS_CLEAN_JOB_LABELS[row.status] }}</template>
+        </el-table-column>
+        <el-table-column label="进度" width="92">
+          <template #default="{ row }">
+            {{ row.legacy ? '—' : row.processed + ' / ' + row.total }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="openLogs('job', row.id)">日志</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-pagination
+          v-if="historyData?.total"
+          v-model:current-page="historyPage"
+          :page-size="historySize"
+          :total="historyData.total"
+          :pager-count="5"
+          size="small"
+          layout="prev, pager, next"
+        />
+      </template>
+    </el-dialog>
+
     <CatalogCleaningDetailDialog
       :open="Boolean(detailId)"
       :detail="sourceDetail"
@@ -410,52 +540,20 @@ async function submitReview(body) {
       :review-error="reviewError"
       @close="detailId = ''"
       @reload="loadDetail"
+      @history="openLogs('source', detailId)"
       @review="submitReview"
     />
-    <el-dialog
-      :model-value="Boolean(logsJobId)"
-      :title="`处理日志 · CLN-${logsJobId}`"
-      width="min(860px, calc(100vw - 24px))"
-      class="cleaning-log-dialog"
-      @update:model-value="(value) => !value && (logsJobId = '')"
-    >
-      <div v-if="logsError" class="cleaning-error">
-        <el-alert :title="logsError.message" type="error" :closable="false" show-icon />
-        <el-button link type="primary" @click="loadLogs">重新读取</el-button>
-      </div>
-      <el-table
-        v-loading="logsLoading"
-        :data="logPage?.items ?? []"
-        row-key="id"
-        empty-text="暂无处理日志"
-      >
-        <el-table-column prop="createdAt" label="时间" width="158" />
-        <el-table-column label="操作者" width="100" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.actorType === 'SYSTEM' ? '系统' : row.operatorName || '管理员' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="108">
-          <template #default="{ row }">
-            {{ GOODS_CLEAN_LOG_ACTIONS[row.action] ?? row.action }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="sourceId" label="来源 ID" width="90" />
-        <el-table-column prop="reason" label="处理说明" min-width="180" show-overflow-tooltip />
-      </el-table>
-      <template #footer>
-        <div class="cleaning-pagination">
-          <span>共 {{ formatCount(logsTotal) }} 条</span>
-          <el-pagination
-            v-model:current-page="logsPage"
-            :page-size="logsSize"
-            :total="logsTotal"
-            :pager-count="5"
-            size="small"
-            layout="prev, pager, next"
-          />
-        </div>
-      </template>
-    </el-dialog>
+    <CatalogCleaningLogDialog
+      :open="Boolean(logTarget)"
+      :title="logTarget?.type === 'source' ? '商品处理记录' : '清洗处理日志'"
+      :data="logPage"
+      :loading="logsLoading"
+      :error="logsError?.message"
+      :page="logsPage"
+      :size="logsSize"
+      @update:page="logsPage = $event"
+      @close="logTarget = null"
+      @reload="loadLogs"
+    />
   </section>
 </template>

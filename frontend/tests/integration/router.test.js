@@ -12,7 +12,7 @@ it('管理员可直达清洗页，恢复会话后保留地址并可切回源商�
       .getRoutes()
       .filter((route) => route.meta.role === 'ADMIN')
       .map((route) => route.path),
-  ).toEqual(['/admin/catalog/sources', '/admin/catalog/cleaning'])
+  ).toEqual(['/admin/catalog/sources', '/admin/catalog/cleaning', '/admin/catalog/center'])
   await router.push('/admin/catalog/cleaning')
   session.setLogin({ user: { roleType: 'ADMIN' } })
   await router.syncSessionRoute()
@@ -20,6 +20,15 @@ it('管理员可直达清洗页，恢复会话后保留地址并可切回源商�
   expect(router.currentRoute.value.matched).toHaveLength(1)
   await router.push({ name: 'catalog-sources' })
   expect(router.currentRoute.value.path).toBe('/admin/catalog/sources')
+})
+
+it('管理员恢复会话后保留商品中心直达地址', { timeout: 15000 }, async () => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  await router.push('/admin/catalog/center')
+  session.setLogin({ user: { roleType: 'ADMIN' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.name).toBe('catalog-center')
 })
 it('管理员打开已删除的页面或未知地址时回到源商品库', async () => {
   const session = createAuthSession()
@@ -39,5 +48,7 @@ it('申请人手动访问管理员地址仍回到申请人页，查询参数不�
   await router.syncSessionRoute()
   expect(router.currentRoute.value.path).toBe('/apply')
   await router.push('/admin/catalog/sources')
+  expect(router.currentRoute.value.path).toBe('/apply')
+  await router.push('/admin/catalog/center')
   expect(router.currentRoute.value.path).toBe('/apply')
 })

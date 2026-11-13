@@ -1,10 +1,10 @@
 # 商品管理接口契约
 
-更新日期：2026-11-12。源商品导入、清洗、来源审核、技术重试及清洗审计接口已实现。标准目录维护和政策查询接口见后续设计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期：2026-11-13。旧结构下的源商品导入、清洗、来源审核、技术重试和清洗日志接口已实现。新基线改用公司共用目录，保留清洗结果及任务进度。接入时移除清洗日志接口。标准目录接口见后续设计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
-沿用项目 Session、Origin、X-Policy-Request、DTO/VO 规范。每次管理操作重新检查有效 ADMIN 和 tenant_key；账套和租户绑定来自服务端配置。ID 按字符串，recordVersion 为整数。客户端不指定操作者、账套、租户、游标或分页请求频率。
+沿用项目 Session、Origin、X-Policy-Request、DTO/VO 规范。每次管理操作重新检查有效 ADMIN 和公司飞书租户。账套来自服务端配置，所有有效管理员访问同一套数据。新基线的商品相关表不保存租户字段。ID 按字符串，recordVersion 为整数。客户端不指定操作者、账套、租户、游标或分页请求频率。
 
 列表默认每页 20、上限 100，排序和枚举白名单；不一次把全库返回浏览器。错误统一 400/401/403/404/409/503；上游错误以脱敏类别和本地 jobId 表示，不返回凭证或原始报文。
 
@@ -18,11 +18,13 @@
 | POST | /api/admin/goods-sync/jobs/{id}/cancel | 带 `recordVersion`；只结束暂停任务，保留已提交商品原文和剩余冷却时间 |
 | GET | /api/admin/source-goods | `brandName` 可省略，`keyword` 最长 128，按名称、货号、SKU 名称或完整分类路径查子串，或按 SKU ID 精确查询；`createdDate` 可按北京时间建档日 `YYYY-MM-DD` 筛选已导入的 SKU；`page` 从 1 开始，`size` 默认 20、最大 100；返回 `items` 和 `total` |
 
-任务返回 `id`、`brandName`、`syncMode`、`syncDate`、`syncPhase`、`status`、`cleanStatus`、`pageCount`、`readCount`、`contentCount`、`errorCode`、`canResume` 和 `recordVersion`。`status` 为 `QUEUED`、`RUNNING`、`PAUSED`、`SUCCEEDED`、`CANCELLED`。新任务在原文导入完成时进入后台清洗，两个状态分别查询。修改日任务依次查询 `GOODS_MODIFIED`、`SKU_MODIFIED`，每阶段保留断点。来源列表返回本地 ID、品牌、原始七字段、字符串 `skuId`、`cateFullName`、毫秒时间戳 `gmtModified` 和 `goodsGmtModified`、可空布尔标记 `isBlockup` 和 `isPackageGood`，以及 `cleanStatus`。`readCount` 为已提交读取条次，`contentCount` 为本任务不同 SKU 数。部分提交的原文可查询，游标和工作令牌只在服务端维护。
+任务返回 `id`、`brandName`、`syncMode`、`syncDate`、`syncPhase`、`status`、`pageCount`、`readCount`、`contentCount`、`errorCode`、`canResume` 和 `recordVersion`。`status` 为 `QUEUED`、`RUNNING`、`PAUSED`、`SUCCEEDED`、`CANCELLED`。导入完成后保留来源，清洗由管理员另行发起。修改日任务依次查询 `GOODS_MODIFIED`、`SKU_MODIFIED`，每阶段保留断点。来源列表返回本地 ID、品牌、原始七字段、字符串 `skuId`、`cateFullName`、毫秒时间戳 `gmtModified` 和 `goodsGmtModified`、可空布尔标记 `isBlockup` 和 `isPackageGood`，以及 `cleanStatus`。`readCount` 为已提交读取条次，`contentCount` 为本任务不同 SKU 数。部分提交的原文可查询，游标和工作令牌只在服务端维护。
 
 同一管理员、品牌、模式、日期和幂等键重复提交返回原任务；键冲突、有活动任务、冷却未结束或任务状态已变更返回 409。缺少租户/账套配置或数据库不可用返回 503。实际接口可在 Knife4j `/doc.html` 查看。
 
-来源列表的 `createdDate` 是吉客云按建档日查询命中的日期，返回 `YYYY-MM-DD`，缺少已确认记录时为空。筛选与品牌、关键词和分页同时生效。旧数据可从首次、最近或清洗关联的按建档日任务识别。新匹配按 SKU 和日期记录在已有商品操作日志中，其他导入模式后续更新 SKU 时可继续查询。
+新基线以 `skuId` 唯一匹配源商品。已有 SKU 的吉客云来源未变时保留商品内容、更新时间及清洗状态，导入任务仍推进。
+
+来源列表的 `createdDate` 是吉客云按建档日查询命中的日期，返回 `YYYY-MM-DD`，缺少已确认记录时为空。筛选与品牌、关键词和分页同时生效。日期依据来自商品操作日志及首次、最近导入任务。后续全量或按修改日导入时，已有日期证据仍可查询。
 
 来源列表的 `gmtModified`、`goodsGmtModified` 分别对应已入库的吉客云规格和货品修改时间，均为 Unix 毫秒，库中缺值时各自返回 null。前端按北京时间分别格式化，保留非零毫秒。「导入商品」弹窗发起 `FULL` 或 `CREATED` 任务，服务端同时保留 `MODIFIED` 契约。[管理员工作台](../architecture/admin-workspace.md)
 
@@ -30,39 +32,34 @@
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | /api/admin/catalog/cleaning/latest | 最近成功导入的批次，`brandName` 可选；没有成功批次时返回 204 |
-| GET | /api/admin/goods-sync/jobs/{id}/cleaning | 指定导入批次的清洗状态、进度和分流计数 |
-| POST | /api/admin/goods-sync/jobs/{id}/clean-start | 用任务 `recordVersion` 启动历史成功批次，返回 202；重复启动返回当前任务 |
-| POST | /api/admin/goods-sync/jobs/{id}/clean-preview | 预览来源文本的规则候选；查询参数 `ruleVersion` 可省略，支持 `page`、`size` |
-| GET | /api/admin/catalog/cleaning/results | 按 `importJobId`、`brandName`、`status`、`ruleVersion`、`keyword` 和分页筛选 |
-| GET | /api/admin/source-goods/{id} | 原文、候选、命中证据、当前规格及颜色映射 |
-| POST | /api/admin/source-goods/{id}/review | 用来源 `recordVersion` 审核，支持 `APPROVE` 和 `EXCLUDE` |
-| POST | /api/admin/source-goods/{id}/clean-retry | 用来源 `recordVersion` 重试一条 `ERROR`，返回 202 |
-| POST | /api/admin/goods-sync/jobs/{id}/clean-retry | 用任务 `recordVersion` 重试本批次的 `ERROR`，返回 202 |
-| POST | /api/admin/goods-sync/jobs/{id}/clean-reprocess | 用任务 `recordVersion` 批量重新识别当前批次中使用旧规则且尚未映射的待审记录，返回 202 |
-| GET | /api/admin/goods-sync/jobs/{id}/clean-logs | 按时间倒序分页查询本批次的 SKU 原文变更及清洗审计 |
+| GET | /api/admin/catalog/cleaning/results | 按 `brandName`、`createdDate`、`unknownDate`、`keyword`、`status` 和分页查询当前 SKU，同时返回同范围的状态计数 |
+| GET | /api/admin/catalog/cleaning/preview | `brandName` 必填，`createdDate` 可选，`includeReviews` 默认 false。返回 `items`、`total`、`eligible`。关键词仅影响列表和 total |
+| POST | /api/admin/catalog/cleaning/jobs | 用 `brandName`、`createdDate`、`includeReviews`、`expectedTotal`、`requestKey` 创建任务，返回 202 |
+| GET | /api/admin/catalog/cleaning/jobs | 分页查看本账套清洗历史 |
+| GET | /api/admin/catalog/cleaning/jobs/active | 获取进行中任务，无活动任务返回 204 |
+| GET | /api/admin/catalog/cleaning/jobs/{id} | 查看任务范围、发起人、状态、进度和统计 |
+| GET | /api/admin/catalog/cleaning/jobs/{id}/logs | 分页查看旧版任务处理日志，适配新基线时移除 |
+| GET | /api/admin/source-goods/{id} | 查看原文、候选、命中证据、当前规格及颜色映射 |
+| GET | /api/admin/source-goods/{id}/clean-logs | 分页查看旧版来源清洗日志，适配新基线时移除 |
+| POST | /api/admin/source-goods/{id}/review | 带 `recordVersion` 和 `decision` 审核，支持通过 `APPROVE` 和不通过 `EXCLUDE` |
+| POST | /api/admin/source-goods/{id}/clean-retry | 带 `recordVersion` 和 `requestKey` 重试一条 `ERROR`，返回 202 |
 
-前端先用 `latest?brandName=OPPO手机` 或 `latest?brandName=一加手机` 读取成功批次。历史批次的状态为 `NOT_STARTED` 时，调用 `clean-start`。所有任务路径中的 `{id}` 都传返回的 `importJobId`，`id` 是展示用的 `CLN-<导入ID>`。任务返回 `brandName`、`status`、`ruleVersion`、`recordVersion`、`createdAt`、`total`、`processed`、`progress`、`resultCounts`。`createdAt` 为关联导入任务创建时间，按北京时间精确到秒。状态为 `RUNNING` 时轮询详情，完成后刷新结果和日志。
+品牌可选 OPPO手机、一加手机。查询结果省略品牌汇总两品牌，省略状态显示全部。日期为北京时间 `YYYY-MM-DD`，`unknownDate=true` 与具体日期互斥。状态查询支持 `PENDING`（包括旧处理中状态）、`PASSED`（自动和人工通过）、`REVIEW_REQUIRED`、`ERROR`、`EXCLUDED`。关键词最多 128 字符，查商品名或货号。页码从 1 开始，每页 1 至 100 条。计数按品牌、建档日和关键词计算，和当前页签无关。
 
-任务状态为 `NOT_STARTED`、`RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。进度按已分流数量计算，待审也属于已分流。`reprocessable` 为当前批次可用新规则重新识别的旧待审条数。结果状态可选 `PENDING`、`PROCESSING`、`AUTO_PASSED`、`REVIEW_REQUIRED`、`MANUAL_PASSED`、`ERROR`、`EXCLUDED`。结果列表返回 `items` 与 `total`，每行有来源 `id`、`importJobId`、原始商品名与货号、系列/型号/配置、`colorName`、`colorCandidates`、`evidence`、`issueCode`、`suggestedAction` 和 `recordVersion`。待审项可显示单个颜色候选，多个颜色时 `colorName` 为 null，候选见 `colorCandidates`。没有颜色线索时返回空数组。可用 `status=REVIEW_REQUIRED` 查询待审列表。批次统计来自当前来源记录。
+开始清洗指定一个品牌，日期为空时涵盖该品牌全部已入库 SKU。实际纳入已完成导入或已结束导入中已落库的待清洗 SKU，可选未映射的待审 SKU。进行中或暂停的最近导入需先完成或结束。确认数量必须大于 0；实际数量变化返回 `409 CATALOG_CLEAN_SCOPE_CHANGED`。幂等请求键同账套唯一，重复请求返回已有任务，活动任务范围相同可直接返回该任务。其他范围在同账套有运行任务时返回 `409 CATALOG_CLEAN_ACTIVE`。
 
-命中业务排除规则的来源返回 `REVIEW_REQUIRED` 和 `suggestedAction=EXCLUDE`，拦在标准目录外。审核请求体均需 `recordVersion` 和 `reason`。`APPROVE` 另需 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。已命中排除规则的来源只能排除。`EXCLUDE` 保留原文和历史。重试仅处理当前成功批次中的技术失败，版本过期、批次正在运行、来源已迁到新批次或无可重试记录时返回 409。规则版本由服务端固定，预览结果按来源文本预测，实际写入仍校验目标目录及其启用状态。
+清洗任务独立于导入任务，ID 为字符串。任务返回 `brandName`、`createdDate`、`includeReviews`、`targetSourceId`、`status`、`requesterName`、`createdAt`、`total`、`processed`、`progress` 和 `resultCounts`。新基线任务状态为 `RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。现有旧接口另支持 `legacy` 和 `INTERRUPTED`，适配时一并移除。待人工审核算作已分流，确认后发生来源变化的成员记为 `SKIPPED`，保留在本轮统计中。
 
-## 待实现的标准规格与颜色维护
+结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。命中排除规则的来源只允许审核不通过。兼容旧请求的可选 `reason`，省略或留空时服务端按决定记录「审核通过」或「审核不通过」。旧记录版本或不允许的状态返回 409。
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET/POST | /api/admin/catalog/variants | 标准规格列表或创建，字段 variantCode、brandName、seriesName、modelName、spec、displayName |
-| PUT | /api/admin/catalog/variants/{id} | 带 recordVersion 修改允许的名称字段；不改已引用身份 |
-| GET/POST | /api/admin/catalog/variants/{id}/colors | 查询或创建该规格的 colorName |
-| PUT | /api/admin/catalog/variants/{id}/colors/{colorId} | 带 recordVersion 修改该规格颜色，父子归属必须一致 |
-| POST | /api/admin/catalog/publications/preview、/publish | 明确对象类型、ID、版本集合预览和发布；版本变化返回 409 |
-| POST | /api/admin/catalog/variants/{id}/disable、/api/admin/catalog/variants/{id}/colors/{colorId}/disable | 停用，不删除历史引用 |
+## 待接入的标准商品目录
 
-自动创建/复用并启用规格颜色、映射及 SYSTEM 审计同一短事务，不走强制人工发布；publications 仅是异常纠正或手工草稿补充入口。SYSTEM 记录 ruleVersion，operatorId 为空；人工审核记 USER 和真实操作者。日志不存游标、执行令牌、外部SKU标识或完整响应；首期无独立在线规则编辑和历史批次回放接口。
+商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。商品响应包含本地 SKU、货品编号、清洗后的商品名称、RAM、ROM、销售状态和目录状态。吉客云 SKU、来源货号及原文通过已授权的来源详情查询。商品列表按品牌、系列、机型、关键词和状态分页，服务端返回公司共用目录。
+
+清洗和审核通过后，在同一事务内创建或复用标准目录、写入来源 `goodsId`、更新来源和任务成员结果。自动清洗的审核人为空，人工审核记录实际操作人。重复处理复用同配置同颜色的商品。修改现有映射按来源版本校验，冲突返回 409。商品中心和字典维护的写接口待接入。
 
 ## 待接入的申请人目录
 
-GET /api/catalog/brands、/series、/models、/variants 从 ACTIVE 标准规格按上级字段过滤和去重。GET /api/catalog/variants/{id}/colors 仅返回当前租户该 ACTIVE 规格的 ACTIVE 颜色。
+按品牌、系列、机型版本筛选，从 ACTIVE 商品按 `spuId`、`ram`、`rom` 去重得到配置。选配置后返回该配置下 ACTIVE 商品的 `goodsId` 和字典颜色名称。切换配置清空旧颜色。
 
-选择具体型号配置后明确 colorScope=ALL_COLORS 或 SPECIFIC_COLOR；后者传该规格下 variantColorId，服务端生成 color 名称快照。切换规格须清空旧颜色。
+选择 ALL_COLORS 时提交配置和颜色范围。选择 SPECIFIC_COLOR 时另传该配置下的 `goodsId`，颜色快照由服务端生成。请求契约见 [政策接口](policy-api.md)。

@@ -45,11 +45,13 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "jackyun.app-key=test-app-key",
             "jackyun.app-secret=test-secret",
             "jackyun.tenant-key=test-tenant",
-            "jackyun.import-scheduling-enabled=false"
+            "jackyun.import-scheduling-enabled=false",
+            "jackyun.clean-scheduling-enabled=false"
         })
 @AutoConfigureMockMvc
 class GoodsSyncIntegrationTest {
     private static final String JOBS = "/api/admin/goods-sync/jobs";
+    private static final String CLEANING = "/api/admin/catalog/cleaning";
     private static final String SOURCES = "/api/admin/source-goods";
     private static final String OPPO = "OPPO手机";
     private static final String ONEPLUS = "一加手机";
@@ -96,7 +98,9 @@ class GoodsSyncIntegrationTest {
                             "(?i).*[\\\\/]\\.local-cache[\\\\/]catalog-import-mysql-[0-9]+[\\\\/]data[\\\\/]");
         }
         jdbc.update("DELETE FROM catalog_operation_log");
+        jdbc.update("DELETE FROM catalog_clean_job_item");
         jdbc.update("DELETE FROM source_goods_item");
+        jdbc.update("DELETE FROM catalog_clean_job");
         jdbc.update("DELETE FROM goods_sync_job");
         jdbc.update("DELETE FROM catalog_variant_color");
         jdbc.update("DELETE FROM catalog_variant");
@@ -210,6 +214,7 @@ class GoodsSyncIntegrationTest {
                         false,
                         false);
         importForCleaning(List.of(previous));
+        startClean(OPPO, null, false, 1);
         cleaning.processNextBatch();
         long source = sourceId("RENO-W");
         Long mappedColor =
@@ -282,6 +287,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.items[0].cateFullName").value(path))
                 .andExpect(jsonPath("$.items[0].gmtModified").value(modifiedTime))
                 .andExpect(jsonPath("$.items[0].isBlockup").value(false));
+        startClean(OPPO, null, false, 1);
         cleaning.processNextBatch();
         mvc.perform(get(SOURCES + "/" + source).session(admin))
                 .andExpect(jsonPath("$.result.issueCode").value("CATALOG_MAPPING_CHANGED"))
@@ -339,8 +345,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.items[0].createdDate").value("2026-09-16"));
 
         // 模拟旧版只保留最近导入批次的记录。
-        jdbc.update(
-                "DELETE FROM catalog_operation_log WHERE rule_version='SOURCE_CREATED_DATE_V1'");
+        jdbc.update("DELETE FROM catalog_operation_log WHERE batch_key LIKE 'CREATED-DATE-%'");
         mvc.perform(get(SOURCES).session(admin).param("keyword", ORIGINAL.skuId()))
                 .andExpect(jsonPath("$.items[0].createdDate").value("2026-09-16"));
         importForCleaning(List.of(ORIGINAL));
@@ -363,6 +368,78 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.total").value(0));
         mvc.perform(get(SOURCES).session(admin).param("createdDate", "2026-09-99"))
                 .andExpect(status().isBadRequest());
+
+        var dateOnly = goods("按日补导", "DATE-ONLY", "8+128", "分类", null, null, null);
+        String secondDate =
+                json.readTree(
+                                mvc.perform(
+                                                mutation(JOBS)
+                                                        .content(
+                                                                json.writeValueAsBytes(
+                                                                        new GoodsSyncRequest(
+                                                                                OPPO,
+                                                                                UUID.randomUUID()
+                                                                                        .toString(),
+                                                                                GoodsSyncRequest
+                                                                                        .Mode
+                                                                                        .CREATED,
+                                                                                date))))
+                                        .andExpect(status().isAccepted())
+                                        .andReturn()
+                                        .getResponse()
+                                        .getContentAsString())
+                        .path("id")
+                        .asText();
+        when(upstream.queryPage(first))
+                .thenReturn(new JackyunGoodsPage(OPPO, List.of(dateOnly), CURSOR));
+        step(secondDate);
+        step(secondDate);
+
+        String oneplus = start(ONEPLUS, UUID.randomUUID().toString());
+        when(upstream.queryPage(any()))
+                .thenReturn(
+                        new JackyunGoodsPage(
+                                ONEPLUS,
+                                List.of(
+                                        goods(
+                                                "一加样本",
+                                                "ONEPLUS-ONLY",
+                                                "8+128",
+                                                "分类",
+                                                null,
+                                                null,
+                                                null)),
+                                CURSOR))
+                .thenReturn(new JackyunGoodsPage(ONEPLUS, List.of(), CURSOR));
+        step(oneplus);
+        step(oneplus);
+        mvc.perform(get(CLEANING + "/results").session(admin))
+                .andExpect(jsonPath("$.total").value(4))
+                .andExpect(jsonPath("$.counts.PENDING").value(4));
+        mvc.perform(get(CLEANING + "/results").session(admin).param("unknownDate", "true"))
+                .andExpect(jsonPath("$.total").value(2));
+        mvc.perform(
+                        get(CLEANING + "/preview")
+                                .session(admin)
+                                .param("brandName", OPPO)
+                                .param("createdDate", date.toString())
+                                .param("keyword", "DATE-ONLY"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.eligible").value(2));
+        String task = startClean(OPPO, date, false, 2);
+        // 清洗确认后变更原文，已选成员必须跳过，其他成员照常处理。
+        jdbc.update(
+                "UPDATE source_goods_item SET record_version=record_version+1 WHERE goods_no='DATE-ONLY'");
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/" + task).session(admin))
+                .andExpect(jsonPath("$.status").value("PARTIAL"))
+                .andExpect(jsonPath("$.resultCounts.SKIPPED").value(1))
+                .andExpect(jsonPath("$.processed").value(2));
+        mvc.perform(get(CLEANING + "/results").session(admin).param("status", "PENDING"))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.counts.ALL").value(4));
+        mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))
+                .andExpect(jsonPath("$.eligible").value(2));
     }
 
     @Test
@@ -378,6 +455,7 @@ class GoodsSyncIntegrationTest {
                         withPath("PATH-SERIES", null, "OPPO手机/Reno系列/Reno17", false, false),
                         withPath("BLOCKED", "Reno系列", "OPPO手机/Reno系列/Reno17", true, false),
                         withPath("PACKAGE", "Reno系列", "组合装", false, true)));
+        startClean(OPPO, null, false, 4);
         cleaning.processNextBatch();
         mvc.perform(get(SOURCES + "/" + sourceId("PATH-CONFLICT")).session(admin))
                 .andExpect(jsonPath("$.result.issueCode").value("CATEGORY_PATH_CONFLICT"))
@@ -523,69 +601,63 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void cleansRealNameShapesAndReviewsConflictsAndExclusions() throws Exception {
-        String batch =
-                importForCleaning(
-                        List.of(
-                                goods(
-                                        "A5 活力版 琥珀黑 8+256",
-                                        "A5-H",
-                                        "8+256",
-                                        "A5 活力版",
-                                        "A系列",
-                                        "A5 活力版8+256",
-                                        "手机-一加（高成本折扣）"),
-                                goods(
-                                        "A5 活力版 (8GB+256GB) 琥珀黑",
-                                        "A5-H2",
-                                        "8+256",
-                                        "A5 活力版",
-                                        "A系列",
-                                        "A5 活力版 8+256",
-                                        null),
-                                goods(
-                                        "A5 活力版 琥珀黑 12+256",
-                                        "A5-H3",
-                                        "12+256",
-                                        "A5 活力版",
-                                        "A系列",
-                                        "A5 活力版 12+256",
-                                        null),
-                                goods(
-                                        "A11 暮辰紫 8+256",
-                                        "A11-Z",
-                                        "6+256",
-                                        "A11",
-                                        "A系列",
-                                        "A116+256",
-                                        null),
-                                goods(
-                                        "Reno16 星河紫 12+256 简装版",
-                                        "R16-Z",
-                                        "12+256 简装版",
-                                        "Reno16",
-                                        "Reno系列",
-                                        "Reno16 12+256 简装",
-                                        null),
-                                goods("Reno12 周边", "R12-X", "0", "IOT&配件", "Reno系列", null, null),
-                                goods(
-                                        "A55 律动黑 6+128",
-                                        "A55-H",
-                                        "6+128",
-                                        "A55",
-                                        "手机-一加（高成本折扣）",
-                                        "A55 6+128",
-                                        null)));
-        mvc.perform(get("/api/admin/catalog/cleaning/latest").session(admin))
+        importForCleaning(
+                List.of(
+                        goods(
+                                "A5 活力版 琥珀黑 8+256",
+                                "A5-H",
+                                "8+256",
+                                "A5 活力版",
+                                "A系列",
+                                "A5 活力版8+256",
+                                "手机-一加（高成本折扣）"),
+                        goods(
+                                "A5 活力版 (8GB+256GB) 琥珀黑",
+                                "A5-H2",
+                                "8+256",
+                                "A5 活力版",
+                                "A系列",
+                                "A5 活力版 8+256",
+                                null),
+                        goods(
+                                "A5 活力版 琥珀黑 12+256",
+                                "A5-H3",
+                                "12+256",
+                                "A5 活力版",
+                                "A系列",
+                                "A5 活力版 12+256",
+                                null),
+                        goods("A11 暮辰紫 8+256", "A11-Z", "6+256", "A11", "A系列", "A116+256", null),
+                        goods(
+                                "Reno16 星河紫 12+256 简装版",
+                                "R16-Z",
+                                "12+256 简装版",
+                                "Reno16",
+                                "Reno系列",
+                                "Reno16 12+256 简装",
+                                null),
+                        goods("Reno12 周边", "R12-X", "0", "IOT&配件", "Reno系列", null, null),
+                        goods(
+                                "A55 律动黑 6+128",
+                                "A55-H",
+                                "6+128",
+                                "A55",
+                                "手机-一加（高成本折扣）",
+                                "A55 6+128",
+                                null)));
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/active").session(admin))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("RUNNING"));
-        mvc.perform(mutation(JOBS + "/" + batch + "/clean-preview"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(7));
+                .andExpect(jsonPath("$.total").value(7))
+                .andExpect(jsonPath("$.eligible").value(7))
+                .andExpect(jsonPath("$.items[0].status").value("PENDING"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant", Integer.class))
                 .isZero();
+        String batch = startClean(OPPO, null, false, 7);
         cleaning.processNextBatch();
-        cleaning.processNextBatch();
-        mvc.perform(get(JOBS + "/" + batch + "/cleaning").session(admin))
+        mvc.perform(get(CLEANING + "/jobs/" + batch).session(admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.progress").value(100))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
@@ -594,7 +666,6 @@ class GoodsSyncIntegrationTest {
         mvc.perform(
                         get("/api/admin/catalog/cleaning/results")
                                 .session(admin)
-                                .param("importJobId", batch)
                                 .param("keyword", "A11")
                                 .param("status", "REVIEW_REQUIRED"))
                 .andExpect(status().isOk())
@@ -608,15 +679,13 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.result.suggestedAction").value("EXCLUDE"));
         mvc.perform(
                         mutation(SOURCES + "/" + excluded + "/review")
-                                .content(
-                                        "{\"recordVersion\":1,\"decision\":\"EXCLUDE\",\"reason\":\"配件分类确认\"}"))
+                                .content("{\"recordVersion\":1,\"decision\":\"EXCLUDE\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.status").value("EXCLUDED"))
                 .andExpect(jsonPath("$.original.goodsField4").value("Reno系列"));
         mvc.perform(
                         mutation(SOURCES + "/" + excluded + "/review")
-                                .content(
-                                        "{\"recordVersion\":1,\"decision\":\"EXCLUDE\",\"reason\":\"配件分类确认\"}"))
+                                .content("{\"recordVersion\":1,\"decision\":\"EXCLUDE\"}"))
                 .andExpect(status().isConflict());
         long shortPack = sourceId("R16-Z");
         mvc.perform(get(SOURCES + "/" + shortPack).session(admin))
@@ -628,15 +697,17 @@ class GoodsSyncIntegrationTest {
                         mutation(SOURCES + "/" + shortPack + "/review")
                                 .content(
                                         """
-                {"recordVersion":1,"decision":"APPROVE","reason":"确认简装政策范围",
+                {"recordVersion":1,"decision":"APPROVE",
                  "target":{"seriesName":"Reno系列","modelName":"Reno16","spec":"12GB+256GB 简装版","colorName":"星河紫"}}
                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.status").value("MANUAL_PASSED"));
-        mvc.perform(get(JOBS + "/" + batch + "/clean-logs").session(admin))
+        mvc.perform(get(CLEANING + "/jobs/" + batch + "/logs").session(admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(9))
-                .andExpect(jsonPath("$.items[0].actorType").value("USER"));
+                .andExpect(jsonPath("$.total").value(10))
+                .andExpect(jsonPath("$.items[0].actorType").value("USER"))
+                .andExpect(jsonPath("$.items[0].reason").value("审核通过"))
+                .andExpect(jsonPath("$.items[1].reason").value("审核不通过"));
         mvc.perform(
                         get(SOURCES + "/" + shortPack)
                                 .session(session("other-tenant", "other-cleaning", "ADMIN")))
@@ -644,33 +715,34 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void startsAnExistingBatchAndRetriesWithoutLeavingPartialMappings() throws Exception {
-        String batch =
-                importForCleaning(
-                        List.of(
-                                goods(
-                                        "K10 星耀黑 12+256-活力版",
-                                        "K10-H",
-                                        "12+256",
-                                        "K10活力版",
-                                        "K系列",
-                                        "K10 12+256",
-                                        null)));
-        jdbc.update(
-                "UPDATE goods_sync_job SET clean_status='NOT_STARTED', clean_rule_version=NULL WHERE id=?",
-                batch);
-        int initialVersion = version(batch);
-        mvc.perform(control(batch, "clean-start", initialVersion - 1))
-                .andExpect(status().isConflict());
-        mvc.perform(control(batch, "clean-start", initialVersion)).andExpect(status().isAccepted());
-        mvc.perform(control(batch, "clean-start", initialVersion)).andExpect(status().isAccepted());
+    void startsManualJobAndRetriesWithoutLeavingPartialMappings() throws Exception {
+        importForCleaning(
+                List.of(
+                        goods(
+                                "K10 星耀黑 12+256-活力版",
+                                "K10-H",
+                                "12+256",
+                                "K10活力版",
+                                "K系列",
+                                "K10 12+256",
+                                null)));
+        mvc.perform(cleanRequest(OPPO, null, false, 2, "stale"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_SCOPE_CHANGED"));
+        String batch = startClean(OPPO, null, false, 1);
+        mvc.perform(cleanRequest(OPPO, null, false, 1, "same-scope"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.id").value(batch));
+        mvc.perform(cleanRequest(ONEPLUS, null, false, 1, "other-scope"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_ACTIVE"));
         jdbc.execute(
                 "ALTER TABLE catalog_variant_color ADD CONSTRAINT ck_test_color CHECK (color_name <> '星耀黑')");
         try {
             cleaning.processNextBatch();
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM catalog_variant", Integer.class))
                     .isZero();
-            mvc.perform(get(JOBS + "/" + batch + "/cleaning").session(admin))
+            mvc.perform(get(CLEANING + "/jobs/" + batch).session(admin))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("FAILED"))
                     .andExpect(jsonPath("$.resultCounts.ERROR").value(1));
@@ -680,7 +752,7 @@ class GoodsSyncIntegrationTest {
         long source = sourceId("K10-H");
         mvc.perform(
                         mutation(SOURCES + "/" + source + "/clean-retry")
-                                .content("{\"recordVersion\":1}"))
+                                .content("{\"recordVersion\":1,\"requestKey\":\"retry-test\"}"))
                 .andExpect(status().isAccepted());
         cleaning.processNextBatch();
         mvc.perform(get(SOURCES + "/" + source).session(admin))
@@ -693,81 +765,79 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void upgradesOldReviewsAndKeepsColorEvidenceWhenOtherFieldsConflict() throws Exception {
-        String batch =
-                importForCleaning(
-                        List.of(
-                                goods(
-                                        "Reno17 冰月白 12+512",
-                                        "ALIAS",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        "Reon17 12+512",
-                                        null),
-                                goods(
-                                        "Reno17 Pro 初雪白 12+256",
-                                        "ALIAS-PRO",
-                                        "12+256",
-                                        "Reno17 Pro",
-                                        "Reno系列",
-                                        "Reon17 Pro 12+256",
-                                        null),
-                                goods(
-                                        "Reno17 月夜黑 12+512",
-                                        "SPEC-CONFLICT",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        "Reon17 12+256",
-                                        null),
-                                goods(
-                                        "Reno17 冰月白 12+512",
-                                        "OTHER-MODEL",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        "Reon17 Pro 12+512",
-                                        null),
-                                goods(
-                                        "Reno17 12+512 蓝/紫",
-                                        "MULTIPLE",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        null,
-                                        null),
-                                goods(
-                                        "Reno17（奇遇喵）",
-                                        "NO-CONFIG-IN-TITLE",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        null,
-                                        null),
-                                goods(
-                                        "Reno17 12+512",
-                                        "NO-COLOR",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        null,
-                                        null),
-                                goods(
-                                        "Reno17 冰月白 12+512",
-                                        "PROTECTED",
-                                        "12+512",
-                                        "Reno17",
-                                        "Reno系列",
-                                        "Reon17 12+512",
-                                        null)));
-        jdbc.update("UPDATE goods_sync_job SET clean_rule_version='v1.0.0' WHERE id=?", batch);
+    void reprocessesUnmappedReviewsAndKeepsColorEvidenceWhenOtherFieldsConflict() throws Exception {
+        importForCleaning(
+                List.of(
+                        goods(
+                                "Reno17 冰月白 12+512",
+                                "ALIAS",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                "Reon17 12+512",
+                                null),
+                        goods(
+                                "Reno17 Pro 初雪白 12+256",
+                                "ALIAS-PRO",
+                                "12+256",
+                                "Reno17 Pro",
+                                "Reno系列",
+                                "Reon17 Pro 12+256",
+                                null),
+                        goods(
+                                "Reno17 月夜黑 12+512",
+                                "SPEC-CONFLICT",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                "Reon17 12+256",
+                                null),
+                        goods(
+                                "Reno17 冰月白 12+512",
+                                "OTHER-MODEL",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                "Reon17 Pro 12+512",
+                                null),
+                        goods(
+                                "Reno17 12+512 蓝/紫",
+                                "MULTIPLE",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                null,
+                                null),
+                        goods(
+                                "Reno17（奇遇喵）",
+                                "NO-CONFIG-IN-TITLE",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                null,
+                                null),
+                        goods(
+                                "Reno17 12+512",
+                                "NO-COLOR",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                null,
+                                null),
+                        goods(
+                                "Reno17 冰月白 12+512",
+                                "PROTECTED",
+                                "12+512",
+                                "Reno17",
+                                "Reno系列",
+                                "Reon17 12+512",
+                                null)));
+        // 模拟迁入的旧待审记录，验证手动重识别可保留已人工确认的结果。
+        String initial = startClean(OPPO, null, false, 8);
         cleaning.processNextBatch();
-        mvc.perform(get(SOURCES + "/" + sourceId("ALIAS")).session(admin))
-                .andExpect(jsonPath("$.result.issueCode").value("MODEL_EVIDENCE_CONFLICT"))
-                .andExpect(jsonPath("$.result.colorName").doesNotExist());
-
         long protectedId = sourceId("PROTECTED");
+        jdbc.update(
+                "UPDATE source_goods_item SET clean_status='REVIEW_REQUIRED', clean_error_code='TEST' WHERE goods_no IN ('ALIAS', 'ALIAS-PRO', 'PROTECTED')");
         mvc.perform(
                         mutation(SOURCES + "/" + protectedId + "/review")
                                 .content(
@@ -776,14 +846,22 @@ class GoodsSyncIntegrationTest {
                  "target":{"seriesName":"Reno系列","modelName":"Reno17","spec":"12+512","colorName":"冰月白"}}
                 """))
                 .andExpect(status().isOk());
-        mvc.perform(get(JOBS + "/" + batch + "/cleaning").session(admin))
-                .andExpect(jsonPath("$.reprocessable").value(7));
-        int before = version(batch);
-        mvc.perform(control(batch, "clean-reprocess", before - 1)).andExpect(status().isConflict());
-        mvc.perform(control(batch, "clean-reprocess", before))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.ruleVersion").value("v1.2.0"))
-                .andExpect(jsonPath("$.resultCounts.PENDING").value(7));
+        jdbc.update(
+                """
+                UPDATE source_goods_item SET mapping_status='UNMAPPED', mapping_origin=NULL,
+                  catalog_variant_id=NULL, variant_color_id=NULL
+                WHERE goods_no IN ('ALIAS', 'ALIAS-PRO')
+                """);
+        mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))
+                .andExpect(jsonPath("$.eligible").value(0));
+        mvc.perform(
+                        get(CLEANING + "/preview")
+                                .session(admin)
+                                .param("brandName", OPPO)
+                                .param("includeReviews", "true"))
+                .andExpect(jsonPath("$.eligible").value(7));
+        String rerun = startClean(OPPO, null, true, 7);
+        assertThat(rerun).isNotEqualTo(initial);
         cleaning.processNextBatch();
         mvc.perform(get(SOURCES + "/" + sourceId("ALIAS")).session(admin))
                 .andExpect(jsonPath("$.result.status").value("AUTO_PASSED"))
@@ -810,9 +888,52 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.result.colorCandidates").isEmpty());
         mvc.perform(get(SOURCES + "/" + protectedId).session(admin))
                 .andExpect(jsonPath("$.result.status").value("MANUAL_PASSED"))
-                .andExpect(jsonPath("$.result.ruleVersion").value("v1.0.0"));
-        mvc.perform(get(JOBS + "/" + batch + "/cleaning").session(admin))
-                .andExpect(jsonPath("$.reprocessable").value(0));
+                .andExpect(jsonPath("$.result.recordVersion").value(2));
+        mvc.perform(get(CLEANING + "/jobs/" + rerun).session(admin))
+                .andExpect(jsonPath("$.total").value(7));
+    }
+
+    private MockHttpServletRequestBuilder cleanRequest(
+            String brand, LocalDate date, boolean reviews, long count, String key)
+            throws Exception {
+        return mutation(CLEANING + "/jobs")
+                .content(
+                        json.writeValueAsBytes(
+                                new com.company.policy.dto.CatalogCleaningRequest.Start(
+                                        brand, date, reviews, count, key)));
+    }
+
+    private String startClean(String brand, LocalDate date, boolean reviews, long count)
+            throws Exception {
+        var response =
+                mvc.perform(cleanRequest(brand, date, reviews, count, UUID.randomUUID().toString()))
+                        .andExpect(status().isAccepted())
+                        .andReturn()
+                        .getResponse();
+        return json.readTree(response.getContentAsString(StandardCharsets.UTF_8))
+                .path("id")
+                .asText();
+    }
+
+    @Test
+    void includesCommittedGoodsAfterEndingAnIncompleteImport() throws Exception {
+        String importId = start(OPPO, UUID.randomUUID().toString());
+        when(upstream.queryPage(any()))
+                .thenReturn(new JackyunGoodsPage(OPPO, List.of(ORIGINAL), CURSOR))
+                .thenThrow(new JackyunRateLimitException(60));
+        step(importId);
+        step(importId);
+        assertThat(state(importId)).isEqualTo("PAUSED");
+        mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.eligible").value(0));
+        mvc.perform(control(importId, "cancel", version(importId))).andExpect(status().isOk());
+        mvc.perform(get(CLEANING + "/preview").session(admin).param("brandName", OPPO))
+                .andExpect(jsonPath("$.eligible").value(1));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(SOURCES + "/" + sourceId("SAMPLE")).session(admin))
+                .andExpect(jsonPath("$.result.status").value("REVIEW_REQUIRED"));
     }
 
     private static String testSku(String goodsNo) {

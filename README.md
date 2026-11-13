@@ -86,11 +86,11 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 在 Navicat 选中目标库。首次建表执行 [九表建表 SQL](docs/sql/schema.sql)，与 `V1__create_policy_tables.sql` 二选一。建表后执行 [SKU 同步核对 SQL](docs/sql/verify_sku_sync.sql)，确认九张表和 SKU 唯一键。若清空了 user_info，首次登录生成申请人账号，需要在 Navicat 对已确认的管理员账号恢复 ADMIN 角色，再重新登录。
+1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。应用适配公司共用目录及清洗结果写入后再接入新库。空库首次登录生成申请人账号，管理员角色由用户在 Navicat 对已确认账号配置后重新登录。
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `JACKYUN_TENANT_KEY` 为授权管理员的 `user_info.tenant_key`。`JACKYUN_SOURCE_KEY` 是本地账套标识，默认 `jackyun`；更换实际账套时用新标识，避免混用原文及断点。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 
-首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。新批次在导入成功后排入清洗，历史成功批次可在清洗页面手动启动。清洗页面还提供进度、结果筛选分页、审核、重试和日志。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
+首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。导入完成后，管理员在清洗页面选择品牌和建档日范围，预览 SKU 后二次确认。清洗记录可查看任务进度，结果页可跨品牌查询、审核和重试。公司内管理员共用商品数据，新基线只保存清洗结果和任务进度。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
 
 仅核对 API 时，可在 `backend/` 将凭证临时设为进程环境变量，设置 `JACKYUN_LIVE_CHECK=1`，运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dtest=JackyunGoodsLiveTest' test`。该测试每品牌查询 3 条，只输出字段统计，不连接数据库。
 

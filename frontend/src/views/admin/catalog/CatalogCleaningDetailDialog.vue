@@ -1,6 +1,10 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import { GOODS_CLEAN_RESULTS, RAW_GOODS_FIELDS } from '../../../constants/catalog'
+import { computed, reactive, watch } from 'vue'
+import {
+  CATEGORY_PATH_FIELD,
+  GOODS_CLEAN_RESULTS,
+  RAW_GOODS_FIELDS,
+} from '../../../constants/catalog'
 
 const props = defineProps({
   open: Boolean,
@@ -11,34 +15,32 @@ const props = defineProps({
   error: { type: String, default: '' },
   reviewError: { type: String, default: '' },
 })
-const emit = defineEmits(['close', 'reload', 'review'])
+const emit = defineEmits(['close', 'reload', 'review', 'history'])
+const originalFields = RAW_GOODS_FIELDS.flatMap((field) =>
+  field[0] === 'cateName' ? [field, CATEGORY_PATH_FIELD] : [field],
+)
 const targetFields = [
   ['seriesName', '系列'],
   ['modelName', '型号'],
   ['spec', '配置'],
   ['colorName', '颜色'],
 ]
-const decision = ref('APPROVE')
-const reason = ref('')
 const target = reactive({})
 const row = computed(() => props.detail?.result)
 const reviewable = computed(() => row.value?.status === 'REVIEW_REQUIRED')
 const exclusionOnly = computed(() => row.value?.suggestedAction === 'EXCLUDE')
-const canSubmit = computed(
+const canReview = computed(
+  () => reviewable.value && !props.loading && !props.conflict && !props.busy,
+)
+const canApprove = computed(
   () =>
-    reviewable.value &&
-    !props.conflict &&
-    !props.busy &&
-    reason.value.trim() &&
-    (decision.value === 'EXCLUDE' || targetFields.every(([key]) => target[key]?.trim())),
+    canReview.value && !exclusionOnly.value && targetFields.every(([key]) => target[key]?.trim()),
 )
 
 watch(
   () => props.detail,
   (value) => {
     if (value) {
-      decision.value = value.result.suggestedAction === 'EXCLUDE' ? 'EXCLUDE' : 'APPROVE'
-      reason.value = ''
       for (const [key] of targetFields) {
         target[key] = value.candidate?.[key] ?? ''
       }
@@ -46,13 +48,18 @@ watch(
   },
 )
 
-function submit() {
-  if (canSubmit.value) {
-    const body = { decision: decision.value, reason: reason.value.trim() }
-    if (decision.value === 'APPROVE') {
-      body.target = Object.fromEntries(targetFields.map(([key]) => [key, target[key].trim()]))
-    }
-    emit('review', body)
+function approve() {
+  if (canApprove.value) {
+    emit('review', {
+      decision: 'APPROVE',
+      target: Object.fromEntries(targetFields.map(([key]) => [key, target[key].trim()])),
+    })
+  }
+}
+
+function reject() {
+  if (canReview.value) {
+    emit('review', { decision: 'EXCLUDE' })
   }
 }
 </script>
@@ -74,8 +81,8 @@ function submit() {
       <el-button link type="primary" @click="emit('reload')">重新读取</el-button>
     </div>
     <template v-else-if="row">
-      <el-descriptions title="来源原文" :column="1" border size="small">
-        <el-descriptions-item v-for="[key, label] in RAW_GOODS_FIELDS" :key="key" :label="label">
+      <el-descriptions title="来源原文" :column="1" border size="small" class="cleaning-original">
+        <el-descriptions-item v-for="[key, label] in originalFields" :key="key" :label="label">
           {{ detail.original?.[key] || '—' }}
         </el-descriptions-item>
       </el-descriptions>
@@ -92,7 +99,7 @@ function submit() {
         <el-descriptions-item v-for="[key, label] in targetFields" :key="key" :label="label">
           {{ row[key] || (key === 'colorName' && row.colorCandidates?.join(' / ')) || '—' }}
         </el-descriptions-item>
-        <el-descriptions-item v-if="detail.candidate?.edition" label="版本">
+        <el-descriptions-item v-if="detail.candidate?.edition" label="商品版本">
           {{ detail.candidate.edition }}
         </el-descriptions-item>
         <el-descriptions-item label="识别说明">{{ row.evidence || '—' }}</el-descriptions-item>
@@ -104,34 +111,17 @@ function submit() {
           </ul>
         </el-descriptions-item>
       </el-descriptions>
-      <el-form
-        v-if="reviewable"
-        class="cleaning-detail-section"
-        label-position="top"
-        :disabled="busy"
-        @submit.prevent="submit"
-      >
-        <el-form-item label="审核结果" required>
-          <el-radio-group v-model="decision">
-            <el-radio value="APPROVE" :disabled="exclusionOnly">通过审核</el-radio>
-            <el-radio value="EXCLUDE">确认排除</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <div v-if="decision === 'APPROVE'" class="cleaning-review-fields">
+      <section v-if="reviewable" class="cleaning-detail-section" aria-label="审核">
+        <el-form
+          class="cleaning-review-fields"
+          label-position="top"
+          :disabled="busy"
+          @submit.prevent
+        >
           <el-form-item v-for="[key, label] in targetFields" :key="key" :label="label" required>
             <el-input v-model="target[key]" :aria-label="label" maxlength="64" />
           </el-form-item>
-        </div>
-        <el-form-item label="审核原因" required>
-          <el-input
-            v-model="reason"
-            aria-label="审核原因"
-            type="textarea"
-            :rows="3"
-            maxlength="512"
-            show-word-limit
-          />
-        </el-form-item>
+        </el-form>
         <el-alert
           v-if="reviewError"
           :title="reviewError"
@@ -142,19 +132,21 @@ function submit() {
         <el-button v-if="conflict" link type="primary" @click="emit('reload')">
           重新读取候选并重填
         </el-button>
-      </el-form>
+      </section>
     </template>
     <template #footer>
-      <el-button :disabled="busy" @click="emit('close')">关闭</el-button>
-      <el-button
-        v-if="reviewable"
-        type="primary"
-        :disabled="!canSubmit"
-        :loading="busy"
-        @click="submit"
-      >
-        提交审核
-      </el-button>
+      <div class="cleaning-dialog-footer">
+        <div class="cleaning-page-actions">
+          <el-button v-if="row" :disabled="busy" @click="emit('history')">处理记录</el-button>
+          <el-button :disabled="busy" @click="emit('close')">关闭</el-button>
+        </div>
+        <div v-if="reviewable" class="cleaning-page-actions">
+          <el-button type="danger" plain :disabled="!canReview" @click="reject">
+            审核不通过
+          </el-button>
+          <el-button type="primary" :disabled="!canApprove" @click="approve">审核通过</el-button>
+        </div>
+      </div>
     </template>
   </el-dialog>
 </template>

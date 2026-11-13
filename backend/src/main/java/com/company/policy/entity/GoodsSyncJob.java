@@ -25,8 +25,6 @@ public class GoodsSyncJob {
     private int pageCount;
     private long readCount;
     private long contentCount;
-    private String cleanStatus;
-    private String cleanRuleVersion;
     private LocalDateTime createdAt;
     private String errorCode;
     private int recordVersion;

@@ -1,201 +1,231 @@
 package com.company.policy.mapper;
 
-import com.company.policy.entity.GoodsSyncJob;
+import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface CatalogCleaningMapper {
-    String SCOPE = "tenant_key = #{tenant} AND source_key = #{account}";
-    String BATCH = " AND (last_seen_job_id = #{jobId} OR clean_job_id = #{jobId})";
+    String SCOPE = "tenant_key = #{tenantKey} AND source_key = #{sourceKey}";
     String SOURCE = "SELECT * FROM source_goods_item WHERE " + SCOPE + " AND id = #{id}";
     String FILTER =
-            """
-            FROM source_goods_item WHERE tenant_key = #{query.tenant} AND source_key = #{query.account}
-            <if test="query.jobId != null">
-              AND (last_seen_job_id = #{query.jobId} OR clean_job_id = #{query.jobId})
-            </if>
-            <if test="query.brand != null">AND brand_name = #{query.brand}</if>
-            <if test="query.status != null">AND clean_status = #{query.status}</if>
-            <if test="query.version != null">AND clean_rule_version = #{query.version}</if>
-            <if test="query.keyword != null">
-              AND (LOCATE(#{query.keyword}, goods_name) > 0 OR LOCATE(#{query.keyword}, goods_no) > 0)
-            </if>
-            """;
-
-    @Select(
-            "<script> SELECT * FROM goods_sync_job WHERE "
+            " FROM source_goods_item item WHERE "
                     + SCOPE
                     + """
-            AND status = 'SUCCEEDED'
-            <if test="brand != null">AND brand_name = #{brand}</if>
-            ORDER BY id DESC LIMIT 1
-            </script>
-            """)
-    GoodsSyncJob latest(String tenant, String account, String brand);
+         <if test="brand != null">AND item.brand_name = #{brand}</if>
+         <if test="keyword != null">
+           AND (LOCATE(#{keyword}, item.goods_name) > 0 OR LOCATE(#{keyword}, item.goods_no) > 0)
+         </if>
+        """
+                    + SourceGoodsItemMapper.DATE_FILTER
+                    + """
+         <if test="unknownDate">
+           AND NOT EXISTS (SELECT 1
+        """
+                    + SourceGoodsItemMapper.CREATED_DATE_LOG
+                    + """
+           )
+           AND NOT EXISTS (SELECT 1
+        """
+                    + SourceGoodsItemMapper.CREATED_DATE_JOB
+                    + """
+           )
+         </if>
+        """;
+    String TAB =
+            """
+        <choose>
+          <when test="status == 'PASSED'">AND item.clean_status IN ('AUTO_PASSED', 'MANUAL_PASSED')</when>
+          <when test="status == 'PENDING'">AND item.clean_status IN ('PENDING', 'PROCESSING')</when>
+          <when test="status != null">AND item.clean_status = #{status}</when>
+        </choose>
+        """;
+    String COMPLETED_IMPORT =
+            """
+         AND EXISTS (SELECT 1 FROM goods_sync_job synced
+           WHERE synced.id = item.last_seen_job_id AND synced.status IN ('SUCCEEDED', 'CANCELLED'))
+        """;
+    String ELIGIBLE =
+            COMPLETED_IMPORT
+                    + """
+         AND (
+           item.clean_status = 'PENDING'
+           <if test="includeReviews">
+             OR (item.clean_status = 'REVIEW_REQUIRED' AND item.mapping_status = 'UNMAPPED')
+           </if>
+         )
+         AND item.mapping_status != 'EXCLUDED'
+        """;
 
     @Select(
-            "SELECT * FROM goods_sync_job WHERE "
-                    + SCOPE
-                    + " AND status = 'SUCCEEDED' AND id = #{id}")
-    GoodsSyncJob job(String tenant, String account, long id);
+            "<script> SELECT item.*, "
+                    + SourceGoodsItemMapper.CREATED_DATE_COLUMN
+                    + FILTER
+                    + TAB
+                    + " ORDER BY item.id DESC LIMIT #{limit} OFFSET #{offset} </script>")
+    List<SourceGoodsItem> results(
+            String tenantKey,
+            String sourceKey,
+            String brand,
+            LocalDate createdDate,
+            boolean unknownDate,
+            String keyword,
+            String status,
+            int limit,
+            long offset);
 
     @Select(
-            "SELECT * FROM goods_sync_job WHERE "
+            "<script> SELECT item.clean_status AS status, COUNT(*) AS total "
+                    + FILTER
+                    + " GROUP BY item.clean_status </script>")
+    List<Count> counts(
+            String tenantKey,
+            String sourceKey,
+            String brand,
+            LocalDate createdDate,
+            boolean unknownDate,
+            String keyword);
+
+    @Select("<script> SELECT COUNT(*) " + FILTER + ELIGIBLE + " </script>")
+    long eligibleCount(
+            String tenantKey,
+            String sourceKey,
+            String brand,
+            LocalDate createdDate,
+            boolean unknownDate,
+            boolean includeReviews,
+            String keyword);
+
+    @Select(SOURCE)
+    SourceGoodsItem source(String tenantKey, String sourceKey, long id);
+
+    @Select(SOURCE + " FOR UPDATE")
+    SourceGoodsItem lockSource(String tenantKey, String sourceKey, long id);
+
+    @Select("SELECT * FROM catalog_clean_job WHERE " + SCOPE + " AND id = #{id}")
+    CatalogCleaningJob job(String tenantKey, String sourceKey, long id);
+
+    @Select("SELECT * FROM catalog_clean_job WHERE " + SCOPE + " AND request_key = #{requestKey}")
+    CatalogCleaningJob requested(String tenantKey, String sourceKey, String requestKey);
+
+    @Select("SELECT * FROM catalog_clean_job WHERE " + SCOPE + " AND active_slot = 1")
+    CatalogCleaningJob active(String tenantKey, String sourceKey);
+
+    @Select(
+            "SELECT * FROM catalog_clean_job WHERE "
                     + SCOPE
-                    + " AND status = 'SUCCEEDED' AND id = #{id} FOR UPDATE")
-    GoodsSyncJob lockJob(String tenant, String account, long id);
+                    + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}")
+    List<CatalogCleaningJob> jobs(String tenantKey, String sourceKey, int limit, long offset);
+
+    @Select("SELECT COUNT(*) FROM catalog_clean_job WHERE " + SCOPE)
+    long countJobs(String tenantKey, String sourceKey);
+
+    @Insert(
+            """
+        INSERT INTO catalog_clean_job
+          (tenant_key, source_key, brand_name, created_date, include_reviews, target_source_id,
+           request_key, requester_id, requester_name, status)
+        VALUES (#{tenantKey}, #{sourceKey}, #{brandName}, #{createdDate}, #{includeReviews},
+          #{targetSourceId}, #{requestKey}, #{requesterId}, #{requesterName}, 'RUNNING')
+        """)
+    @Options(useGeneratedKeys = true, keyProperty = "id")
+    int insertJob(CatalogCleaningJob job);
+
+    @Insert(
+            "<script> INSERT INTO catalog_clean_job_item (job_id, source_id, source_version) "
+                    + "SELECT #{jobId}, item.id, item.record_version "
+                    + FILTER
+                    + ELIGIBLE
+                    + " </script>")
+    int insertMembers(
+            long jobId,
+            String tenantKey,
+            String sourceKey,
+            String brand,
+            LocalDate createdDate,
+            boolean unknownDate,
+            boolean includeReviews,
+            String keyword);
+
+    @Insert(
+            """
+        INSERT INTO catalog_clean_job_item (job_id, source_id, source_version)
+        VALUES (#{jobId}, #{source.id}, #{source.recordVersion})
+        """)
+    int insertMember(long jobId, SourceGoodsItem source);
+
+    @Select(
+            "SELECT * FROM catalog_clean_job WHERE "
+                    + SCOPE
+                    + " AND active_slot = 1 AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)")
+    CatalogCleaningJob due(String tenantKey, String sourceKey);
 
     @Update(
             """
-            UPDATE goods_sync_job SET clean_status = 'RUNNING', clean_rule_version = #{version},
-              worker_token = NULL, lease_until = NULL, record_version = record_version + 1
-            WHERE id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND status = 'SUCCEEDED' AND record_version = #{job.recordVersion}
-            """)
-    int start(GoodsSyncJob job, String version);
-
-    @Select(
-            "SELECT * FROM goods_sync_job WHERE "
-                    + SCOPE
-                    + """
-             AND status = 'SUCCEEDED' AND clean_status = 'RUNNING'
-             AND clean_rule_version IN (#{version}, #{previousVersion}, #{legacyVersion})
-             AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)
-             ORDER BY id LIMIT 1
-            """)
-    GoodsSyncJob due(
-            String tenant,
-            String account,
-            String version,
-            String previousVersion,
-            String legacyVersion);
-
-    @Update(
-            """
-            UPDATE goods_sync_job SET worker_token = #{token},
-              lease_until = TIMESTAMPADD(SECOND, 90, CURRENT_TIMESTAMP)
-            WHERE id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND status = 'SUCCEEDED' AND clean_status = 'RUNNING'
-              AND clean_rule_version = #{job.cleanRuleVersion} AND record_version = #{job.recordVersion}
-              AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)
-            """)
-    int claim(GoodsSyncJob job, String token);
+        UPDATE catalog_clean_job SET worker_token = #{token},
+          lease_until = TIMESTAMPADD(SECOND, 90, CURRENT_TIMESTAMP)
+        WHERE id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+          AND status = 'RUNNING' AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)
+        """)
+    int claim(CatalogCleaningJob job, String token);
 
     String LEASE =
             """
-            id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-            AND status = 'SUCCEEDED' AND clean_status = 'RUNNING' AND worker_token = #{token}
-            AND clean_rule_version = #{job.cleanRuleVersion} AND record_version = #{job.recordVersion}
-            AND lease_until > CURRENT_TIMESTAMP
-            """;
+        id = #{job.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
+        AND status = 'RUNNING' AND worker_token = #{token} AND lease_until > CURRENT_TIMESTAMP
+        """;
 
-    @Select("SELECT id FROM goods_sync_job WHERE " + LEASE + " FOR UPDATE")
-    Long lockClaim(GoodsSyncJob job, String token);
+    @Select("SELECT id FROM catalog_clean_job WHERE " + LEASE + " FOR UPDATE")
+    Long lockClaim(CatalogCleaningJob job, String token);
 
     @Update(
             """
-            UPDATE goods_sync_job SET worker_token = NULL, lease_until = NULL, clean_status = #{status},
-              record_version = record_version + CASE WHEN #{status} = 'RUNNING' THEN 0 ELSE 1 END
-            WHERE
-            """
+        UPDATE catalog_clean_job SET worker_token = NULL, lease_until = NULL, status = #{status}
+        WHERE
+        """
                     + LEASE)
-    int release(GoodsSyncJob job, String token, String status);
+    int release(CatalogCleaningJob job, String token, String status);
 
     @Select(
             """
-            SELECT * FROM source_goods_item
-            WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND brand_name = #{job.brandName} AND last_seen_job_id = #{job.id}
-              AND clean_status = 'PENDING'
-              AND mapping_status <> 'EXCLUDED'
-            ORDER BY id LIMIT #{limit}
-            """)
-    List<SourceGoodsItem> pending(GoodsSyncJob job, int limit);
-
-    @Select(
-            """
-            SELECT * FROM source_goods_item
-            WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND brand_name = #{job.brandName} AND last_seen_job_id = #{job.id}
-            ORDER BY id LIMIT #{limit} OFFSET #{offset}
-            """)
-    List<SourceGoodsItem> preview(GoodsSyncJob job, int limit, long offset);
-
-    @Select(
-            """
-            SELECT COUNT(*) FROM source_goods_item
-            WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND brand_name = #{job.brandName} AND last_seen_job_id = #{job.id}
-            """)
-    long countPreview(@Param("job") GoodsSyncJob job);
-
-    @Select(
-            "SELECT clean_status AS status, COUNT(*) AS total FROM source_goods_item WHERE "
-                    + SCOPE
-                    + BATCH
-                    + " GROUP BY clean_status")
-    List<Count> counts(String tenant, String account, long jobId);
+        SELECT source_id, source_version FROM catalog_clean_job_item
+        WHERE job_id = #{id} AND outcome = 'PENDING' ORDER BY source_id LIMIT #{limit}
+        """)
+    List<Member> pending(long id, int limit);
 
     @Update(
             """
-            <script>
-            UPDATE source_goods_item SET clean_status = 'PENDING', record_version = record_version + 1
-            WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND brand_name = #{job.brandName} AND last_seen_job_id = #{job.id} AND clean_job_id = #{job.id}
-              AND clean_status = 'ERROR'
-            <if test="sourceId != null">AND id = #{sourceId}</if>
-            </script>
-            """)
-    int resetErrors(GoodsSyncJob job, Long sourceId);
-
-    String REPROCESSABLE =
-            """
-            tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-            AND brand_name = #{job.brandName} AND last_seen_job_id = #{job.id}
-            AND clean_status = 'REVIEW_REQUIRED' AND mapping_status = 'UNMAPPED'
-            AND mapping_origin IS NULL
-            AND (clean_rule_version IS NULL OR clean_rule_version IN (#{previousVersion}, #{legacyVersion}))
-            """;
-
-    @Select("SELECT COUNT(*) FROM source_goods_item WHERE " + REPROCESSABLE)
-    long countReprocessable(GoodsSyncJob job, String previousVersion, String legacyVersion);
-
-    @Update(
-            "UPDATE source_goods_item SET clean_status = 'PENDING', record_version = record_version + 1 WHERE "
-                    + REPROCESSABLE)
-    int resetReviews(GoodsSyncJob job, String previousVersion, String legacyVersion);
-
-    @Select(SOURCE)
-    SourceGoodsItem source(String tenant, String account, long id);
-
-    @Select(SOURCE + " FOR UPDATE")
-    SourceGoodsItem lockSource(String tenant, String account, long id);
+        UPDATE catalog_clean_job_item SET outcome = #{outcome}
+        WHERE job_id = #{jobId} AND source_id = #{sourceId} AND outcome = 'PENDING'
+        """)
+    int finishMember(long jobId, long sourceId, String outcome);
 
     @Select(
-            "<script> SELECT * "
-                    + FILTER
-                    + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset} </script>")
-    List<SourceGoodsItem> results(@Param("query") Query query, int limit, long offset);
-
-    @Select("<script> SELECT COUNT(*) " + FILTER + " </script>")
-    long count(@Param("query") Query query);
+            """
+        <script>
+        SELECT job_id, outcome AS status, COUNT(*) AS total FROM catalog_clean_job_item
+        WHERE job_id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        GROUP BY job_id, outcome
+        </script>
+        """)
+    List<JobCount> jobCounts(List<Long> ids);
 
     @Update(
             """
             <script>
             UPDATE source_goods_item SET clean_status = #{change.status}, clean_job_id = #{job.id},
-              clean_rule_version = #{change.ruleVersion}, clean_candidate = #{change.candidate},
+              clean_candidate = #{change.candidate},
               clean_error_code = #{change.code}, cleaned_at = CURRENT_TIMESTAMP,
-              clean_run_key = NULL, clean_lease_until = NULL, record_version = record_version + 1,
+              record_version = record_version + 1,
               <choose>
                 <when test="reviewer != null">
                   reviewed_by = #{reviewer.id}, reviewed_at = CURRENT_TIMESTAMP, review_reason = #{change.reason},
@@ -208,11 +238,11 @@ public interface CatalogCleaningMapper {
               </if>
               mapping_remark = #{change.reason}
             WHERE id = #{source.id} AND tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
-              AND brand_name = #{job.brandName} AND last_seen_job_id = #{source.lastSeenJobId}
+              AND brand_name = #{job.brandName}
               AND record_version = #{source.recordVersion} AND clean_status = #{source.cleanStatus}
             </script>
             """)
-    int save(GoodsSyncJob job, SourceGoodsItem source, Change change, UserInfo reviewer);
+    int save(CatalogCleaningJob job, SourceGoodsItem source, Change change, UserInfo reviewer);
 
     @Select(
             """
@@ -250,22 +280,21 @@ public interface CatalogCleaningMapper {
 
     @Insert(
             """
-            <script>
-            INSERT INTO catalog_operation_log
-              (tenant_key, actor_type, operator_id, operator_name, rule_version, entity_type, entity_id,
-                action_type, batch_key, before_data, after_data, reason)
-            VALUES (#{job.tenantKey},
-              <choose>
-                <when test="operator != null">'USER', #{operator.id}, #{operator.name},</when>
-                <otherwise>'SYSTEM', NULL, NULL,</otherwise>
-              </choose>
-              #{version}, #{entityType}, #{entityId}, #{action}, #{batch}, #{before}, #{after}, #{reason})
-            </script>
-            """)
+        <script>
+        INSERT INTO catalog_operation_log
+          (tenant_key, actor_type, operator_id, operator_name, entity_type, entity_id,
+            action_type, batch_key, before_data, after_data, reason)
+        VALUES (#{job.tenantKey},
+          <choose>
+            <when test="operator != null">'USER', #{operator.id}, #{operator.name},</when>
+            <otherwise>'SYSTEM', NULL, NULL,</otherwise>
+          </choose>
+          #{entityType}, #{entityId}, #{action}, #{batch}, #{before}, #{after}, #{reason})
+        </script>
+        """)
     int audit(
-            GoodsSyncJob job,
+            CatalogCleaningJob job,
             UserInfo operator,
-            String version,
             String entityType,
             long entityId,
             String action,
@@ -276,36 +305,43 @@ public interface CatalogCleaningMapper {
 
     String LOGS =
             """
-            FROM catalog_operation_log WHERE tenant_key = #{tenant} AND batch_key = #{batch}
-            AND rule_version IS NOT NULL AND entity_type IN ('SOURCE_GOODS_ITEM', 'SYNC_JOB')
-            """;
+        FROM catalog_operation_log WHERE tenant_key = #{tenant} AND batch_key = #{batch}
+          AND entity_type IN ('SOURCE_GOODS_ITEM', 'SYNC_JOB', 'CLEAN_JOB')
+        """;
+    String LOG_FIELDS =
+            """
+        SELECT id, entity_type, entity_id, actor_type, operator_name, action_type,
+          reason, before_data, after_data, created_at
+        """;
+    String SOURCE_LOGS =
+            """
+        FROM catalog_operation_log WHERE tenant_key = #{tenant}
+          AND entity_type = 'SOURCE_GOODS_ITEM' AND entity_id = #{sourceId} AND action_type <> 'CREATE'
+        """;
 
-    @Select(
-            """
-            SELECT id, entity_type, entity_id, actor_type, operator_name, action_type,
-              rule_version, reason, before_data, after_data, created_at
-            """
-                    + LOGS
-                    + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}")
+    @Select(LOG_FIELDS + LOGS + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}")
     List<Audit> logs(String tenant, String batch, int limit, long offset);
 
     @Select("SELECT COUNT(*) " + LOGS)
     long countLogs(String tenant, String batch);
 
-    record Query(
-            String tenant,
-            String account,
-            Long jobId,
-            String brand,
-            String status,
-            String version,
-            String keyword) {}
+    @Select(LOG_FIELDS + SOURCE_LOGS + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}")
+    List<Audit> sourceLogs(String tenant, long sourceId, int limit, long offset);
+
+    @Select("SELECT COUNT(*) " + SOURCE_LOGS)
+    long countSourceLogs(String tenant, long sourceId);
+
+    @Select("SELECT status FROM goods_sync_job WHERE id = #{id}")
+    String importStatus(long id);
+
+    record Member(long sourceId, int sourceVersion) {}
 
     record Count(String status, long total) {}
 
+    record JobCount(long jobId, String status, long total) {}
+
     record Change(
             String status,
-            String ruleVersion,
             String candidate,
             String code,
             String reason,
@@ -325,7 +361,6 @@ public interface CatalogCleaningMapper {
             String actorType,
             String operatorName,
             String action,
-            String ruleVersion,
             String reason,
             String before,
             String after,

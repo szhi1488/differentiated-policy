@@ -1,5 +1,6 @@
 <script setup>
 import { ElMessageBox } from 'element-plus'
+import 'element-plus/es/components/message-box/style/css'
 import { computed, reactive, ref } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import { useSourceGoods } from '../../../composables/useSourceGoods'

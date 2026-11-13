@@ -26,7 +26,6 @@ public class SourceGoodsItem {
     private Long lastSeenJobId;
     private String cleanStatus;
     private Long cleanJobId;
-    private String cleanRuleVersion;
     private String cleanCandidate;
     private String cleanErrorCode;
     private String mappingStatus;

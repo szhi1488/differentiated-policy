@@ -1,8 +1,8 @@
 # 采购管理员审核接口设计
 
-商品同步、标准目录、清洗发布和商品操作审计属于新增管理模块，接口建议见 [商品同步与管理员后台方案](../architecture/catalog-admin-design.md)。这些接口均未实现；本文件继续维护政策审核契约，商品发布不等于政策审批。
+商品导入、清洗及标准目录接入情况见 [商品同步与管理员后台方案](../architecture/catalog-admin-design.md)。本文件维护政策审核契约。
 
-更新日期：2026-11-11。**以下接口均未实现**。九表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
+更新日期：2026-11-11。**以下接口均未实现**。政策表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
 
 管理员[展示工作台](../architecture/admin-workspace.md)已完成路由、演示筛选和详情结构，但不调用本文接口；通过、驳回等按钮禁用，不写审核记录。前端角色分流不代替本文要求的服务端鉴权。
 
@@ -25,7 +25,7 @@
 
 建议参数：`page`（默认 1）、`pageSize`（默认 20，最大 100）、`perspective`、`platformCode`、`modelKeyword`、`status`、`applicantId`、`startTimeFrom`、`startTimeTo`、`endTimeFrom`、`endTimeTo`；零售可用 `verifyType`、`sceneType`、`estimated`。时间筛选暂定义为对应字段闭区间上下界，不把它混成未确认的“当前最终生效”条件。
 
-modelKeyword 仅名称搜索，精确筛选采用 catalogVariantId、colorScope、variantColorId；颜色必须属于规格。查询按 policy_master.tenant_key 隔离，不能由客户端指定其他租户。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
+modelKeyword 仅名称搜索，精确筛选采用 spuId、ram、rom、colorScope、goodsId；商品必须属于该配置。查询按 policy_master.tenant_key 隔离，不能由客户端指定其他租户。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
 
 返回 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`，列表项至少含 ID、单号、申请人、视角、平台集合、起止时间、审核状态、版本和最近审核时间。默认 `created_at DESC, id DESC`。明细筛选用 EXISTS 或先去重 ID，total 按申请数计算。不能用状态 APPROVED 显示“当前生效”。
 
@@ -50,7 +50,7 @@ modelKeyword 仅名称搜索，精确筛选采用 catalogVariantId、colorScope�
 
 `determination` 草案枚举：`UNCONFIRMED` 尚不能判定、`CANDIDATE` 仅候选、`CONFIRMED` 最终口径计算；最后一种须规则及实现均完成后启用。
 
-候选 item 应含新旧 policyId/policyCode/detailId、平台、catalogVariantId、colorScope、variantColorId、品牌系列型号配置颜色快照、旧新补贴及全部参数、起止时间和候选相交范围。不限颜色与任一指定颜色有交集，两个不同指定颜色不相交；优先级和替换仍待确认，不能自动指定颜色优先。预览不改变数据库，不隐含二次确认要求。
+候选 item 应含新旧 policyId/policyCode/detailId、平台、spuId、ram、rom、colorScope、goodsId、品牌系列型号配置颜色快照、旧新补贴及全部参数、起止时间和候选相交范围。不限颜色与任一指定颜色有交集，两个不同指定颜色不相交；优先级和替换仍待确认，不能自动指定颜色优先。预览不改变数据库，不隐含二次确认要求。
 
 算法假设、SQL 及局限见 [覆盖查询草案](../business/override-engine.md)。最终通过时须重新检查候选与并发，不能把预览结果当锁或提交凭证。
 

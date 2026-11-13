@@ -1,10 +1,10 @@
 # 覆盖提示与政策范围交集
 
-更新日期：2026-11-11。标准规格及颜色范围已确认；优先级、时间端点、正式替换和最新生效算法仍待确认，尚未实现。原按名称快照和 NULL 颜色精确分组的示例已撤下，避免与确认版范围表达冲突。
+更新日期：2026-11-13。标准规格及颜色范围已确认；优先级、时间端点、正式替换和最新生效算法仍待确认，尚未实现。原按名称快照和 NULL 颜色精确分组的示例已撤下，避免与确认版范围表达冲突。
 
 ## 1. 已确认的身份与颜色交集
 
-政策按 tenant_key、渠道、平台、catalog_variant_id 定位范围，名称仅为快照，不作为唯一身份。不同型号或不同配置使用不同规格 ID，不因颜色同名而重叠。
+政策按 tenant_key、渠道、平台、spu_id、ram、rom 定位范围，名称用于历史快照。不同型号或不同配置使用不同的机型配置键，不因颜色同名而重叠。
 
 同规格的颜色交集如下：
 
@@ -12,13 +12,13 @@
 | --- | --- |
 | ALL_COLORS 与 ALL_COLORS | 有，当前规格不限颜色 |
 | ALL_COLORS 与 SPECIFIC_COLOR | 有，指定的那个颜色 |
-| SPECIFIC_COLOR 与同一个 variant_color_id | 有，该颜色 |
-| SPECIFIC_COLOR 与不同 variant_color_id | 无 |
+| SPECIFIC_COLOR 与同一个 goods_id | 有，该颜色 |
+| SPECIFIC_COLOR 与不同 goods_id | 无 |
 | 任意范围未选择或指定颜色未补齐 | 草稿不完整，不能给确定结论 |
 
 ALL_COLORS 不使用颜色 NULL 推断，也不按当前颜色列表展开。政策提交后新增颜色是否自动适用既有不限颜色政策仍需确认；结构能表达不限颜色范围，但不能把目录新增颜色当作已确认的政策扩展或覆盖行为。
 
-指定颜色必须属于当前型号配置及租户，后端另校验 ACTIVE 及快照；历史回读仍使用提交快照。停用颜色或规格不自动撤销已提交政策。同平台同申请的重复及不限/指定交集应在提交前提示整理；不同申请之间出现交集须在审核候选中展示。
+指定颜色引用的商品必须属于当前配置，后端另校验目录状态为 ACTIVE 并生成快照。停用商品后，已提交政策仍按快照回读。同平台同申请的重复及不限/指定交集应在提交前提示整理；不同申请之间出现交集须在审核候选中展示。
 
 ## 2. 候选查询草案
 
@@ -28,14 +28,14 @@ ALL_COLORS 不使用颜色 NULL 推断，也不按当前颜色列表展开。政
 ```sql
 SELECT m.id AS policy_id, m.policy_code, m.status,
        m.start_time, m.end_time, m.review_time,
-       d.id AS detail_id, d.platform_code, d.catalog_variant_id,
-       d.color_scope, d.variant_color_id, d.color,
+       d.id AS detail_id, d.platform_code, d.spu_id, d.ram, d.rom,
+       d.color_scope, d.goods_id, d.color,
        d.model_full_name, d.single_model, d.spec,
        d.subsidy_mode, d.fixed_amount, d.max_subsidy_amount,
        d.subsidy_ratio, d.base_price_type
 FROM policy_master m
 JOIN policy_detail d
-  ON d.policy_id = m.id AND d.tenant_key = m.tenant_key
+  ON d.policy_id = m.id
 WHERE m.tenant_key = :tenantKey
   AND m.is_deleted = 0
   AND m.id <> :newPolicyId
@@ -45,13 +45,15 @@ WHERE m.tenant_key = :tenantKey
   AND (m.scene_type <=> :sceneType)
   AND (m.is_estimated <=> :estimated)
   AND d.platform_code = :platformCode
-  AND d.catalog_variant_id = :catalogVariantId
+  AND d.spu_id = :spuId
+  AND d.ram = :ram
+  AND d.rom = :rom
   AND d.color_scope IS NOT NULL
-  AND (d.color_scope = 'ALL_COLORS' OR d.variant_color_id IS NOT NULL)
+  AND (d.color_scope = 'ALL_COLORS' OR d.goods_id IS NOT NULL)
   AND (:newColorScope = 'ALL_COLORS'
        OR d.color_scope = 'ALL_COLORS'
        OR (d.color_scope = 'SPECIFIC_COLOR'
-           AND d.variant_color_id = :newVariantColorId))
+           AND d.goods_id = :newGoodsId))
   AND m.start_time < :newEndTime
   AND :newStartTime < m.end_time;
 ```
@@ -60,7 +62,7 @@ WHERE m.tenant_key = :tenantKey
 
 ## 3. 审核与生效边界
 
-候选返回新旧政策、平台、稳定规格 ID、颜色范围/具体颜色、快照、补贴和时间交集。区分当前时间内与未来重叠，标注 CANDIDATE 或 UNCONFIRMED；没有最终规则时不显示“已确定无覆盖”。
+候选返回新旧政策、平台、机型 ID、RAM 和 ROM、颜色范围/具体颜色、快照、补贴和时间交集。区分当前时间内与未来重叠，标注 CANDIDATE 或 UNCONFIRMED；没有最终规则时不显示“已确定无覆盖”。
 
 不限颜色与某颜色相交不意味着整条不限颜色政策失效，更不意味着同政策其他平台或规格失效。不能默认具体颜色优先，不能按审核时间或创建时间擅自宣布胜出，也不能删除旧记录实现覆盖。
 

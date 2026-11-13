@@ -16,7 +16,6 @@ public record GoodsSyncResponse(
         Phase syncPhase,
         @Schema(allowableValues = {"QUEUED", "RUNNING", "PAUSED", "SUCCEEDED", "CANCELLED"})
                 String status,
-        String cleanStatus,
         int pageCount,
         long readCount,
         long contentCount,
@@ -31,7 +30,6 @@ public record GoodsSyncResponse(
                 job.getSyncDate(),
                 job.getSyncPhase(),
                 job.getStatus(),
-                job.getCleanStatus(),
                 job.getPageCount(),
                 job.getReadCount(),
                 job.getContentCount(),

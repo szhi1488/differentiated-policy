@@ -102,8 +102,6 @@ public interface GoodsSyncJobMapper {
           page_count = page_count + 1, worker_token = NULL, lease_until = NULL,
           next_request_at = TIMESTAMPADD(SECOND, #{delaySeconds}, CURRENT_TIMESTAMP),
           finished_at = CASE WHEN #{status} = 'SUCCEEDED' THEN CURRENT_TIMESTAMP ELSE NULL END,
-          clean_status = CASE WHEN #{status} = 'SUCCEEDED' THEN 'RUNNING' ELSE clean_status END,
-          clean_rule_version = CASE WHEN #{status} = 'SUCCEEDED' THEN #{ruleVersion} ELSE clean_rule_version END,
           record_version = record_version + 1
         WHERE
         """
@@ -116,8 +114,7 @@ public interface GoodsSyncJobMapper {
             Phase phase,
             int rows,
             int contents,
-            int delaySeconds,
-            String ruleVersion);
+            int delaySeconds);
 
     @Update(
             """

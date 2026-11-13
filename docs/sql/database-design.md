@@ -1,39 +1,51 @@
 # 数据库设计与字段字典
 
-更新日期：2026-11-12。本文描述当前九表基线，适用于 MySQL 8.0.16+。首次建表使用空库基线。本版按用户确认的空库重建方案交付，源商品改按吉客云 SKU ID 更新。
-
-第一开发阶段允许重新设计项目内所有表。每次重设计先向用户说明拟调整范围、原因、对现有数据和代码的影响，再征求确认。获明确同意后按业务读写路径设计数据约束、索引和事务，同时评估需保留的数据及迁移或重建方式。[项目约定第 13 条](../../AGENTS.md#3-核心技术规则与边界)
-
-查库、建表、迁移、重建和验证所需 SQL 均以本目录中的 `.sql` 文件交付。用户在 Navicat 选中目标库，按交付说明执行并核对结果。需要进一步诊断时，提供对应查询或执行错误的结果即可。
+更新日期：2026-11-13。十四表空库基线适用于 MySQL 8.0.16+。本次按用户确认重建空库。公司所有有效管理员共用源商品、清洗结果和标准目录。后端须在建立会话前校验公司飞书租户，并在请求时校验有效身份及权限。应用适配待实施。
 
 ## 1. 在 Navicat 建表
 
-1. 选中你已经创建的目标数据库，先执行 SELECT VERSION(), DATABASE();，确认 MySQL 8.0.16+ 及当前库名。脚本不包含 CREATE DATABASE 或 USE，不会帮你选择库。
-2. 执行 `SHOW TABLES;` 核对目标库。空库继续下一步。已有表的库先核对结构及需保留的数据，按已确认的增量迁移或重建方案操作。
-3. 打开 [schema.sql](schema.sql)，整份执行一次。它与 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 内容完全一致，二选一，不能两份都执行。
-4. 刷新表列表，应有九张表。执行 [SKU 同步核对 SQL](verify_sku_sync.sql)，确认 SKU 唯一键和导入字段可查询。MySQL DDL 隐式提交，文件中途失败时先核对已创建部分，不直接重跑。
+1. 停止指向目标库的应用。由用户准备空库，如需留存旧库数据，先备份。
+2. 在 Navicat 选中目标空库，执行 [schema.sql](schema.sql) 或 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 中任意一份。脚本只创建结构并设置当前连接的字符集与时区。
+3. 执行 [SKU 与标准目录核对](verify_sku_sync.sql) 和 [清洗结构核对](verify_catalog_cleaning.sql)。预期列出十四张表、标准商品唯一键、映射外键和清洗任务索引，异常关联查询应为空。
+4. 后端完成新目录接入后，再配置管理员、从吉客云重新导入、清洗并核对标准商品。空库没有历史任务、来源、政策或已分配的管理员角色。MySQL DDL 隐式提交，执行失败后先核对已创建的表。
 
-SQL 不含删表、清空、真实用户、凭证或示例机型数据。SET time_zone 仅设置当前连接；应用连接仍须遵守北京时间。SQL 文件是人工执行的空库基线，项目未配置 Flyway 或自动建表。
+项目未配置 Flyway 或自动建表。
 
-[单品牌导入增量升级 SQL](upgrade_empty_goods_sync_to_single_brand.sql) 是旧版历史脚本，当前空库建表跳过。保留旧库数据时，需要为旧来源重新匹配 SKU ID 后另行迁移。
-
-2026-11-12 在隔离的 MySQL 8.0.29 上验证旧版九表升级。脚本拒绝已有任务的库，原任务和外键保留。清空测试任务后升级成功，原管理员保留，升级后的 5 项商品导入集成测试通过。本机项目库仅做了只读核对。
-
-## 2. 九表清单和约束
+## 2. 十四表清单和约束
 
 | 表 | 职责 | 关键关联 |
 | --- | --- | --- |
 | user_info | 飞书身份、本地角色 | tenant_key + open_id 唯一；停用身份仍占唯一键 |
-| catalog_variant | 品牌系列型号配置合并的标准规格 | 租户内稳定 variant_code；品牌 + 型号 + 配置唯一 |
-| catalog_variant_color | 某一具体规格的颜色 | variant_id + tenant_key 外键；规格内颜色名唯一 |
-| goods_sync_job | 每次单品牌导入任务与最新续拉进度 | 发起人同租户；同账套仅一个活动槽；幂等键唯一 |
-| source_goods_item | 当前 SKU 来源及内联映射 | 首次/最近任务同租户账套；规格同品牌；颜色同规格 |
-| catalog_operation_log | 商品维护审计 | 操作人同租户；对象类型和本地 ID 由服务端鉴权 |
+| brand | 公司品牌字典 | 名称直接对应吉客云 brandName，名称唯一 |
+| series | 品牌下的标准系列 | 同品牌下系列名称唯一 |
+| spu | 标准机型及版本 | 同品牌下机型名称 + 版本唯一 |
+| color_dict | 独立颜色表 | 颜色名称唯一，可由多个机型商品引用 |
+| goods | 一种机型版本、RAM、ROM、颜色的标准商品 | 同配置同颜色唯一 |
+| goods_sync_job | 每次单品牌导入任务与最新续拉进度 | 发起人关联用户，同账套仅一个活动槽，幂等键唯一 |
+| catalog_clean_job | 手动发起的清洗任务，保存选择范围、任务状态和执行租约 | 发起人关联用户，账套活动槽及请求键唯一，进度由任务明细统计 |
+| catalog_clean_job_item | 本轮选中的源商品、确认时的来源版本及本轮结果 | `job_id` 关联清洗任务，`source_id` 关联本地源商品，两列构成主键 |
+| source_goods_item | 当前 SKU 来源及内联映射 | sku_id 唯一，任务须匹配来源账套及品牌，标准商品须匹配来源品牌 |
+| catalog_operation_log | 源商品变更前后值、导入任务操作和建档日命中记录 | `entity_type` 区分对象，`entity_id` 保存对应的本地主键 |
 | policy_master | 政策主表 | 申请人及最近审核人同租户 |
-| policy_detail | 逐平台规格颜色范围及补贴 | 主表、规格同租户；指定颜色同规格 |
+| policy_detail | 逐平台规格颜色范围及补贴 | 通过 policy_id 归属主表，指定颜色商品须同配置 |
 | policy_audit_log | 提交审核历史 | 政策及操作人同租户 |
 
-完整关联图及业务见 [确认方案](../architecture/catalog-admin-design.md)。首期不独立建立品牌/系列/型号、映射、清洗规则、逐页响应及批次成员表。
+完整关联图及业务见 [确认方案](../architecture/catalog-admin-design.md)。来源到标准商品的关联保存在来源表。
+
+### 商品表关联示例
+
+以下用一条源商品说明十四表基线中的写入路径。示例 ID 和日期仅用于说明。
+
+| 步骤 | 表 | 示例 |
+| --- | --- | --- |
+| 发起导入 | `goods_sync_job` | 任务 `20` 导入一加手机，记录导入状态和续拉断点。 |
+| 保存当前原文 | `source_goods_item` | 吉客云 `skuId=123` 匹配本地源商品 `id=501`。源名称变化时更新原行并保留本地 ID。 |
+| 记录导入事件 | `catalog_operation_log` | 管理员发起任务时记录 `SYNC_JOB / 20 / START`。名称变化时记录 `SOURCE_GOODS_ITEM / 501 / UPDATE`，保存变更前后的值。按建档日命中时可记录 `SOURCE_GOODS_ITEM / 501 / CREATE`，`batch_key` 例如 `CREATED-DATE-2026-11-12`。 |
+| 发起清洗 | `catalog_clean_job` | 任务 `42` 保存品牌和建档日范围。 |
+| 处理任务成员 | `catalog_clean_job_item` | `(job_id=42, source_id=501, source_version=3)` 表示该任务选中了本地源商品 `501`。结果先是 `PENDING`，通过后更新为 `AUTO_PASSED`。 |
+| 确认标准商品 | `goods`、`source_goods_item` | 创建或复用标准商品 `goods.id=801`，在源商品 `501` 上回填 `goods_id=801`。 |
+
+`source_goods_item.clean_status` 表示源商品当前的清洗状态，`catalog_clean_job_item.outcome` 表示该商品在某一轮任务中的结果。任务进度按本轮明细统计。吉客云业务字段未变时，本次导入不会新增 `UPDATE` 变更记录。按建档日导入仍可补齐日期证据。
 
 ## 3. 关键存储规则
 
@@ -43,25 +55,27 @@ SQL 不含删表、清空、真实用户、凭证或示例机型数据。SET tim
 
 来源字段保留 NULL 与空字符串原意，不自动清洗覆盖原文。VARCHAR 长度是当前工程上限，联调需核对；超长输入明确拒绝，不隐式截断。SKU ID 按 ASCII 十进制字符串保存，接口同样返回字符串，防止浏览器丢失精度。
 
-source_goods_item 以 (tenant_key, source_key, sku_id) 为唯一键，goods_no 可重复。同一 SKU 更新当前行并保留本地 ID。检测到任一已知修改时间较旧时保留现有内容，实际业务字段变化在同一页事务追加前后值审计。原文仍只读，变化时重新识别，已生效规格和颜色不同则复核。首次和最近任务关联只表示当前引用。
+`source_goods_item.sku_id` 是源商品库唯一键。第一次看到 SKU 时插入，有变化时按相同 SKU 更新原行并保留本地 ID。比较吉客云两类修改时间及实际来源字段，旧响应保留已有内容。同一 SKU 如出现在不同账套或品牌，进入冲突处理，避免覆盖或重复插入。来源内容、状态和时间均未变时，只推进任务和维护必要的任务引用、建档日证据，商品内容、更新时间和清洗状态保持原值。仅上游时间前进时更新来源时间，业务字段或状态变化时才按现有规则标记待清洗。导入在这一阶段只处理来源表。
 
-来源列表的 `createdDate` 是查询时派生的建档日。按建档日导入时，用本地来源 ID 将命中日期写入 `catalog_operation_log`，每个来源和日期保留一次。日志使用 `actor_type=SYSTEM`、`entity_type=SOURCE_GOODS_ITEM`、`action_type=CREATE`、`rule_version=SOURCE_CREATED_DATE_V1`，以 `CREATED-DATE-YYYY-MM-DD` 为 `batch_key`。旧来源可从关联的首次、最近或清洗任务读取建档日。后续覆盖可用的最近或清洗任务引用前保留其日期证据。列表缺少证据时返回 null，筛选时按命中的日期返回。此实现复用九表基线。
+来源列表的 `createdDate` 使用本地来源 ID 的建档日证据，审计的 `batch_key` 为 `CREATED-DATE-YYYY-MM-DD`，并可从首次、最近导入任务补查。同一 SKU 按日重新导入可补齐建档日。缺少证据时返回 null。
 
 `gmt_modified` 和 `goods_gmt_modified` 分别保存吉客云规格和货品的 Unix 毫秒，独立于本系统的 DATETIME 以及任务的 `sync_date`。前端使用北京时间显示两个修改时间，并保留非零毫秒。
 
-目录和颜色保留 DRAFT / ACTIVE / DISABLED；清洗唯一通过时可以直接创建或复用 ACTIVE，人工草稿是补充入口。来源 mapping_status 保存当前生效关联，MAPPED 必须有规格及 AUTO/MANUAL 来源；clean_status 单独表达本次 PENDING/PROCESSING/AUTO_PASSED/REVIEW_REQUIRED/MANUAL_PASSED/ERROR/EXCLUDED。自动或人工通过必须有明确规格和颜色，未知颜色不得变不限颜色。重算异常可保留旧映射，不自动覆盖人工结果或复活 DISABLED。
+标准目录按品牌 → 系列 → 机型版本 → 配置 → 颜色查询。品牌 `name` 直接对应清洗确认的吉客云 `brandName`。独立颜色表 `color_dict` 只保存颜色 ID 和名称。商品通过 `color_id` 引用颜色，某配置实际可选颜色由其有效商品行决定。
 
-source_goods_item 内新增 clean_candidate、clean_rule_version、clean_error_code、clean_job_id、执行租约/次数、完成时间和人工审核人/时间/原因。候选由来源白名单字段派生，JSON 外层必须对象，内容结构和大小由服务端白名单校验；成功/异常/纠正历史追加操作日志，当前字段不替代历史。AUTO_PASSED 要规则版本、候选、明确颜色和完成时间且审核人为空；MANUAL_PASSED 要真实审核人、时间、原因。ERROR/REVIEW_REQUIRED 要原因，PROCESSING 要成功批次依据及执行令牌/租约（批次是否成功仍由服务端核验）。详见 [自动清洗细则](../business/catalog-cleaning.md)。
+标准商品保存清洗后的 `goods_name`。`product_no` 对应来源 `goodsNo`，可为空、可重复。商品 SKU 是公司内稳定的本地编号。多条来源可映射同一个标准商品，来源行各自保留原始货品编号。复用同一标准商品时，已确认的商品名称和货品编号保持原值。标准商品编辑不依赖版本列。
 
-标准规格唯一性为租户、品牌、型号、配置，不包含可调整的系列显示名。同一型号配置若有真正不同版本，应在规范配置中显式区分，不能强行合并。已被引用的身份不可换成另一型号配置；颜色不可挪到另一规格。名称去首尾空格、大小写与单位规范由服务端维护，不依赖数据库自动推断。
+规格身份使用 `(spu_id, ram, rom)`，容量统一为正整数 GB，按 1 TB = 1024 GB 规范化。机型身份以品牌、规范机型名和版本区分。已存在的机型归属不同系列或版本证据不明时转人工核对。被引用的机型、配置和颜色身份应保持稳定，纠错创建或选择正确目标。
+
+`source_goods_item` 保留候选、异常原因、尝试次数、最近清洗任务和审核信息。已映射必须有 `catalog_brand_id`、`goods_id` 和 AUTO/MANUAL 来源。复合外键同时校验吉客云分区对应的品牌和商品归属。自动通过需要候选、任务和完成时间。人工通过或排除需要审核人、时间和结果。重算时可保留旧映射，人工结果受保护。
+
+`goods.catalog_status` 表示目录可选状态，取 DRAFT、ACTIVE、DISABLED。明确通过的清洗可创建 ACTIVE 商品，已有 ACTIVE 商品复用，DRAFT 或 DISABLED 交人工处理。`goods.status` 表示销售状态，1 在售、2 待上架、3 已下架、4 已停产、NULL 未知。清洗不推断销售状态。
 
 ### 政策颜色和草稿
 
-color_scope=ALL_COLORS 表示当前规格不限颜色，此时 variant_color_id 和 color 都必须 NULL。SPECIFIC_COLOR 表示指定本规格颜色，草稿可暂未选完，正式提交必须有 ID 和服务端颜色快照。color_scope=NULL 仅表示草稿未选范围，不能当不限颜色。
+政策以 `spu_id + ram + rom` 表示配置。ALL_COLORS 的 `goods_id` 与颜色快照均为空。SPECIFIC_COLOR 正式提交须选当前配置下的 ACTIVE 商品，服务端由其颜色生成快照。草稿允许尚未选择范围或尚未选齐，NULL 范围只表示未选。
 
-复合颜色外键使用 (variant_color_id, catalog_variant_id, tenant_key)，阻止跨规格和跨租户。明细颜色名只是历史快照，不充当身份。不同型号、同型号不同配置的颜色独立维护；不限颜色不按当前颜色清单展开。
-
-数量允许 NULL 或非负整数，0 业务含义仍待确认。草稿允许机型、时间、补贴参数暂缺，但填写内容必须合法。SQL 不能跨表校验“主表已提交所以子明细必须完整”，必须由 Service 同事务检查。
+`policy_detail` 通过 `policy_id` 归属政策主表，指定颜色时以 `(goods_id, spu_id, ram, rom)` 外键校验商品及配置。配置由商品集合派生，提交时服务端还须确认该配置至少有一个 ACTIVE 商品。品牌、系列、机型、配置展示文本和颜色保留提交快照。
 
 ### 金额、平台和时间
 
@@ -73,17 +87,17 @@ color_scope=ALL_COLORS 表示当前规格不限颜色，此时 variant_color_id 
 
 ### 权限、历史与任务
 
-身份查找须读取停用记录并拒绝登录，不能过滤后新建绕过。本版保留原 user_info 字段，已有登录实体/测试不需要因九表 DDL 改写；新业务接口仍未实现。
+身份查找须读取停用记录并拒绝登录，不能过滤后新建绕过。本版保留原 user_info 字段，登录沿用原有身份字段。
 
 含 is_deleted 的用户和政策主表正常业务查询过滤，明细日志经父政策鉴权；目录采用 status 停用，不物理删除。外键全部 RESTRICT。日志只追加，不随重提覆盖；服务端或数据库账号权限保证不可篡改，不声称仅靠 DDL 就防止直接改日志。
 
 政策主表 submission_version 每轮提交递增，record_version 每次业务修改递增；主表、明细、提交快照及审核记录同事务。条件更新携带租户、状态和版本并检查影响行数。完整快照含标准 ID、品牌系列型号配置、颜色范围/ID/名称、平台、数量、补贴、时间及附件说明。
 
-goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式、北京时间日期、查询阶段和当前阶段游标。按修改日先查商品修改，再重置游标查 SKU 修改。终态任务只保留该任务最后位置，日志不保存游标、worker_token 或完整上游响应。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSED 占同账套唯一槽。暂停任务可在冷却后恢复，或结束并保留已落库原文。源商品的首次、最近和清洗任务引用均要求同租户、账套和品牌。
+goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式、北京时间日期、查询阶段和当前阶段游标。按修改日先查商品修改，再重置游标查 SKU 修改。终态任务只保留该任务最后位置，日志不保存游标、worker_token 或完整上游响应。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSED 占同账套唯一槽。暂停任务可在冷却后恢复，或结束并保留已落库原文。源商品的首次和最近导入任务引用要求同账套和品牌。
 
-数据库唯一活动槽和租约字段不能替代执行器逻辑，导入 worker 必须带 fencing_token，清洗 worker 带 clean_run_key、来源版本和租约条件提交。`status=SUCCEEDED` 表示本任务的单品牌导入完成。进入独立清洗阶段要求导入成功且已记录 `clean_rule_version`。`COMPLETED` 表示本轮已完成自动通过或异常分流，仍可有待人工审核的商品。异常不阻塞明确商品。
+清洗任务独立领取租约。成员快照固定内部来源版本，用于避免处理期间来源变化后写入旧结果。来源、映射、目录和成员结果同事务更新。同账套并发发起由活动槽唯一索引约束；调度通过任务索引及成员待处理索引读取。
 
-catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同租户 operator_id，SYSTEM 必须无用户ID/姓名并有规则版本，不能伪造机器人用户或冒用发起管理员。自动建规格颜色、映射、完成状态及SYSTEM审计同事务；人工审核使用 USER。DDL 不能证明解析准确、权限正确、目标 ACTIVE 或历史只追加，服务端必须实现。include_blockup 必填0/1，业务默认仍待确定。
+商品导入记录保留建档日、来源变更和导入操作。清洗不写此表，当前异常原因和人工审核结果保存在来源行，本轮处理进度从任务成员结果统计。政策提交和审核历史仍保存在 policy_audit_log。
 
 ## 4. 字段字典
 
@@ -104,33 +118,57 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间 |
 | updated_at | DATETIME | 否 | CURRENT_TIMESTAMP |  |
 
-### catalog_variant
+### brand
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | BIGINT | 否 | 自增 | 本地标准规格主键 |
-| tenant_key | VARCHAR(64) | 否 | — | 飞书租户标识 |
-| variant_code | VARCHAR(64) | 否 | — | 租户内稳定规格编码，不随改名复用 |
-| brand_name | VARCHAR(32) | 否 | — | 固定品牌：一加手机或OPPO手机 |
-| series_name | VARCHAR(64) | 否 | — | 标准系列名称 |
-| model_name | VARCHAR(64) | 否 | — | 标准具体型号名称 |
-| spec | VARCHAR(64) | 否 | — | 标准配置文本，含必要版本差异 |
-| display_name | VARCHAR(256) | 否 | — | 标准规格展示全称 |
-| status | VARCHAR(16) | 否 | 'DRAFT' | DRAFT-待发布，ACTIVE-可选，DISABLED-停用 |
-| record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
+| id | BIGINT | 否 | 自增 | 品牌主键 |
+| name | VARCHAR(50) | 否 | — | 清洗后的品牌名称，直接对应吉客云 brandName |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
-| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
 
-### catalog_variant_color
+### series
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | BIGINT | 否 | 自增 | 规格颜色主键，同名颜色在不同规格中分别维护 |
-| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
-| variant_id | BIGINT | 否 | — | 所属标准规格 |
-| color_name | VARCHAR(64) | 否 | — | 规则唯一确定或人工审核后的标准颜色名称 |
-| status | VARCHAR(16) | 否 | 'DRAFT' | DRAFT-待发布，ACTIVE-可选，DISABLED-停用 |
-| record_version | INT UNSIGNED | 否 | 0 | 并发版本 |
+| id | BIGINT | 否 | 自增 | 系列主键 |
+| brand_id | BIGINT | 否 | — | 所属品牌 |
+| name | VARCHAR(64) | 否 | — | 标准系列名称 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+
+### spu
+
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 标准机型主键 |
+| brand_id | BIGINT | 否 | — | 所属品牌 |
+| series_id | BIGINT | 否 | — | 所属系列 |
+| name | VARCHAR(100) | 否 | — | 标准机型名，含常规机型后缀如 Pro |
+| edition | VARCHAR(64) | 否 | '' | 另行确认的版本标识，空字符串表示无独立版本 |
+| created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
+
+### color_dict
+
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | INT UNSIGNED | 否 | 自增 | 颜色主键 |
+| color_name | VARCHAR(64) | 否 | — | 颜色名称 |
+
+### goods
+
+| 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
+| --- | --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增 | 标准商品主键 |
+| sku_id | VARCHAR(64) | 否 | — | 公司内稳定的本地标准 SKU 编号 |
+| product_no | VARCHAR(128) | 是 | NULL | 货品编号，对应来源 goodsNo，可重复 |
+| brand_id | BIGINT | 否 | — | 与机型一致的品牌 |
+| series_id | BIGINT | 否 | — | 与机型一致的系列 |
+| spu_id | BIGINT | 否 | — | 所属机型及版本 |
+| goods_name | VARCHAR(384) | 否 | — | 清洗落库后的商品名称 |
+| ram | VARCHAR(20) | 否 | — | 规范运行内存，如16GB |
+| rom | VARCHAR(20) | 否 | — | 规范机身存储，统一GB，如1TB记为1024GB |
+| color_id | INT UNSIGNED | 否 | — | 关联独立颜色表的主键 |
+| status | TINYINT UNSIGNED | 是 | NULL | 销售状态：1-在售，2-待上架，3-已下架，4-已停产，NULL-未知 |
+| catalog_status | VARCHAR(16) | 否 | 'DRAFT' | 目录状态：DRAFT-草稿，ACTIVE-可选，DISABLED-停用 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
 | updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
 
@@ -139,9 +177,8 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
 | id | BIGINT | 否 | 自增 | 同步任务主键，一个任务只导入一个品牌 |
-| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
 | source_key | VARCHAR(64) | 否 | — | 服务端受控账套标识，不保存凭证 |
-| brand_name | VARCHAR(32) | 否 | — | OPPO手机或一加手机 |
+| brand_name | VARCHAR(50) | 否 | — | OPPO手机或一加手机 |
 | requester_id | BIGINT | 否 | — | 发起管理员 |
 | idempotency_key | VARCHAR(64) | 否 | — | 任务创建幂等键 |
 | status | VARCHAR(16) | 否 | 'QUEUED' | QUEUED、RUNNING、PAUSED、SUCCEEDED、CANCELLED |
@@ -154,8 +191,6 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | page_count | INT UNSIGNED | 否 | 0 | 已提交页数，包含确认导入完成的空页 |
 | read_count | BIGINT UNSIGNED | 否 | 0 | 累计接收条次，重放可重复，非真实SKU总数 |
 | content_count | BIGINT UNSIGNED | 否 | 0 | 当前任务已提交的不同 SKU 数 |
-| clean_status | VARCHAR(16) | 否 | 'NOT_STARTED' | 清洗阶段，独立于导入状态：NOT_STARTED、RUNNING、COMPLETED、PARTIAL、FAILED |
-| clean_rule_version | VARCHAR(64) | 是 | NULL | 本次清洗固定的受控规则包版本 |
 | failure_count | INT UNSIGNED | 否 | 0 | 失败尝试次数 |
 | error_code | VARCHAR(64) | 是 | NULL | 脱敏错误类别，不存原始响应或凭证 |
 | worker_token | VARCHAR(64) | 是 | NULL | 当前执行者租约标识，不是上游凭证 |
@@ -167,16 +202,39 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | finished_at | DATETIME | 是 | NULL | 结束时间 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
 | updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
-| active_slot | TINYINT | 生成 | 自动生成 | 同租户账套只保留一个活动任务，暂停也占位 |
+| active_slot | TINYINT | 生成 | 自动生成 | 同一账套只保留一个活动任务，暂停也占位 |
+
+### catalog_clean_job
+
+| 字段 | 类型 | 可空 | 用途 |
+| --- | --- | --- | --- |
+| id | BIGINT | 否 | 自增清洗任务主键 |
+| source_key / brand_name | VARCHAR(64) / VARCHAR(50) | 否 | 账套、品牌 |
+| created_date | DATE | 是 | 指定建档日，NULL 表示品牌全部 |
+| include_reviews | TINYINT | 否 | 是否纳入未映射待审商品 |
+| target_source_id | BIGINT | 是 | 单条技术重试的来源 ID |
+| request_key | VARCHAR(64) | 否 | 账套内提交幂等键 |
+| requester_id / requester_name | BIGINT / VARCHAR(64) | 姓名可空 | 发起人和姓名快照 |
+| status | VARCHAR(16) | 否 | RUNNING、COMPLETED、PARTIAL、FAILED |
+| worker_token / lease_until | VARCHAR(64) / DATETIME | 是 | 运行租约 |
+| created_at | DATETIME | 否 | 创建时间 |
+| active_slot | TINYINT | 是 | 运行时生成 1，其余 NULL |
+
+### catalog_clean_job_item
+
+| 字段 | 类型 | 可空 | 用途 |
+| --- | --- | --- | --- |
+| job_id / source_id | BIGINT | 否 | 复合主键，关联清洗任务和本地来源 SKU |
+| source_version | INT UNSIGNED | 否 | 确认时的来源版本 |
+| outcome | VARCHAR(16) | 否 | PENDING、AUTO_PASSED、MANUAL_PASSED、REVIEW_REQUIRED、ERROR、SKIPPED |
 
 ### source_goods_item
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
 | id | BIGINT | 否 | 自增 | 本地来源内容主键，不是吉客云SKU主键 |
-| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
 | source_key | VARCHAR(64) | 否 | — | 受控账套标识 |
-| brand_name | VARCHAR(32) | 否 | — | 品牌查询分区，不取上游返回字段 |
+| brand_name | VARCHAR(50) | 否 | — | 品牌查询分区，不取上游返回字段 |
 | goods_name | VARCHAR(512) | 是 | NULL | 来源goodsName原文 |
 | goods_no | VARCHAR(128) | 是 | NULL | 来源goodsNo原文，不作SKU唯一键 |
 | sku_name | VARCHAR(256) | 是 | NULL | 来源skuName原文 |
@@ -184,7 +242,7 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | goods_field4 | VARCHAR(1024) | 是 | NULL | 来源goodsField4原文 |
 | goods_field1 | VARCHAR(1024) | 是 | NULL | 来源goodsField1原文 |
 | goods_field5 | VARCHAR(1024) | 是 | NULL | 来源goodsField5原文 |
-| sku_id | VARCHAR(19) ASCII | 否 | — | 吉客云 SKU ID，与租户、账套组成唯一键 |
+| sku_id | VARCHAR(19) ASCII | 否 | — | 吉客云 SKU ID，源商品库唯一 |
 | cate_full_name | VARCHAR(1024) | 是 | NULL | 完整分类路径原文 |
 | gmt_modified | BIGINT UNSIGNED | 是 | NULL | SKU 修改时间，Unix 毫秒 |
 | goods_gmt_modified | BIGINT UNSIGNED | 是 | NULL | 商品修改时间，Unix 毫秒 |
@@ -193,43 +251,38 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | first_seen_job_id | BIGINT | 否 | — | 首次写入的同步任务 |
 | last_seen_job_id | BIGINT | 否 | — | 最近出现的同步任务，仅当前信息不作批次历史 |
 | mapping_status | VARCHAR(16) | 否 | 'UNMAPPED' | UNMAPPED-待归类，MAPPED-已确认，EXCLUDED-排除 |
-| catalog_variant_id | BIGINT | 是 | NULL | 规则唯一确定或人工确认的已生效规格映射 |
-| variant_color_id | BIGINT | 是 | NULL | 清洗或人工审核产生的本地颜色映射 |
+| catalog_brand_id | BIGINT | 是 | NULL | 与来源品牌名称相同的标准品牌 |
+| goods_id | BIGINT | 是 | NULL | 自动清洗或人工审核确认的标准商品 |
 | mapping_remark | VARCHAR(512) | 是 | NULL | 归类或排除原因 |
 | mapping_origin | VARCHAR(16) | 是 | NULL | 生效映射来源：AUTO-自动清洗，MANUAL-人工审核 |
 | clean_status | VARCHAR(16) | 否 | 'PENDING' | PENDING、PROCESSING、AUTO_PASSED、REVIEW_REQUIRED、MANUAL_PASSED、ERROR、EXCLUDED |
-| clean_job_id | BIGINT | 是 | NULL | 本次清洗依据的已成功导入任务 |
-| clean_rule_version | VARCHAR(64) | 是 | NULL | 本次处理的受控规则包版本，人工修正亦保留原依据 |
+| clean_job_id | BIGINT | 是 | NULL | 最近生成清洗或审核结果的独立任务 |
 | clean_candidate | JSON | 是 | NULL | 本地候选及白名单字段证据，禁止完整响应 |
 | clean_error_code | VARCHAR(64) | 是 | NULL | 缺失、歧义、冲突或技术错误类别 |
 | clean_attempts | INT UNSIGNED | 否 | 0 | 清洗尝试次数 |
-| clean_run_key | VARCHAR(64) | 是 | NULL | 当前清洗执行标识，防止过期执行者提交 |
-| clean_lease_until | DATETIME | 是 | NULL | 当前清洗租约到期时间 |
 | cleaned_at | DATETIME | 是 | NULL | 最近一次清洗或人工审核结束时间 |
 | reviewed_by | BIGINT | 是 | NULL | 必要时人工审核人，自动通过必须为空 |
 | reviewed_at | DATETIME | 是 | NULL | 人工审核时间 |
-| review_reason | VARCHAR(512) | 是 | NULL | 人工纠正或排除的原因 |
-| record_version | INT UNSIGNED | 否 | 0 | 映射维护并发版本 |
+| review_reason | VARCHAR(512) | 是 | NULL | 审核结果说明，兼容旧请求提交的原因 |
+| record_version | INT UNSIGNED | 否 | 0 | 防止清洗或审核使用已变化的来源记录 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间，北京时间 |
-| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 更新时间，北京时间 |
+| updated_at | DATETIME | 否 | CURRENT_TIMESTAMP | 来源或清洗结果的更新时间，由应用在实际变更时写入 |
 
 ### catalog_operation_log
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
-| id | BIGINT | 否 | 自增 | 商品操作审计主键 |
-| tenant_key | VARCHAR(64) | 否 | — | 租户标识 |
-| actor_type | VARCHAR(16) | 否 | 'USER' | USER 人工操作，SYSTEM 后台同步或清洗 |
+| id | BIGINT | 否 | 自增 | 商品导入记录主键 |
+| actor_type | VARCHAR(16) | 否 | 'USER' | USER 人工操作，SYSTEM 后台导入 |
 | operator_id | BIGINT | 是 | NULL | 人工操作用户，SYSTEM必须为空，不冒用发起人 |
 | operator_name | VARCHAR(64) | 是 | NULL | 操作人姓名快照 |
-| rule_version | VARCHAR(64) | 是 | NULL | 清洗规则包版本或同步事件版本，SYSTEM 必填 |
-| entity_type | VARCHAR(32) | 否 | — | VARIANT、VARIANT_COLOR、SOURCE_GOODS_ITEM、SYNC_JOB |
-| entity_id | BIGINT | 否 | — | 对应本地对象主键，由服务端校验类型和租户 |
-| action_type | VARCHAR(32) | 否 | — | 目录维护、映射、任务控制及CLEAN_AUTO、CLEAN_REVIEW、CLEAN_ERROR、CLEAN_RETRY |
+| entity_type | VARCHAR(32) | 否 | — | SOURCE_GOODS_ITEM-来源商品，SYNC_JOB-导入任务 |
+| entity_id | BIGINT | 否 | — | 对应本地对象主键，由服务端校验类型和归属 |
+| action_type | VARCHAR(32) | 否 | — | 来源建档日、来源更新或导入任务操作 |
 | batch_key | VARCHAR(64) | 是 | NULL | 批量操作关联号，建档日证据用 `CREATED-DATE-YYYY-MM-DD` |
 | before_data | JSON | 是 | NULL | 本地字段变更前对象，不存完整上游响应或外部SKU标识 |
 | after_data | JSON | 是 | NULL | 本地字段变更后对象，任务快照须剔除游标及执行令牌 |
-| reason | VARCHAR(512) | 是 | NULL | 操作或纠正原因 |
+| reason | VARCHAR(512) | 是 | NULL | 导入或变更说明 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 操作时间 |
 
 ### policy_master
@@ -267,16 +320,17 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
 | --- | --- | --- | --- | --- |
 | id | BIGINT | 否 | 自增 | 明细主键 |
-| tenant_key | VARCHAR(64) | 否 | — | 与政策主表相同的租户 |
 | policy_id | BIGINT | 否 | — | 关联 policy_master.id |
 | platform_code | VARCHAR(32) | 否 | — | 具体平台编码，不保存 ALL |
-| catalog_variant_id | BIGINT | 是 | NULL | 标准规格，草稿可暂未选 |
-| brand_name_snapshot | VARCHAR(32) | 是 | NULL | 提交时品牌快照 |
+| spu_id | BIGINT | 是 | NULL | 标准机型及版本，草稿可暂未选 |
+| ram | VARCHAR(20) | 是 | NULL | 配置身份的运行内存，统一GB |
+| rom | VARCHAR(20) | 是 | NULL | 配置身份的机身存储，统一GB |
+| brand_name_snapshot | VARCHAR(50) | 是 | NULL | 提交时品牌快照 |
 | series_name_snapshot | VARCHAR(64) | 是 | NULL | 提交时系列快照 |
 | color_scope | VARCHAR(32) | 是 | NULL | ALL_COLORS-不限颜色，SPECIFIC_COLOR-指定颜色；NULL仅为草稿未选择 |
-| variant_color_id | BIGINT | 是 | NULL | 当前规格下的指定颜色ID |
-| model_full_name | VARCHAR(256) | 是 | NULL | 涉及型号全称快照，草稿可为空 |
-| single_model | VARCHAR(64) | 是 | NULL | 单型号快照，草稿可为空 |
+| goods_id | BIGINT | 是 | NULL | 指定颜色时引用当前配置下的标准商品 |
+| model_full_name | VARCHAR(384) | 是 | NULL | 涉及型号全称快照，草稿可为空 |
+| single_model | VARCHAR(100) | 是 | NULL | 单型号快照，草稿可为空 |
 | spec | VARCHAR(64) | 是 | NULL | 配置快照，草稿可为空 |
 | color | VARCHAR(64) | 是 | NULL | 指定颜色的名称快照，不限颜色时为NULL |
 | quantity | INT | 是 | NULL | 该平台该机型的数量；未填写为NULL，不自动记为0 |
@@ -306,10 +360,6 @@ catalog_operation_log 新增 actor_type 和 rule_version，USER 必须关联同�
 | submission_snapshot | JSON | 是 | NULL | 提交或重提时的完整主表及明细快照 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 操作时间 |
 
-## 5. 本轮实际验证
+## 5. 验证范围
 
-本轮在项目缓存目录的独立 MySQL 8.0.29 实例（关闭网络监听）执行新版九表 SQL 成功，52 项合成数据检查通过：包含既有租户/品牌/规格颜色、补贴、任务及政策快照约束，以及新增原文先入库、清洗阶段分离、执行租约、自动通过必须有颜色/候选/规则、人工审核身份、异常原因、SYSTEM/USER 审计和原文保留。交付 SQL 不含测试记录，没有连接用户目标库或读取其凭证。
-
-单品牌导入改版后再次在独立 MySQL 8.0.29 本机验收库执行完整九表脚本，`GoodsSyncIntegrationTest` 5 项通过。上游使用模拟返回，覆盖两品牌串行、原文去重、页事务回滚、冷却和续拉、过期执行者及管理员租户权限。目标库未连接、未建表。
-
-两份建表脚本内容一致，全部字段字典、本地链接及差异格式在交付前核对。运行版本为8.0.29，未在最低8.0.16单独实测。未实现/运行真实自动解析器、规则包、商品接口或页面；不把约束验证称为自动清洗业务端到端通过。上一版27项记录属于历史验证，本轮52项包含相关回归。
+两份建表脚本内容一致，已静态核对表、外键、索引和字段字典。建表执行结果由用户在 Navicat 核对。标准目录联调覆盖同组合复用、公司外账号拒绝、跨品牌来源映射拒绝、指定颜色与配置不匹配拒绝、停用商品不自动恢复、容量及版本不明转审核、并发清洗归并和政策快照。

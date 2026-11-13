@@ -1,11 +1,12 @@
 # 差异化政策管理文档库
 
-更新日期：2026-11-12。项目指令见 [AGENTS.md](../AGENTS.md)，启动和配置见 [项目 README](../README.md)。
+更新日期：2026-11-13。项目指令见 [AGENTS.md](../AGENTS.md)，启动和配置见 [项目 README](../README.md)。
 
 ## 当前实现
 
 - 管理员登录后进入 `#/admin/catalog/sources`。右上角「导入商品」弹窗支持选品牌、全量或按建档日期导入。可在弹窗续跑和查看该日商品，列表按品牌、建档日和关键词筛选，并分别显示 SKU 与商品修改时间。[管理员工作台](architecture/admin-workspace.md)
-- 后端已实现吉客云只读查询、按 SKU 更新原文和导入成功后自动清洗。导入接口支持全量、按建档日和按修改日。侧栏「商品清洗与识别」提供品牌批次、进度、筛选分页、来源审核、重试和日志。[商品管理接口](api/catalog-api.md)
+- 吉客云导入按 SKU 更新原文，支持全量、按建档日和按修改日。管理员在「商品清洗与识别」按品牌和日期预览 SKU，二次确认后手动发起。结果页默认汇总两个品牌，清洗记录可查进度和日志。商品审核保留系列、型号、配置、颜色四项，直接点通过或不通过，无需填写原因。[管理员工作台](architecture/admin-workspace.md) · [商品管理接口](api/catalog-api.md)
+- 管理员可从「商品 → 商品中心」预览商品列表、编辑抽屉和数据字典。字典维护品牌、系列和独立颜色表。[商品中心（静态预览）](architecture/admin-workspace.md#商品中心静态预览)
 - 飞书客户端自动免登，失败可手动重试。浏览器可扫码、刷新二维码或跳转网页授权。已在本机看到飞书官方二维码，扫码回调和会话恢复已通过模拟验证。真实手机确认后的登录待联调。[飞书登录验证记录](architecture/feishu-auth-flow.md#验证记录)
 
 ## 当前数据库基线与重设计约定
@@ -14,37 +15,38 @@
 
 查库、变更和验证所需 SQL 保存为 `docs/sql/` 下的 `.sql` 文件，由用户在 Navicat 执行。
 
-当前九表基线包含商品同步、标准规格、独立规格颜色及政策颜色范围。首次建表由用户在 Navicat 对空库执行，建表及导入后可用只读脚本检查字段和唯一键。建档日功能复用现有表及日志。[SKU 同步核对 SQL](sql/verify_sku_sync.sql)
+本项目是嵌入飞书的公司内部 ERP，所有有效管理员共用同一套商品数据。十四表空库基线使用 `brand`、`series`、`spu`、`color_dict` 和 `goods` 保存公司共用标准目录。来源映射具体标准商品，政策以机型加 RAM、ROM 表示配置。商品目录、导入、源商品、清洗及政策明细均省去租户标识。源商品仅按吉客云 SKU ID 唯一匹配，源内容未变时保留原商品和清洗结果。现有后端仍依赖旧目录结构，重建后须等应用适配完成再运行商品流程。用户在 Navicat 对空库执行基线二选一。[数据字典](sql/database-design.md)
 
-来源保留原始七字段、SKU ID、完整分类路径、两种修改时间和状态标记。建档日取自按日导入命中或可追溯的旧任务。原文先入库，再按规则 `v1.2.0` 识别系列、型号、配置和颜色，明确结果自动入标准库。候选、证据和当前映射保存在来源表，任务分别记录导入和清洗阶段，日志区分 SYSTEM 与 USER。[商品同步方案](architecture/catalog-admin-design.md) · [自动清洗细则](business/catalog-cleaning.md)
+来源保留原始七字段、SKU ID、完整分类路径、两种修改时间和状态标记。建档日取自按日导入命中或可追溯的旧任务。原文先入库，再经管理员确认后按当前代码识别系列、型号、配置和颜色，明确结果自动入标准库。现有源码写旧目录，目标结构改为写 `goods`。候选、证据和当前映射保存在来源表，独立清洗任务固定本轮 SKU 和结果。商品导入记录继续支撑建档日查询，新基线不保存清洗日志。[商品表关联示例](sql/database-design.md#商品表关联示例) · [商品同步方案](architecture/catalog-admin-design.md) · [商品清洗细则](business/catalog-cleaning.md)
 
 ## 阅读入口
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
 | [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、Vue/Java 代码写法、API 兼容、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
-| [整体架构](architecture/system-overview.md) | 技术栈、源码进度、九表设计边界 | 实现与设计分别标注 |
+| [整体架构](architecture/system-overview.md) | 技术栈、源码进度、十四表设计边界 | 实现与设计分别标注 |
 | [前端架构与开发规范](architecture/frontend-development.md) | 目录职责、数据流、接口适配、会话路由、样式、AI 开发验收与整改清单 | 商品业务已接入；政策提交与审核待实现 |
 | [前端工程检查与验收](architecture/frontend-harness.md) | CSS 归属、静态检查、构建产物与本地多角色预览验收 | 本地检查和预览入口已接入 |
 | [前端开发入口](../frontend/README.md) | 阅读顺序、常用命令及实现边界 | 入口导航，不另建 Agent 指令 |
 | [管理员工作台](architecture/admin-workspace.md) | 角色分流、商品导航、源商品库和清洗页面 | 导入、原文查询和清洗页已接入后端 |
 | [前端组件与页面现状](architecture/system-overview.md#前端组件与页面现状) | Element Plus 替换范围、样式边界、响应式适配和验证记录 | 已完成组件替换；业务接入边界单独说明 |
-| [商品后台确认方案](architecture/catalog-admin-design.md) | 原始导入、自动清洗入库、规格颜色、异常审核 | 原始导入和清洗后端已实现 |
-| [自动清洗细则](business/catalog-cleaning.md) | 唯一规则门槛、颜色提取、状态、重试、人工结果保护与系统审计 | `v1.2.0` 已实现 |
+| [商品后台确认方案](architecture/catalog-admin-design.md) | 原始导入、手动发起清洗、标准商品、异常审核 | 旧目录清洗已实现，新目录写入待适配 |
+| [商品清洗细则](business/catalog-cleaning.md) | 手动清洗范围、识别、结果、重试与人工审核 | 新目录写入待适配 |
 | [飞书鉴权](architecture/feishu-auth-flow.md) | 客户端 JS-SDK 免登、网页扫码与 OAuth 授权、服务端会话 | 已实现；真实手机扫码完成后的登录待联调 |
 | [动态表单](business/perspective-rules.md) | 渠道、平台、补贴、颜色范围 | 同步确认版规则；业务持久化待接入 |
 | [状态机](business/status-machine.md) | 草稿、提交、审核、重提、历史 | 业务接口待实现 |
 | [覆盖检测](business/override-engine.md) | 稳定规格与颜色交集、未定优先级 | 候选方案，非已实现生效引擎 |
-| [完整建表 SQL](sql/schema.sql) | MySQL 8.0.16+ 九表 DDL | 空库首次执行，用户自行建表 |
+| [完整建表 SQL](sql/schema.sql) | MySQL 8.0.16+ 十四表 DDL | 空库首次执行，用户自行建表 |
 | [V1 同内容版本](sql/V1__create_policy_tables.sql) | 与 schema.sql 完全一致 | 二选一，不执行两遍 |
-| [SKU 同步核对 SQL](sql/verify_sku_sync.sql) | 检查表、唯一键、任务范围及字段覆盖 | 建表和导入后只读执行 |
-| [数据库字典](sql/database-design.md) | 九表关联、全部字段、SQL/SVC 约束边界和 Navicat 步骤 | 与 SQL 对应 |
-| [商品管理接口](api/catalog-api.md) | 来源、导入清洗、规格颜色、异常审核和重试 | 导入、清洗和来源审核已实现，目录维护待实现 |
+| [清洗结构核对 SQL](sql/verify_catalog_cleaning.sql) | 检查独立任务、外键、并发唯一键和执行索引 | 建表后只读执行 |
+| [SKU 与标准目录核对 SQL](sql/verify_sku_sync.sql) | 检查表、唯一键、任务范围及字段覆盖 | 建表和导入后只读执行 |
+| [数据库字典](sql/database-design.md) | 十四表关联、全部字段、SQL/SVC 约束边界和 Navicat 步骤 | 与 SQL 对应 |
+| [商品管理接口](api/catalog-api.md) | 来源、导入清洗、标准商品、异常审核和重试 | 现有接口已实现，新目录接入待实施 |
 | [政策接口](api/policy-api.md) | 申请保存、提交、查询及颜色范围 | 未实现契约 |
 | [审核接口](api/admin-api.md) | 审核、候选影响、权限 | 未实现契约 |
 | [附件接口](api/attachment-api.md) | 附件接口边界 | 实际接入以源码及对应文档为准 |
 
-文档目录统一 architecture/、business/、sql/、api/，结构入口只用 docs/sql/schema.sql；不新建重复 Agent.md。旧十四表建议已被九表确认版替代。
+文档目录统一 architecture/、business/、sql/、api/，结构入口只用 docs/sql/schema.sql；不新建重复 Agent.md。本次按十四表空库基线重建。
 
 ## 仍需确认或联调
 

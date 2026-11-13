@@ -43,61 +43,70 @@ export function cancelGoodsJob({ id, recordVersion }, signal) {
   return post(`${jobsPath}/${encodeURIComponent(id)}/cancel`, { recordVersion }, signal)
 }
 
-export function readLatestCleaningJob(brandName, signal) {
-  const params = new URLSearchParams({ brandName })
-  return request(`${cleaningPath}/latest?${params}`, { signal })
-}
+const cleaningJobsPath = cleaningPath + '/jobs'
 
-export function readCleaningResults(
-  { importJobId, brandName, status, ruleVersion, keyword, page, size },
-  signal,
-) {
-  const params = new URLSearchParams({ importJobId, page, size })
-  for (const [name, value] of Object.entries({ brandName, status, ruleVersion, keyword })) {
+function cleaningQuery(path, values, signal) {
+  const params = new URLSearchParams()
+  for (const [name, value] of Object.entries(values)) {
     if (value) {
       params.set(name, value)
     }
   }
-  return request(`${cleaningPath}/results?${params}`, { signal })
+  return request(path + '?' + params, { signal })
+}
+
+export function readCleaningResults(filters, signal) {
+  return cleaningQuery(cleaningPath + '/results', filters, signal)
+}
+
+export function readCleaningPreview(filters, signal) {
+  return cleaningQuery(cleaningPath + '/preview', filters, signal)
+}
+
+export function readCleaningJobs(page, size, signal) {
+  return cleaningQuery(cleaningJobsPath, { page, size }, signal)
+}
+
+export function readActiveCleaningJob(signal) {
+  return request(cleaningJobsPath + '/active', { signal })
+}
+
+export function readCleaningJob(id, signal) {
+  return request(cleaningJobsPath + '/' + encodeURIComponent(id), { signal })
+}
+
+export function startCleaningJob(scope, signal) {
+  return post(cleaningJobsPath, scope, signal)
 }
 
 export function readCleaningSource(id, signal) {
-  return request(`${sourcesPath}/${encodeURIComponent(id)}`, { signal })
+  return request(sourcesPath + '/' + encodeURIComponent(id), { signal })
 }
 
-export function readCleaningLogs(importJobId, page, size, signal) {
-  const params = new URLSearchParams({ page, size })
-  return request(`${jobsPath}/${encodeURIComponent(importJobId)}/clean-logs?${params}`, { signal })
-}
-
-export function startCleaningJob({ importJobId, recordVersion }, signal) {
-  return post(
-    `${jobsPath}/${encodeURIComponent(importJobId)}/clean-start`,
-    { recordVersion },
+export function readCleaningLogs(id, page, size, signal) {
+  return cleaningQuery(
+    cleaningJobsPath + '/' + encodeURIComponent(id) + '/logs',
+    { page, size },
     signal,
   )
 }
 
-export function retryCleaningJob({ importJobId, recordVersion }, signal) {
-  return post(
-    `${jobsPath}/${encodeURIComponent(importJobId)}/clean-retry`,
-    { recordVersion },
+export function readCleaningSourceLogs(id, page, size, signal) {
+  return cleaningQuery(
+    sourcesPath + '/' + encodeURIComponent(id) + '/clean-logs',
+    { page, size },
     signal,
   )
 }
 
-export function retryCleaningSource({ id, recordVersion }, signal) {
-  return post(`${sourcesPath}/${encodeURIComponent(id)}/clean-retry`, { recordVersion }, signal)
-}
-
-export function reprocessCleaningReviews({ importJobId, recordVersion }, signal) {
+export function retryCleaningSource({ id, recordVersion, requestKey }, signal) {
   return post(
-    `${jobsPath}/${encodeURIComponent(importJobId)}/clean-reprocess`,
-    { recordVersion },
+    sourcesPath + '/' + encodeURIComponent(id) + '/clean-retry',
+    { recordVersion, requestKey },
     signal,
   )
 }
 
 export function reviewCleaningSource(id, body, signal) {
-  return post(`${sourcesPath}/${encodeURIComponent(id)}/review`, body, signal)
+  return post(sourcesPath + '/' + encodeURIComponent(id) + '/review', body, signal)
 }

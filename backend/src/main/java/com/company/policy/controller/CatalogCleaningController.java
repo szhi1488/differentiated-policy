@@ -1,23 +1,26 @@
 package com.company.policy.controller;
 
 import com.company.policy.common.api.ApiError;
-import com.company.policy.dto.CatalogCleaningRequest.Control;
+import com.company.policy.dto.CatalogCleaningRequest.Retry;
 import com.company.policy.dto.CatalogCleaningRequest.Review;
+import com.company.policy.dto.CatalogCleaningRequest.Start;
 import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
 import com.company.policy.vo.CatalogCleaningResponse.Log;
 import com.company.policy.vo.CatalogCleaningResponse.Page;
-import com.company.policy.vo.CatalogCleaningResponse.Result;
-import com.company.policy.vo.CatalogCleaningResponse.Status;
+import com.company.policy.vo.CatalogCleaningResponse.Preview;
+import com.company.policy.vo.CatalogCleaningResponse.Results;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import org.springframework.dao.DataAccessException;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.TransactionException;
@@ -50,81 +53,83 @@ public class CatalogCleaningController {
         this.sessions = sessions;
     }
 
-    @GetMapping("/catalog/cleaning/latest")
-    @Operation(summary = "获取最近一个成功导入批次的清洗进度")
-    @ApiResponse(responseCode = "204", description = "尚无成功的导入批次")
-    public ResponseEntity<Job> latest(
-            @Parameter(description = "可选，OPPO手机或一加手机") @RequestParam(required = false)
-                    String brandName,
+    @GetMapping("/catalog/cleaning/jobs")
+    @Operation(summary = "分页查看清洗记录", description = "页码从 1 开始，每页 1 至 100 条。")
+    public Page<Job> jobs(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
             HttpServletRequest request) {
-        Job job = service.latest(sessions.requireLogin(request).user(), brandName);
+        return service.jobs(sessions.requireLogin(request).user(), page, size);
+    }
+
+    @GetMapping("/catalog/cleaning/jobs/active")
+    @Operation(summary = "查看账套当前正在运行的清洗任务")
+    @ApiResponse(responseCode = "204", description = "当前没有正在运行的任务")
+    public ResponseEntity<Job> active(HttpServletRequest request) {
+        Job job = service.active(sessions.requireLogin(request).user());
         return job == null ? ResponseEntity.noContent().build() : ResponseEntity.ok(job);
     }
 
-    @GetMapping("/goods-sync/jobs/{id}/cleaning")
-    @Operation(summary = "查看指定导入批次的清洗任务及分流计数")
+    @GetMapping("/catalog/cleaning/jobs/{id}")
+    @Operation(summary = "查看指定清洗任务的进度和结果统计")
     public Job job(@PathVariable long id, HttpServletRequest request) {
         return service.job(sessions.requireLogin(request).user(), id);
     }
 
-    @PostMapping("/goods-sync/jobs/{id}/clean-start")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "为已有成功导入批次启动后台清洗", description = "请求需提供任务 recordVersion，重复启动返回当前进度。")
-    @ApiResponse(responseCode = "202", description = "后台清洗已受理或返回现有任务")
-    public Job start(
-            @PathVariable long id, @Valid @RequestBody Control body, HttpServletRequest request) {
-        return service.start(
-                sessions.requireLogin(request).user(), id, body.recordVersion(), false);
-    }
-
-    @PostMapping("/goods-sync/jobs/{id}/clean-preview")
-    @Operation(summary = "只读预览指定批次的规则候选", description = "规则版本默认当前版本，预测结果只依据来源文本。")
-    public Page<Result> preview(
-            @PathVariable long id,
-            @RequestParam(required = false) String ruleVersion,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size,
-            HttpServletRequest request) {
-        return service.preview(sessions.requireLogin(request).user(), id, ruleVersion, page, size);
-    }
-
-    @PostMapping("/goods-sync/jobs/{id}/clean-retry")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "重试指定批次的技术失败", description = "请求需提供任务 recordVersion。")
-    public Job retry(
-            @PathVariable long id, @Valid @RequestBody Control body, HttpServletRequest request) {
-        return service.start(sessions.requireLogin(request).user(), id, body.recordVersion(), true);
-    }
-
-    @PostMapping("/goods-sync/jobs/{id}/clean-reprocess")
+    @PostMapping("/catalog/cleaning/jobs")
     @ResponseStatus(HttpStatus.ACCEPTED)
     @Operation(
-            summary = "按新规则重新识别旧规则待审记录",
-            description = "需要当前任务 recordVersion，仅处理当前批次未映射的旧规则待审商品。")
-    public Job reprocess(
-            @PathVariable long id, @Valid @RequestBody Control body, HttpServletRequest request) {
-        return service.reprocessReviews(
-                sessions.requireLogin(request).user(), id, body.recordVersion());
+            summary = "按品牌和可选建档日启动本地清洗",
+            description = "品牌必填，日期为空表示该品牌全部。需提交确认数量和幂等请求键，数量变化返回 409。")
+    public Job start(@Valid @RequestBody Start body, HttpServletRequest request) {
+        return service.start(sessions.requireLogin(request).user(), body);
+    }
+
+    @GetMapping("/catalog/cleaning/preview")
+    @Operation(
+            summary = "预览本地来源商品及预计清洗数量",
+            description = "品牌必填。关键词仅筛选预览表，预计清洗数量按品牌、建档日及是否包含未映射待审计算。")
+    public Preview preview(
+            @RequestParam String brandName,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate createdDate,
+            @RequestParam(defaultValue = "false") boolean includeReviews,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            HttpServletRequest request) {
+        return service.preview(
+                sessions.requireLogin(request).user(),
+                brandName,
+                createdDate,
+                includeReviews,
+                keyword,
+                page,
+                size);
     }
 
     @GetMapping("/catalog/cleaning/results")
-    @Operation(summary = "分页查询清洗结果", description = "页码从 1 开始，每页 1 至 100 条，关键词按商品名或货号查子串。")
-    public Page<Result> results(
-            @Parameter(description = "可选，导入任务 ID") @RequestParam(required = false) Long importJobId,
-            @Parameter(description = "可选，OPPO手机或一加手机") @RequestParam(required = false)
+    @Operation(
+            summary = "分页查询清洗结果及状态计数",
+            description =
+                    "关键词匹配商品名或货号。日期与 unknownDate 互斥。状态可选 PENDING、PASSED、REVIEW_REQUIRED、ERROR、EXCLUDED。")
+    public Results results(
+            @Parameter(description = "省略时包含 OPPO 手机和一加手机") @RequestParam(required = false)
                     String brandName,
-            @RequestParam(required = false) Status status,
-            @RequestParam(required = false) String ruleVersion,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate createdDate,
+            @RequestParam(defaultValue = "false") boolean unknownDate,
+            @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
         return service.results(
                 sessions.requireLogin(request).user(),
-                importJobId,
                 brandName,
+                createdDate,
+                unknownDate,
                 status,
-                ruleVersion,
                 keyword,
                 page,
                 size);
@@ -139,7 +144,7 @@ public class CatalogCleaningController {
     @PostMapping("/source-goods/{id}/review")
     @Operation(
             summary = "通过审核或排除来源",
-            description = "APPROVE 必须给出完整 target，EXCLUDE 只填原因。两种操作都需要 recordVersion 和 reason。")
+            description = "两种操作均需 recordVersion。APPROVE 需要完整 target，EXCLUDE 无需 target。reason 可省略。")
     public Detail review(
             @PathVariable long id, @Valid @RequestBody Review body, HttpServletRequest request) {
         return service.review(sessions.requireLogin(request).user(), id, body);
@@ -149,11 +154,12 @@ public class CatalogCleaningController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     @Operation(summary = "重试单条技术失败", description = "请求需提供来源商品的 recordVersion。")
     public Job retrySource(
-            @PathVariable long id, @Valid @RequestBody Control body, HttpServletRequest request) {
-        return service.retrySource(sessions.requireLogin(request).user(), id, body.recordVersion());
+            @PathVariable long id, @Valid @RequestBody Retry body, HttpServletRequest request) {
+        return service.retrySource(
+                sessions.requireLogin(request).user(), id, body.recordVersion(), body.requestKey());
     }
 
-    @GetMapping("/goods-sync/jobs/{id}/clean-logs")
+    @GetMapping("/catalog/cleaning/jobs/{id}/logs")
     @Operation(summary = "分页查看该批次的清洗审计", description = "页码从 1 开始，每页 1 至 100 条。")
     public Page<Log> logs(
             @PathVariable long id,
@@ -161,6 +167,16 @@ public class CatalogCleaningController {
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
         return service.logs(sessions.requireLogin(request).user(), id, page, size);
+    }
+
+    @GetMapping("/source-goods/{id}/clean-logs")
+    @Operation(summary = "分页查看指定来源商品的处理历史")
+    public Page<Log> sourceLogs(
+            @PathVariable long id,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            HttpServletRequest request) {
+        return service.sourceLogs(sessions.requireLogin(request).user(), id, page, size);
     }
 
     @ExceptionHandler({DataAccessException.class, TransactionException.class})
@@ -172,6 +188,6 @@ public class CatalogCleaningController {
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     ResponseEntity<ApiError> invalidParameter() {
         return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_CLEAN_INVALID_REQUEST", "ID、状态或分页参数无效。"));
+                .body(new ApiError("CATALOG_CLEAN_INVALID_REQUEST", "ID、日期、状态或分页参数无效。"));
     }
 }

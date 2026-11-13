@@ -25,12 +25,22 @@
 .admin-nav {
   padding: 15px 10px;
 }
-.admin-nav-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.admin-nav .admin-nav-group {
+  --el-button-text-color: #17263e;
+  width: 100%;
+  height: auto;
   padding: 10px 12px;
   font-weight: 600;
+}
+.admin-nav .admin-nav-group > span {
+  width: 100%;
+  gap: 10px;
+}
+.admin-nav-chevron {
+  margin-inline-start: auto;
+}
+.admin-nav-group[aria-expanded='false'] .admin-nav-chevron {
+  transform: rotate(-90deg);
 }
 .admin-nav a {
   display: block;

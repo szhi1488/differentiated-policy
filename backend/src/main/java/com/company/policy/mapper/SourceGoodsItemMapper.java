@@ -21,14 +21,14 @@ public interface SourceGoodsItemMapper {
         FROM catalog_operation_log marker
         WHERE marker.tenant_key = item.tenant_key AND marker.entity_type = 'SOURCE_GOODS_ITEM'
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
-          AND marker.rule_version = 'SOURCE_CREATED_DATE_V1' AND marker.action_type = 'CREATE'
+          AND marker.batch_key LIKE 'CREATED-DATE-%' AND marker.action_type = 'CREATE'
         """;
     String CREATED_DATE_JOB =
             """
         FROM goods_sync_job dated
         WHERE dated.tenant_key = item.tenant_key AND dated.source_key = item.source_key
           AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
-          AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id, item.clean_job_id)
+          AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
         """;
     String CREATED_DATE_COLUMN =
             """
@@ -51,15 +51,8 @@ public interface SourceGoodsItemMapper {
         </choose>
         AS created_date
         """;
-    String FILTER =
+    String DATE_FILTER =
             """
-        FROM source_goods_item item WHERE tenant_key = #{tenantKey} AND source_key = #{sourceKey}
-        <if test="brand != null">AND brand_name = #{brand}</if>
-        <if test="keyword != null">
-          AND (LOCATE(#{keyword}, goods_name) > 0 OR LOCATE(#{keyword}, goods_no) > 0
-               OR LOCATE(#{keyword}, sku_name) > 0 OR LOCATE(#{keyword}, cate_full_name) > 0
-               OR sku_id = #{keyword})
-        </if>
         <if test="createdDate != null">
           AND (
             EXISTS (SELECT 1
@@ -75,6 +68,17 @@ public interface SourceGoodsItemMapper {
           )
         </if>
         """;
+    String FILTER =
+            """
+        FROM source_goods_item item WHERE tenant_key = #{tenantKey} AND source_key = #{sourceKey}
+        <if test="brand != null">AND brand_name = #{brand}</if>
+        <if test="keyword != null">
+          AND (LOCATE(#{keyword}, goods_name) > 0 OR LOCATE(#{keyword}, goods_no) > 0
+               OR LOCATE(#{keyword}, sku_name) > 0 OR LOCATE(#{keyword}, cate_full_name) > 0
+               OR sku_id = #{keyword})
+        </if>
+        """
+                    + DATE_FILTER;
 
     @Select(
             """
@@ -107,9 +111,8 @@ public interface SourceGoodsItemMapper {
           gmt_modified = #{goods.gmtModified}, goods_gmt_modified = #{goods.goodsGmtModified},
           is_blockup = #{goods.isBlockup}, is_package_good = #{goods.isPackageGood},
           <if test="recheck">
-            clean_status = 'PENDING', clean_job_id = NULL, clean_rule_version = NULL,
+            clean_status = 'PENDING', clean_job_id = NULL,
             clean_candidate = NULL, clean_error_code = NULL, cleaned_at = NULL,
-            clean_run_key = NULL, clean_lease_until = NULL,
           </if>
           last_seen_job_id = #{job.id}, record_version = record_version + 1
         WHERE tenant_key = #{job.tenantKey} AND source_key = #{job.sourceKey}
@@ -130,8 +133,8 @@ public interface SourceGoodsItemMapper {
     @Insert(
             """
         INSERT INTO catalog_operation_log
-          (tenant_key, actor_type, rule_version, entity_type, entity_id, action_type, batch_key, before_data, after_data, reason)
-        VALUES (#{job.tenantKey}, 'SYSTEM', 'SKU_SYNC_V1', 'SOURCE_GOODS_ITEM', #{id}, 'UPDATE',
+          (tenant_key, actor_type, entity_type, entity_id, action_type, batch_key, before_data, after_data, reason)
+        VALUES (#{job.tenantKey}, 'SYSTEM', 'SOURCE_GOODS_ITEM', #{id}, 'UPDATE',
           #{batchKey}, #{before}, #{after}, '吉客云 SKU 来源字段更新。')
         """)
     int auditUpdate(GoodsSyncJob job, long id, String batchKey, String before, String after);
@@ -140,18 +143,18 @@ public interface SourceGoodsItemMapper {
             """
         <script>
         INSERT INTO catalog_operation_log
-          (tenant_key, actor_type, rule_version, entity_type, entity_id, action_type, batch_key, reason)
-        SELECT DISTINCT item.tenant_key, 'SYSTEM', 'SOURCE_CREATED_DATE_V1', 'SOURCE_GOODS_ITEM',
+          (tenant_key, actor_type, entity_type, entity_id, action_type, batch_key, reason)
+        SELECT DISTINCT item.tenant_key, 'SYSTEM', 'SOURCE_GOODS_ITEM',
                item.id, 'CREATE', CONCAT('CREATED-DATE-', dated.sync_date), '吉客云按建档日查询命中。'
         FROM source_goods_item item
         JOIN goods_sync_job dated
           ON dated.tenant_key = item.tenant_key AND dated.source_key = item.source_key
           AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
-          AND dated.id IN (item.last_seen_job_id, item.clean_job_id)
+          AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
         LEFT JOIN catalog_operation_log marker
           ON marker.tenant_key = item.tenant_key AND marker.entity_type = 'SOURCE_GOODS_ITEM'
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
-          AND marker.rule_version = 'SOURCE_CREATED_DATE_V1' AND marker.action_type = 'CREATE'
+          AND marker.action_type = 'CREATE'
           AND marker.batch_key = CONCAT('CREATED-DATE-', dated.sync_date)
         WHERE item.tenant_key = #{job.tenantKey} AND item.source_key = #{job.sourceKey}
           AND item.brand_name = #{job.brandName}

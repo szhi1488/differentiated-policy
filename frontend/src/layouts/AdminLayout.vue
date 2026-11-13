@@ -1,10 +1,28 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import './admin-layout.css'
 
 defineProps({ user: { type: Object, required: true } })
+const catalogLinks = [
+  { name: 'catalog-sources', label: '源商品库' },
+  { name: 'catalog-cleaning', label: '商品清洗与识别' },
+  { name: 'catalog-center', label: '商品中心' },
+]
+const route = useRoute()
 const menuOpen = ref(false)
+const catalogMenuOpen = ref(false)
+
+watch(
+  () => route.name,
+  (name) => {
+    if (catalogLinks.some((link) => link.name === name)) {
+      catalogMenuOpen.value = true
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -25,16 +43,27 @@ const menuOpen = ref(false)
       </router-link>
 
       <nav class="admin-nav" aria-label="管理员导航">
-        <div class="admin-nav-group">
+        <el-button
+          class="admin-nav-group"
+          text
+          :aria-expanded="catalogMenuOpen"
+          aria-controls="admin-catalog-links"
+          @click="catalogMenuOpen = !catalogMenuOpen"
+        >
           <AppIcon name="box" :size="18" />
-          商品
+          <span>商品</span>
+          <AppIcon class="admin-nav-chevron" name="chevron" :size="16" />
+        </el-button>
+        <div v-show="catalogMenuOpen" id="admin-catalog-links">
+          <router-link
+            v-for="link in catalogLinks"
+            :key="link.name"
+            :to="{ name: link.name }"
+            @click="menuOpen = false"
+          >
+            {{ link.label }}
+          </router-link>
         </div>
-        <router-link :to="{ name: 'catalog-sources' }" @click="menuOpen = false">
-          源商品库
-        </router-link>
-        <router-link :to="{ name: 'catalog-cleaning' }" @click="menuOpen = false">
-          商品清洗与识别
-        </router-link>
       </nav>
     </aside>
 

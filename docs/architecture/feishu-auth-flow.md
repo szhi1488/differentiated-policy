@@ -65,7 +65,7 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 1. `POST /api/auth/feishu/login` 提交 `{ "code": "授权码", "state": "本次随机值" }`。
 2. 服务端一次性消费 state，经 `https://accounts.feishu.cn/oauth/v3/token` 交换用户 token，再请求 `https://open.feishu.cn/open-apis/authen/v1/user_info`。
-3. 以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id`，保留角色、部门、停用标记，不从姓名推断部门。
+3. 公司内部 ERP 基线接入时，各登录入口都须先校验飞书返回的租户与服务端配置的公司租户一致，通过后才可保存用户和建立会话。当前源码的公司租户准入待适配。现有身份记录以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id`，保留角色、部门、停用标记，不从姓名推断部门。
 4. 停用账号拒绝登录，存储失败不建会话。前端姓名、open_id 或角色不能作为身份依据。
 5. 落库后轮换 Session ID，保存本地用户 ID、角色及核验身份；响应 `{ "user": { ... }, "expiresAt": "..." }`，ID 为字符串，不返回用户 token。
 

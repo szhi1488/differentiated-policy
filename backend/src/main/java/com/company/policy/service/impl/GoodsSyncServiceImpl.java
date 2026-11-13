@@ -340,8 +340,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                         nextPhase ? Phase.SKU_MODIFIED : job.getSyncPhase(),
                         page.goods().size(),
                         count,
-                        config.getImportIntervalSeconds(),
-                        CatalogCleaningRule.VERSION)
+                        config.getImportIntervalSeconds())
                 != 1) {
             throw new LeaseLost();
         }
@@ -404,7 +403,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     sources.auditUpdate(
                             job,
                             existing.getId(),
-                            "CLN-" + job.getId(),
+                            "SYNC-" + job.getId(),
                             auditSnapshot(previous),
                             auditSnapshot(current)));
         }

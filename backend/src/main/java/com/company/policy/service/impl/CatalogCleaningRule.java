@@ -15,9 +15,6 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 final class CatalogCleaningRule {
-    static final String VERSION = "v1.2.0";
-    static final String PREVIOUS_VERSION = "v1.1.0";
-    static final String LEGACY_VERSION = "v1.0.0";
     static final String EXCLUSION = "RULE_EXCLUSION";
     private static final Pattern SPACE = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern SKU =
@@ -44,19 +41,12 @@ final class CatalogCleaningRule {
             Pattern.compile(
                     "^Reon *17(?=$|\\s|[1-9][0-9]?\\s*(?:GB?)?\\s*\\+|Pro(?:\\s|$))",
                     Pattern.CASE_INSENSITIVE);
-    private static final ColorMatch NO_COLOR = new ColorMatch(null, List.of(), null);
     private static final Pattern NOT_COLOR =
             Pattern.compile("手机|系列|版本|定制|限定|样机|套装|简装|标配|默认|无颜色|未知|随机|原装|配件|活力版|全新|裸机|官换|翻新|代发");
 
     private CatalogCleaningRule() {}
 
     static Candidate parse(SourceGoodsItem source) {
-        return parse(source, VERSION);
-    }
-
-    static Candidate parse(SourceGoodsItem source, String version) {
-        boolean legacy = LEGACY_VERSION.equals(version);
-        boolean useSourceMetadata = VERSION.equals(version);
         String brand = source.getBrandName();
         String rawName = normalize(source.getGoodsName());
         String rawSku = normalize(source.getSkuName());
@@ -66,7 +56,7 @@ final class CatalogCleaningRule {
         List<Evidence> evidence = new ArrayList<>();
         evidence.add(new Evidence("goodsField4", source.getGoodsField4()));
         evidence.add(new Evidence("cateName", source.getCateName()));
-        String path = useSourceMetadata ? normalize(source.getCateFullName()) : "";
+        String path = normalize(source.getCateFullName());
         if (!path.isEmpty()) {
             evidence.add(new Evidence("cateFullName", source.getCateFullName()));
         }
@@ -93,14 +83,14 @@ final class CatalogCleaningRule {
         }
         String title = nameTail == null ? name : nameTail;
         List<MatchResult> nameSpecs = SPEC_IN_NAME.matcher(title).results().limit(2).toList();
-        var titleColor = titleColor(title, nameTail != null, nameSpecs, field1, rawSku, legacy);
+        var titleColor = titleColor(title, nameTail != null, nameSpecs, field1, rawSku);
         String reason =
                 exclusion(rawName, category + " " + path, series, series.isEmpty() && usablePath);
-        if (useSourceMetadata && Boolean.TRUE.equals(source.getIsPackageGood())) {
+        if (Boolean.TRUE.equals(source.getIsPackageGood())) {
             evidence.add(new Evidence("isPackageGood", "true"));
             reason = "吉客云标记为组合商品。";
         }
-        if (useSourceMetadata && Boolean.TRUE.equals(source.getIsBlockup())) {
+        if (Boolean.TRUE.equals(source.getIsBlockup())) {
             evidence.add(new Evidence("isBlockup", "true"));
             reason = "吉客云标记 SKU 已停用。";
         }
@@ -108,29 +98,18 @@ final class CatalogCleaningRule {
             if (rawName.contains("工厂代发")) {
                 evidence.add(new Evidence("goodsName", "工厂代发"));
             }
-            if (!legacy && !titleColor.candidates().isEmpty() && !rawName.contains("工厂代发")) {
+            if (!titleColor.candidates().isEmpty() && !rawName.contains("工厂代发")) {
                 evidence.add(new Evidence("goodsName", source.getGoodsName()));
             }
-            if (!legacy && !titleColor.candidates().isEmpty()) {
+            if (!titleColor.candidates().isEmpty()) {
                 evidence.add(new Evidence("skuName", source.getSkuName()));
             }
             return result(
-                    null,
-                    null,
-                    null,
-                    legacy ? NO_COLOR : titleColor,
-                    names,
-                    EXCLUSION,
-                    reason,
-                    "EXCLUDE",
-                    evidence);
+                    null, null, null, titleColor, names, EXCLUSION, reason, "EXCLUDE", evidence);
         }
 
         evidence.add(new Evidence("skuName", source.getSkuName()));
-        if (!legacy || nameTail != null) {
-            evidence.add(new Evidence("goodsName", source.getGoodsName()));
-        }
-        var earlyColor = legacy ? NO_COLOR : titleColor;
+        evidence.add(new Evidence("goodsName", source.getGoodsName()));
         if (structuredPath
                 && (!usablePath
                         || (!series.isEmpty() && !series.equals(pathSeries))
@@ -139,7 +118,7 @@ final class CatalogCleaningRule {
                     series,
                     model,
                     spec,
-                    earlyColor,
+                    titleColor,
                     names,
                     "CATEGORY_PATH_CONFLICT",
                     "完整分类路径与品牌、系列或型号不一致，需要核对。",
@@ -150,7 +129,7 @@ final class CatalogCleaningRule {
                     pathSeries,
                     model,
                     spec,
-                    earlyColor,
+                    titleColor,
                     names,
                     "SERIES_FROM_PATH",
                     "自定义字段 4 为空，已从完整分类路径提取系列候选。",
@@ -161,7 +140,7 @@ final class CatalogCleaningRule {
                     series,
                     model,
                     spec,
-                    earlyColor,
+                    titleColor,
                     names,
                     "MODEL_UNCERTAIN",
                     "分类和商品名中的完整型号需要核对。",
@@ -172,7 +151,7 @@ final class CatalogCleaningRule {
                     series,
                     model,
                     spec,
-                    earlyColor,
+                    titleColor,
                     names,
                     "SPEC_UNCERTAIN",
                     "SKU 名或商品名中的配置无法唯一识别。",
@@ -183,7 +162,7 @@ final class CatalogCleaningRule {
                     series,
                     model,
                     spec,
-                    earlyColor,
+                    titleColor,
                     names,
                     "SPEC_CONFLICT",
                     "SKU 名和商品名中的配置不一致。",
@@ -191,7 +170,7 @@ final class CatalogCleaningRule {
         }
 
         String policyName = modelName(field1, brand);
-        boolean alias = !legacy && "OPPO手机".equals(brand) && RENO17_TYPO.matcher(policyName).find();
+        boolean alias = "OPPO手机".equals(brand) && RENO17_TYPO.matcher(policyName).find();
         if (alias) {
             policyName = RENO17_TYPO.matcher(policyName).replaceFirst("Reno17");
         }
@@ -203,7 +182,7 @@ final class CatalogCleaningRule {
                         series,
                         model,
                         spec,
-                        earlyColor,
+                        titleColor,
                         names,
                         "MODEL_EVIDENCE_CONFLICT",
                         "自定义字段 1 的型号写法需要核对。",
@@ -216,7 +195,7 @@ final class CatalogCleaningRule {
                         series,
                         model,
                         spec,
-                        earlyColor,
+                        titleColor,
                         names,
                         "MODEL_EVIDENCE_CONFLICT",
                         "自定义字段 1 的别名需与完整型号和配置一致。",
@@ -227,7 +206,7 @@ final class CatalogCleaningRule {
                         series,
                         model,
                         spec,
-                        earlyColor,
+                        titleColor,
                         names,
                         "SPEC_CONFLICT",
                         "自定义字段 1 和 SKU 名的配置不一致。",
@@ -266,8 +245,7 @@ final class CatalogCleaningRule {
             boolean matchedModel,
             List<MatchResult> specs,
             String field1,
-            String sku,
-            boolean legacy) {
+            String sku) {
         String before = specs.isEmpty() ? title : title.substring(0, specs.get(0).start()).strip();
         String after =
                 specs.isEmpty() ? "" : title.substring(specs.get(specs.size() - 1).end()).strip();
@@ -287,9 +265,8 @@ final class CatalogCleaningRule {
                 matchedModel && specs.size() == 1
                         ? color(before.isEmpty() ? after : after.isEmpty() ? before : "")
                         : null;
-        if (legacy || confirmed != null) {
-            return new ColorMatch(
-                    confirmed, confirmed == null ? List.of() : List.of(confirmed), edition);
+        if (confirmed != null) {
+            return new ColorMatch(confirmed, List.of(confirmed), edition);
         }
         var candidates = new LinkedHashSet<String>();
         if (matchedModel) {
