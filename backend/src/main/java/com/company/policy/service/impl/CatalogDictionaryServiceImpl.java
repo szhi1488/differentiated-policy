@@ -10,9 +10,11 @@ import com.company.policy.service.CatalogDictionaryService;
 import com.company.policy.vo.CatalogDictionaryEntry;
 import com.company.policy.vo.CurrentUserResponse;
 import java.util.List;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -57,18 +59,20 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
             throw invalid("所选品牌已不存在，请重新选择。");
         }
         try {
-            switch (type) {
-                case brand -> goods.insertBrand(name);
-                case series -> goods.insertSeries(parent, name);
-                case color -> goods.insertColor(name);
-            }
+            int rows =
+                    switch (type) {
+                        case brand -> goods.insertBrand(name);
+                        case series -> goods.insertSeries(parent, name);
+                        case color -> goods.insertColor(name);
+                    };
+            checkWrite(rows);
         } catch (DuplicateKeyException error) {
             throw duplicate();
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void rename(CurrentUserResponse session, Type type, long id, Rename request) {
         access.requireAdmin(session);
         String name = normalizedName(type, request.name());
@@ -77,19 +81,26 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
         }
         requireUnused(type, id);
         try {
-            dictionary.rename(type, id, name);
+            checkWrite(dictionary.rename(type, id, name));
         } catch (DuplicateKeyException error) {
             throw duplicate();
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void delete(CurrentUserResponse session, Type type, long id, String expectedName) {
         access.requireAdmin(session);
         lockCurrent(type, id, expectedName);
         requireUnused(type, id);
-        dictionary.delete(type, id);
+        try {
+            if (type == Type.series) {
+                dictionary.deleteUnusedModels(id);
+            }
+            checkWrite(dictionary.delete(type, id));
+        } catch (DataIntegrityViolationException error) {
+            throw inUse(type);
+        }
     }
 
     private String lockCurrent(Type type, long id, String expectedName) {
@@ -102,24 +113,32 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
                     HttpStatus.NOT_FOUND, "CATALOG_DICTIONARY_NOT_FOUND", "该字典项已不存在。");
         }
         if (!current.equals(expectedName)) {
-            throw new ApiException(
-                    HttpStatus.CONFLICT, "CATALOG_DICTIONARY_CHANGED", "字典项已变化，请刷新后操作。");
+            throw changed();
         }
         return current;
     }
 
     private void requireUnused(Type type, long id) {
+        if (type == Type.series) {
+            // 锁定已有机型，避免校验之后有商品或政策通过外键新增引用。
+            dictionary.lockModels(id);
+        }
         boolean used =
                 switch (type) {
                     case brand ->
                             dictionary.linkedSeries(id) != null
                                     || dictionary.linkedSource(id) != null;
-                    case series -> dictionary.linkedModel(id) != null;
+                    case series -> dictionary.hasReferencedModel(id);
                     case color -> dictionary.linkedGoods(id) != null;
                 };
         if (used) {
-            throw new ApiException(HttpStatus.CONFLICT, "CATALOG_DICTIONARY_IN_USE", "该字典项已被引用。");
+            throw inUse(type);
         }
+    }
+
+    private static ApiException inUse(Type type) {
+        String message = type == Type.series ? "该系列仍有关联商品或政策引用。" : "该字典项已被引用。";
+        return new ApiException(HttpStatus.CONFLICT, "CATALOG_DICTIONARY_IN_USE", message);
     }
 
     private static String normalizedName(Type type, String value) {
@@ -137,5 +156,16 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
 
     private static ApiException duplicate() {
         return new ApiException(HttpStatus.CONFLICT, "CATALOG_DICTIONARY_DUPLICATE", "已存在同名的字典项。");
+    }
+
+    private static void checkWrite(int rows) {
+        if (rows != 1) {
+            throw changed();
+        }
+    }
+
+    private static ApiException changed() {
+        return new ApiException(
+                HttpStatus.CONFLICT, "CATALOG_DICTIONARY_CHANGED", "字典项写入冲突，请刷新后操作。");
     }
 }

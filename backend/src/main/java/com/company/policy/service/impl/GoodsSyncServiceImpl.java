@@ -7,8 +7,10 @@ import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.dto.GoodsSyncRequest.Mode;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.dto.JackyunGoodsQuery.Phase;
+import com.company.policy.entity.CatalogOperationLog;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.UserInfo;
+import com.company.policy.mapper.CatalogOperationLogMapper;
 import com.company.policy.mapper.GoodsSyncJobMapper;
 import com.company.policy.mapper.SourceGoodsItemMapper;
 import com.company.policy.service.GoodsSyncService;
@@ -43,6 +45,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     private final CatalogAccess access;
     private final GoodsSyncJobMapper jobs;
     private final SourceGoodsItemMapper sources;
+    private final CatalogOperationLogMapper operationLogs;
     private final JackyunGoodsService jackyun;
     private final JackyunProperties config;
     private final ObjectMapper json;
@@ -53,6 +56,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             CatalogAccess access,
             GoodsSyncJobMapper jobs,
             SourceGoodsItemMapper sources,
+            CatalogOperationLogMapper operationLogs,
             JackyunGoodsService jackyun,
             JackyunProperties config,
             ObjectMapper json,
@@ -60,6 +64,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         this.access = access;
         this.jobs = jobs;
         this.sources = sources;
+        this.operationLogs = operationLogs;
         this.jackyun = jackyun;
         this.config = config;
         this.json = json;
@@ -116,7 +121,10 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                         }
                         // 首次请求也留出间隔，连续导入另一个品牌不会立即连发。
                         checkUpdated(jobs.insert(job, config.getImportIntervalSeconds()));
-                        checkUpdated(jobs.audit(admin, job.getId(), "START"));
+                        checkUpdated(
+                                operationLogs.insert(
+                                        CatalogOperationLog.syncAction(
+                                                admin, job.getId(), "START")));
                         return GoodsSyncResponse.from(jobs.find(job.getSourceKey(), job.getId()));
                     });
         } catch (DuplicateKeyException conflict) {
@@ -178,7 +186,10 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     if (jobs.control(job, resume ? "QUEUED" : "CANCELLED") != 1) {
                         throw changed();
                     }
-                    checkUpdated(jobs.audit(admin, id, resume ? "RESUME" : "CANCEL"));
+                    checkUpdated(
+                            operationLogs.insert(
+                                    CatalogOperationLog.syncAction(
+                                            admin, id, resume ? "RESUME" : "CANCEL")));
                     return GoodsSyncResponse.from(jobs.find(config.getSourceKey(), id));
                 });
     }
@@ -389,11 +400,12 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                         changed && !"EXCLUDED".equals(existing.getMappingStatus())));
         if (changed) {
             checkUpdated(
-                    sources.auditUpdate(
-                            existing.getId(),
-                            "SYNC-" + job.getId(),
-                            auditSnapshot(previous),
-                            auditSnapshot(current)));
+                    operationLogs.insert(
+                            CatalogOperationLog.sourceUpdate(
+                                    existing.getId(),
+                                    "SYNC-" + job.getId(),
+                                    auditSnapshot(previous),
+                                    auditSnapshot(current))));
         }
         return firstInJob;
     }

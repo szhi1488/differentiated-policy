@@ -8,9 +8,9 @@ import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Results;
+import com.company.policy.vo.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -18,11 +18,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
-import org.springframework.dao.DataAccessException;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.TransactionException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -54,7 +53,7 @@ public class CatalogCleaningController {
 
     @GetMapping("/catalog/cleaning/jobs")
     @Operation(summary = "分页查看清洗记录", description = "页码从 1 开始，每页 1 至 100 条。")
-    public Page<Job> jobs(
+    public PageResponse<Job> jobs(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size,
             HttpServletRequest request) {
@@ -158,15 +157,12 @@ public class CatalogCleaningController {
                 sessions.requireLogin(request).user(), id, body.recordVersion(), body.requestKey());
     }
 
-    @ExceptionHandler({DataAccessException.class, TransactionException.class})
-    ResponseEntity<ApiError> storageUnavailable() {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ApiError("CATALOG_STORAGE_UNAVAILABLE", "商品清洗暂不可用，请稍后重试。"));
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    @ExceptionHandler({
+        MethodArgumentTypeMismatchException.class,
+        MissingServletRequestParameterException.class
+    })
     ResponseEntity<ApiError> invalidParameter() {
         return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_CLEAN_INVALID_REQUEST", "ID、日期、状态或分页参数无效。"));
+                .body(new ApiError("CATALOG_CLEAN_INVALID_REQUEST", "请检查品牌、ID、日期、状态和分页参数。"));
     }
 }

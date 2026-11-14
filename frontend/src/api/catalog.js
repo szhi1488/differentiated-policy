@@ -134,6 +134,14 @@ export function createCatalogGood(product) {
   return post(goodsPath, product)
 }
 
+export function updateCatalogGood(id, product, expectedVersion) {
+  return request(goodsPath + '/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedVersion, product }),
+  })
+}
+
 export function deleteCatalogGood(id) {
   return request(goodsPath + '/' + encodeURIComponent(id), { method: 'DELETE' })
 }

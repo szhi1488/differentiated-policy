@@ -19,7 +19,6 @@ public record CatalogGoods(
         long colorId,
         String colorName,
         Integer status,
-        String catalogStatus,
         LocalDateTime updatedAt,
         String sourceSkuId,
         String sourceName) {}

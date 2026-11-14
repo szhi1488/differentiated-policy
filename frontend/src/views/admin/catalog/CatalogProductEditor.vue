@@ -13,18 +13,19 @@ const props = defineProps({
   product: { type: Object, default: null },
   entries: { type: Array, required: true },
   statuses: { type: Object, required: true },
-  createProduct: { type: Function, required: true },
+  saveProduct: { type: Function, required: true },
   dictionaryLoading: Boolean,
   dictionaryError: { type: String, default: '' },
 })
-const emit = defineEmits(['created', 'close', 'reload-dictionary'])
-const readOnly = Boolean(props.product)
+const emit = defineEmits(['saved', 'close', 'reload-dictionary'])
+const sourceBound = Boolean(props.product?.sku)
+const requiresStatus = !props.product || Boolean(props.product.status)
 const [ram = '', rom = ''] = props.product
   ? catalogConfigLabel(props.product.config).split('+')
   : []
 
 const initial = {
-  name: props.product?.name ?? '',
+  name: props.product?.goodsName ?? '',
   brandId: props.product?.brandId ?? '',
   seriesId: props.product?.seriesId ?? '',
   model: props.product?.model ?? '',
@@ -56,7 +57,7 @@ const rules = {
     { pattern: CATALOG_ROM_PATTERN, message: '例如 256GB 或 1T', trigger: 'blur' },
   ],
   colorId: { required: true, message: '请选择颜色', trigger: 'change' },
-  status: { required: true, message: '请选择商品状态', trigger: 'change' },
+  status: { required: requiresStatus, message: '请选择商品状态', trigger: 'change' },
 }
 
 function changeBrand(brandId) {
@@ -66,7 +67,7 @@ function changeBrand(brandId) {
 }
 
 async function save() {
-  if (readOnly || saving.value || props.dictionaryLoading || props.dictionaryError) {
+  if (saving.value || props.dictionaryLoading || props.dictionaryError) {
     return
   }
   saving.value = true
@@ -75,7 +76,7 @@ async function save() {
     if (!(await form.value?.validate().catch(() => false))) {
       return
     }
-    const created = await props.createProduct({
+    await props.saveProduct({
       name: draft.name.trim(),
       brandId: draft.brandId.slice('brand-'.length),
       seriesId: draft.seriesId.slice('series-'.length),
@@ -84,12 +85,15 @@ async function save() {
       ram: draft.ram.trim(),
       rom: draft.rom.trim(),
       colorId: draft.colorId.slice('color-'.length),
-      status: props.statuses[draft.status].code,
+      status: props.statuses[draft.status]?.code ?? null,
     })
-    emit('created', created)
+    emit('saved')
     open.value = false
   } catch (error) {
-    saveError.value = error.message
+    saveError.value =
+      props.product && ['network', 'timeout', 'parse'].includes(error.kind)
+        ? '暂时无法确认保存结果。请保留当前输入，重新打开商品核对。'
+        : error.message
   } finally {
     saving.value = false
   }
@@ -134,7 +138,6 @@ async function close(done) {
         <strong>{{ product.name }}</strong>
         <span>SKU ID {{ product.sku ?? '—' }} · 货号 {{ product.productNo ?? '—' }}</span>
       </div>
-      <p v-if="readOnly" class="catalog-product-editor-note">商品修改待接入。</p>
       <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" show-icon />
       <el-alert v-if="dictionaryError" :title="dictionaryError" type="error" :closable="false">
         <el-button link type="primary" @click="emit('reload-dictionary')">重新读取字典</el-button>
@@ -143,7 +146,7 @@ async function close(done) {
         ref="form"
         :model="draft"
         :rules="rules"
-        :disabled="readOnly || saving"
+        :disabled="saving"
         label-position="top"
         class="catalog-product-editor-form"
         @submit.prevent="save"
@@ -154,6 +157,7 @@ async function close(done) {
         <el-form-item label="品牌" prop="brandId">
           <el-select
             :model-value="draft.brandId"
+            :disabled="sourceBound"
             :loading="dictionaryLoading"
             placeholder="选择品牌"
             filterable
@@ -166,6 +170,7 @@ async function close(done) {
               :value="item.id"
             />
           </el-select>
+          <span v-if="sourceBound" class="catalog-product-editor-note">已关联源商品</span>
         </el-form-item>
         <el-form-item label="系列" prop="seriesId">
           <el-select
@@ -211,7 +216,12 @@ async function close(done) {
           <el-input v-model="draft.version" maxlength="64" placeholder="可选" />
         </el-form-item>
         <el-form-item label="商品状态" prop="status" class="catalog-product-editor-wide">
-          <el-select v-model="draft.status" :placeholder="readOnly ? '未知' : '选择商品状态'">
+          <el-select
+            v-model="draft.status"
+            placeholder="选择商品状态"
+            :empty-values="[null, undefined]"
+          >
+            <el-option v-if="!requiresStatus" label="未知" value="" />
             <el-option
               v-for="(status, key) in statuses"
               :key="key"
@@ -223,9 +233,8 @@ async function close(done) {
       </el-form>
     </div>
     <template #footer>
-      <el-button :disabled="saving" @click="close()">{{ readOnly ? '关闭' : '取消' }}</el-button>
+      <el-button :disabled="saving" @click="close()">取消</el-button>
       <el-button
-        v-if="!readOnly"
         type="primary"
         :loading="saving"
         :disabled="dictionaryLoading || Boolean(dictionaryError)"
@@ -242,6 +251,7 @@ async function close(done) {
   display: grid;
   gap: 4px;
   padding: 12px;
+  margin-bottom: 12px;
   background: #f1f6ff;
   border-radius: 8px;
   overflow-wrap: anywhere;
@@ -253,9 +263,6 @@ async function close(done) {
 .catalog-product-editor-note {
   color: #536580;
   font-size: 12px;
-}
-.catalog-product-editor-note {
-  margin: 10px 0 14px;
 }
 .catalog-product-editor-form {
   display: grid;

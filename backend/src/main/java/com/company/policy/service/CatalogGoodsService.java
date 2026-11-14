@@ -1,18 +1,21 @@
 package com.company.policy.service;
 
-import com.company.policy.dto.CatalogGoodsCreate;
 import com.company.policy.dto.CatalogGoodsQuery;
-import com.company.policy.vo.CatalogCleaningResponse.Page;
+import com.company.policy.dto.CatalogGoodsUpdate;
+import com.company.policy.dto.CatalogGoodsWrite;
 import com.company.policy.vo.CatalogGoodsResponse;
 import com.company.policy.vo.CatalogGoodsResponse.Summary;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PageResponse;
 
 public interface CatalogGoodsService {
-    CatalogGoodsResponse create(CurrentUserResponse session, CatalogGoodsCreate request);
+    CatalogGoodsResponse create(CurrentUserResponse session, CatalogGoodsWrite request);
 
-    void disable(CurrentUserResponse session, long id);
+    CatalogGoodsResponse update(CurrentUserResponse session, long id, CatalogGoodsUpdate request);
 
-    Page<CatalogGoodsResponse> list(CurrentUserResponse session, CatalogGoodsQuery query);
+    void delete(CurrentUserResponse session, long id);
+
+    PageResponse<CatalogGoodsResponse> list(CurrentUserResponse session, CatalogGoodsQuery query);
 
     Summary summary(CurrentUserResponse session);
 

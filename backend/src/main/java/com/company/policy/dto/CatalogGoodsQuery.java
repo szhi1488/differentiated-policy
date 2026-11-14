@@ -6,17 +6,10 @@ public record CatalogGoodsQuery(
         String modelName,
         String keyword,
         Integer status,
-        CatalogStatus catalogStatus,
         boolean ascending,
         int page,
         int size,
         Long seriesId,
         Long spuId,
         String ram,
-        String rom) {
-    public enum CatalogStatus {
-        DRAFT,
-        ACTIVE,
-        DISABLED
-    }
-}
+        String rom) {}

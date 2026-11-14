@@ -2,6 +2,7 @@ package com.company.policy.mapper;
 
 import com.company.policy.dto.CatalogDictionaryRequest.Type;
 import java.util.List;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.DeleteProvider;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -11,6 +12,12 @@ import org.apache.ibatis.annotations.UpdateProvider;
 
 @Mapper
 public interface CatalogDictionaryMapper {
+    String MODEL_IN_USE =
+            """
+        (EXISTS (SELECT 1 FROM goods g WHERE g.spu_id = spu.id)
+         OR EXISTS (SELECT 1 FROM policy_detail d WHERE d.spu_id = spu.id))
+        """;
+
     @Select(
             """
         SELECT 'brand' AS type, b.id, CAST(NULL AS SIGNED) AS parent_id, b.name,
@@ -19,7 +26,11 @@ public interface CatalogDictionaryMapper {
         FROM brand b
         UNION ALL
         SELECT 'series', s.id, s.brand_id, s.name,
-          EXISTS (SELECT 1 FROM spu p WHERE p.series_id = s.id AND p.brand_id = s.brand_id)
+          EXISTS (SELECT 1 FROM spu WHERE spu.series_id = s.id AND
+        """
+                    + MODEL_IN_USE
+                    + """
+          )
         FROM series s
         UNION ALL
         SELECT 'color', c.id, CAST(NULL AS SIGNED), c.color_name,
@@ -38,8 +49,14 @@ public interface CatalogDictionaryMapper {
     @Select("SELECT id FROM source_goods_item WHERE catalog_brand_id = #{id} LIMIT 1 FOR UPDATE")
     Long linkedSource(long id);
 
-    @Select("SELECT id FROM spu WHERE series_id = #{id} LIMIT 1 FOR UPDATE")
-    Long linkedModel(long id);
+    @Select("SELECT id FROM spu WHERE series_id = #{id} ORDER BY id FOR UPDATE")
+    List<Long> lockModels(long id);
+
+    @Select("SELECT EXISTS (SELECT 1 FROM spu WHERE series_id = #{id} AND " + MODEL_IN_USE + ")")
+    boolean hasReferencedModel(long id);
+
+    @Delete("DELETE FROM spu WHERE series_id = #{id} AND NOT " + MODEL_IN_USE)
+    int deleteUnusedModels(long id);
 
     @Select("SELECT id FROM goods WHERE color_id = #{id} LIMIT 1 FOR UPDATE")
     Long linkedGoods(long id);

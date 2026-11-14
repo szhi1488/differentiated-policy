@@ -34,7 +34,6 @@ const tableRows = computed(() => {
       return {
         ...entry,
         brandName: byId.value.get(entry.parentId)?.name ?? '',
-        reason: entry.inUse ? '该字典项已被引用' : '',
       }
     })
     .filter((entry) => !query || `${entry.brandName} ${entry.name}`.toLowerCase().includes(query))
@@ -91,7 +90,9 @@ async function remove(row) {
   notice.value = ''
   try {
     try {
-      await ElMessageBox.confirm(`确定删除${activeLabel.value}「${row.name}」吗？`, '删除字典项', {
+      const message = `确定删除${activeLabel.value}「${row.name}」吗？`
+      const confirmation = isSeries.value ? message + '该系列下未被引用的机型也会删除。' : message
+      await ElMessageBox.confirm(confirmation, '删除字典项', {
         confirmButtonText: '删除',
         cancelButtonText: '取消',
         type: 'warning',
@@ -180,7 +181,10 @@ async function remove(row) {
       </el-table-column>
       <el-table-column label="操作" width="102">
         <template #default="{ row }">
-          <el-tooltip :content="row.reason" :disabled="!row.inUse">
+          <el-tooltip
+            :content="isSeries ? '该系列仍有关联商品或政策引用' : '该字典项已被引用'"
+            :disabled="!row.inUse"
+          >
             <span>
               <el-button link type="primary" :disabled="busy || row.inUse" @click="openEditor(row)">
                 编辑

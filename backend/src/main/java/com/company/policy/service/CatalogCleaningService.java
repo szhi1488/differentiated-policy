@@ -4,14 +4,14 @@ import com.company.policy.dto.CatalogCleaningRequest.Review;
 import com.company.policy.dto.CatalogCleaningRequest.Start;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Results;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PageResponse;
 import java.time.LocalDate;
 
 public interface CatalogCleaningService {
-    Page<Job> jobs(CurrentUserResponse session, int page, int size);
+    PageResponse<Job> jobs(CurrentUserResponse session, int page, int size);
 
     Job job(CurrentUserResponse session, long id);
 
@@ -43,6 +43,4 @@ public interface CatalogCleaningService {
     Detail review(CurrentUserResponse session, long id, Review request);
 
     Job retrySource(CurrentUserResponse session, long id, int version, String requestKey);
-
-    void processNextBatch();
 }

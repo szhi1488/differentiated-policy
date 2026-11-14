@@ -1,4 +1,4 @@
--- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-13。
+-- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-14。
 -- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
 -- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
 -- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
@@ -95,7 +95,6 @@ CREATE TABLE `goods` (
   `rom` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范机身存储，统一GB，如1TB记为1024GB',
   `color_id` INT UNSIGNED NOT NULL COMMENT '关联独立颜色表的主键',
   `status` TINYINT UNSIGNED DEFAULT NULL COMMENT '销售状态：1-在售，2-待上架，3-已下架，4-已停产，NULL-未知',
-  `catalog_status` VARCHAR(16) NOT NULL DEFAULT 'DRAFT' COMMENT '目录状态：DRAFT-草稿，ACTIVE-可选，DISABLED-停用',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间，北京时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间，北京时间',
   PRIMARY KEY (`id`),
@@ -105,7 +104,7 @@ CREATE TABLE `goods` (
   UNIQUE KEY `uk_goods_spu_specs` (`spu_id`, `ram`, `rom`, `color_id`),
   KEY `idx_goods_spu` (`spu_id`, `brand_id`, `series_id`),
   KEY `idx_goods_color` (`color_id`),
-  KEY `idx_goods_catalog` (`brand_id`, `series_id`, `catalog_status`, `id`),
+  KEY `idx_goods_catalog` (`brand_id`, `series_id`, `id`),
   KEY `idx_goods_product_no` (`product_no`),
   CONSTRAINT `fk_goods_spu` FOREIGN KEY (`spu_id`, `brand_id`, `series_id`) REFERENCES `spu` (`id`, `brand_id`, `series_id`),
   CONSTRAINT `fk_goods_color` FOREIGN KEY (`color_id`) REFERENCES `color_dict` (`id`),
@@ -114,8 +113,7 @@ CREATE TABLE `goods` (
     REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
     AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
   ),
-  CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4)),
-  CONSTRAINT `ck_goods_catalog_status` CHECK (`catalog_status` IN ('DRAFT', 'ACTIVE', 'DISABLED'))
+  CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='具体机型版本、配置及颜色的标准商品';
 
 

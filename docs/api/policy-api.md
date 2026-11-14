@@ -47,7 +47,7 @@
 
 每条 detail 的写入字段：`id`（已有行）、`platformCode`、`spuId`、`ram`、`rom`、`colorScope`、`goodsId`、`quantity`、`subsidyMode`、`fixedAmount`、`maxSubsidyAmount`、`subsidyRatio`、`basePriceType`。品牌系列、modelFullName、singleModel、spec、color 等快照由服务端从目录生成，响应中返回，不接受客户端任意自报文本作为身份。tenantKey 来自会话，不接受前端传入。
 
-colorScope 为 ALL_COLORS 时 goodsId 和服务端 color 快照均为 null。SPECIFIC_COLOR 正式提交必须选择当前配置下 ACTIVE 商品，由服务端生成颜色快照。草稿允许暂未选完。colorScope=null 仅为草稿未选择，不推断不限颜色。不同型号配置的颜色分别维护，后端校验商品所属配置及政策主表权限。
+colorScope 为 ALL_COLORS 时 goodsId 和服务端 color 快照均为 null。SPECIFIC_COLOR 正式提交必须选择当前配置下已建档的标准商品，由服务端生成颜色快照。草稿允许暂未选完。colorScope=null 仅为草稿未选择，不推断不限颜色。不同型号配置的颜色分别维护，后端校验商品所属配置及政策主表权限。
 
 固定方式的比例/基数必须为 null；比例方式的固定金额/上限必须为 null。数量可空、不自动补 0；颜色按显式范围处理。草稿已填内容仍校验，金额不超存储精度，同平台同规格相同范围重复或不限/指定相交须提示整理，不静默取最后一条。
 

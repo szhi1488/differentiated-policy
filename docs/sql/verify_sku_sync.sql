@@ -76,7 +76,7 @@ WHERE d.goods_id IS NOT NULL AND g.id IS NULL;
 EXPLAIN SELECT id, color_id
 FROM goods
 WHERE spu_id = 1 AND ram = '16GB'
-  AND rom = '512GB' AND catalog_status = 'ACTIVE';
+  AND rom = '512GB';
 
 -- 预期一行，列为 sku_id，non_unique 为 0。
 SELECT SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE

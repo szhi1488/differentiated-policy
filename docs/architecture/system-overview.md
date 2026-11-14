@@ -24,6 +24,8 @@ flowchart LR
 
 用户、源商品导入、手动清洗、审核及标准商品目录查询与维护已接入十四表空库基线。政策三表的 Mapper、Service 和 Controller 尚未实现。
 
+现有后端为 11 张用户及商品相关表提供实体映射。清洗通过 `Brand`、`Series`、`Spu`、`ColorDict` 读取或写入标准目录，导入任务操作和来源变更通过 `CatalogOperationLog` 保存。政策明细当前用于检查商品和配置是否已被引用，政策实体随对应业务接入。
+
 吉客云只读服务独立于页面和数据库写入。服务端按 `brandName` 请求单页，校验返回品牌和游标顺序，向后续同步任务提供 SKU 原文、分类路径、修改时间、状态和下一页游标。[单页查询联调](catalog-admin-design.md#单页查询联调)
 
 ## 实际技术栈
@@ -48,7 +50,7 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 | `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
 | `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 单一商品导航、分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
 | `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和任务结果统计 |
-| `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、停用和字典维护 |
+| `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、编辑、删除和字典维护 |
 | `views/apply/PolicyApplicationPage.vue` | `/apply` 页面入口，组装基础信息、时间、明细与附件区块；工作台确认渠道切换、取消平台及清空表单 |
 | `views/apply/components/PolicyDetailsTable.vue` | Table 使用稳定行 key、横向滚动和右侧固定操作列；Input、Select 编辑明细，Empty 显示无明细提示 |
 | `layouts/ApplicantLayout.vue` | 保留业务侧栏和横幅；持有表单状态，路由切换保留填写；身份变化及失效清理 |
@@ -108,7 +110,7 @@ backend/src/main/java/com/company/policy/
 
 ## 当前实现与验证边界
 
-商品模块的历次验证见管理员工作台。2026-11-13 商品停用迭代的 Maven verify 通过 77 项，跳过 2 项外部环境测试。后续即时筛选迭代通过前端 72 项测试及生产构建，Chrome 使用模拟会话和商品接口验证桌面、平板和手机布局。目标 MySQL 和真实飞书会话留待联调。[管理员工作台](admin-workspace.md)
+2026-11-13 商品编辑保存通过前端 72 项测试及生产构建。后端 Maven verify 通过 79 项，跳过 2 项外部环境测试。隔离 H2 验证实际接口写入和引用保护，Chrome 使用模拟管理员与商品接口验证桌面、平板和手机的编辑流程。目标 MySQL 上的商品编辑和真实飞书会话留待联调。[管理员工作台历次验证](admin-workspace.md#历次验证)
 
 前序工作台和申请布局重构的验证记录见前端规范，真实飞书授权与扫码验证按身份流程单独记录。[前端规范第 9 节](frontend-development.md#9-验证记录与维护) · [飞书鉴权](feishu-auth-flow.md)
 
@@ -123,7 +125,7 @@ backend/src/main/java/com/company/policy/
 | 机型读取、共享补贴批量操作、上传 | 待接入 |
 | 吉客云货品读取 | 已实测两品牌查询和续拉。服务端支持全量、按建档日和按修改日，同 SKU 更新原行 |
 | 管理员源商品库 | 导入弹窗支持全量和按建档日，提供续跑、建档日查看和组合筛选分页 |
-| 管理员商品中心 | 已接入列表、详情、统计、三级分类、即时筛选、手工新增、停用及字典维护；商品修改保存和标准商品批量导入待接入 |
+| 管理员商品中心 | 已接入列表、详情、统计、三级分类、即时筛选、手工新增、编辑、删除及字典维护。标准商品批量导入待接入 |
 | 管理员商品清洗 | 已接入手动清洗、SKU 预览、跨品牌结果、审核、重试和任务统计 |
 | 审核、覆盖计算和生效 | 待实现，覆盖口径待确认；展示版不执行决定 |
 

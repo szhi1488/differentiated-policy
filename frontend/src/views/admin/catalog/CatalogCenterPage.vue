@@ -39,11 +39,14 @@ const {
   list,
   summary,
   detail: detailQuery,
+  edit: editQuery,
   detailId,
   load,
   loadSummary,
   loadDetail,
+  loadForEdit,
   createProduct,
+  updateProduct,
   deleteProduct,
   changeBrand,
   changeSeries,
@@ -156,30 +159,40 @@ function showNote(title, note) {
   dialogOpen.value = true
 }
 
-function downloadProducts(template = false) {
-  const headers = ['货号', 'SKU', '商品名称', '品牌', '系列', '机型', '配置', '颜色', '版本']
-  const rows = template
-    ? []
-    : visibleRows.value.map((row) => [
-        row.productNo ?? '',
-        row.sku ?? '',
-        row.name,
-        row.brand,
-        row.series,
-        row.model,
-        specLabel(row.config),
-        row.color,
-        row.version,
-      ])
+function downloadProducts(products, filename) {
+  const headers = [
+    '货号',
+    ...(products ? ['SKU'] : []),
+    '商品名称',
+    '品牌',
+    '系列',
+    '机型',
+    '配置',
+    '颜色',
+    '版本',
+  ]
+  const rows =
+    products?.map((row) => [
+      row.productNo,
+      row.sku,
+      row.name,
+      row.brand,
+      row.series,
+      row.model,
+      specLabel(row.config),
+      row.color,
+      row.version,
+    ]) ?? []
   const csvCell = (value) => {
-    const safe = /^[\s]*[=+@-]/.test(value) || /^[\t\r\n]/.test(value) ? "'" + value : value
+    const cell = String(value ?? '')
+    const safe = /^[\s]*[=+@-]/.test(cell) || /^[\t\r\n]/.test(cell) ? "'" + cell : cell
     return '"' + safe.replaceAll('"', '""') + '"'
   }
   const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = template ? '商品导入模板-示例.csv' : '商品中心-当前页.csv'
+  link.download = filename
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
@@ -218,7 +231,22 @@ function refreshDictionary() {
   }
 }
 
-function openProductEditor(product = null) {
+async function openProductEditor(row = null) {
+  if (productEditor.value || editQuery.loading.value) {
+    return
+  }
+  let product = null
+  if (row) {
+    await loadForEdit(row.id)
+    if (editQuery.error.value) {
+      ElMessage.error(editQuery.error.value.message)
+      return
+    }
+    product = editQuery.data.value
+    if (!product) {
+      return
+    }
+  }
   refreshDictionary()
   productEditor.value = {
     product: product && {
@@ -229,8 +257,16 @@ function openProductEditor(product = null) {
     },
   }
 }
-function onProductCreated() {
-  ElMessage.success('商品已新增')
+function saveProduct(product) {
+  const existing = productEditor.value.product
+  return existing
+    ? updateProduct(existing.id, product, existing.editVersion)
+    : createProduct(product)
+}
+
+function onProductSaved() {
+  table.value?.clearSelection()
+  ElMessage.success(productEditor.value.product ? '商品修改已保存' : '商品已新增')
 }
 
 async function confirmDeleteProduct(row) {
@@ -240,15 +276,16 @@ async function confirmDeleteProduct(row) {
   deletingProductId.value = row.id
   try {
     try {
-      await ElMessageBox.confirm(
-        `确定删除「${row.name}」？确认后商品将停用，并从商品列表移除。`,
-        '删除商品',
-        { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-      )
+      await ElMessageBox.confirm(`确定永久删除「${row.name}」？删除后无法恢复。`, '删除商品', {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      })
     } catch {
       return
     }
     await deleteProduct(row.id)
+    void loadDictionary()
     table.value?.toggleRowSelection(row, false)
     ElMessage.success('商品已删除')
   } catch (error) {
@@ -269,7 +306,7 @@ async function confirmDeleteProduct(row) {
         <p>集中查看手机商品、规格和销售状态</p>
       </div>
       <div class="catalog-center-actions">
-        <el-button size="small" @click="downloadProducts(true)">
+        <el-button size="small" @click="downloadProducts(null, '商品导入模板-示例.csv')">
           <AppIcon name="download" :size="14" />
           下载导入模板
         </el-button>
@@ -291,7 +328,10 @@ async function confirmDeleteProduct(row) {
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item :disabled="!visibleRows.length" @click="downloadProducts()">
+              <el-dropdown-item
+                :disabled="!visibleRows.length"
+                @click="downloadProducts(visibleRows, '商品中心-当前页.csv')"
+              >
                 导出当前页
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -470,10 +510,10 @@ async function confirmDeleteProduct(row) {
                   <el-input
                     v-model="filters.keyword"
                     clearable
-                    @clear="applyAndClear(search)"
                     maxlength="128"
                     aria-label="商品关键词"
-                    placeholder="搜索商品名称、货号、SKU…"
+                    placeholder="搜索商品、机型、货号或 SKU"
+                    @clear="applyAndClear(search)"
                   >
                     <template #prefix><AppIcon name="search" :size="14" /></template>
                   </el-input>
@@ -515,6 +555,13 @@ async function confirmDeleteProduct(row) {
                   更多筛选
                 </el-button>
                 <div class="catalog-center-filter-actions">
+                  <el-button
+                    :disabled="!selected.length || listLoading"
+                    @click="downloadProducts(selected, '商品中心-已选商品.csv')"
+                  >
+                    <AppIcon name="download" :size="14" />
+                    导出
+                  </el-button>
                   <el-button @click="applyAndClear(reset)">
                     <AppIcon name="sync" :size="14" />
                     重置
@@ -685,7 +732,13 @@ async function confirmDeleteProduct(row) {
                       <el-button link type="primary" size="small" @click="showDetail(row)">
                         查看
                       </el-button>
-                      <el-button link type="primary" size="small" @click="openProductEditor(row)">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :disabled="editQuery.loading.value"
+                        @click="openProductEditor(row)"
+                      >
                         编辑
                       </el-button>
                       <el-button
@@ -701,7 +754,7 @@ async function confirmDeleteProduct(row) {
                   </template>
                 </el-table-column>
               </el-table>
-              <footer class="catalog-center-footer">
+              <footer v-show="!listLoading && !listError" class="catalog-center-footer">
                 <span aria-live="polite">
                   共
                   <strong>{{ total }}</strong>
@@ -745,8 +798,8 @@ async function confirmDeleteProduct(row) {
       :dictionary-error="dictionaryError?.message"
       @reload-dictionary="refreshDictionary"
       :statuses="statuses"
-      :create-product="createProduct"
-      @created="onProductCreated"
+      :save-product="saveProduct"
+      @saved="onProductSaved"
       @close="productEditor = null"
     />
 

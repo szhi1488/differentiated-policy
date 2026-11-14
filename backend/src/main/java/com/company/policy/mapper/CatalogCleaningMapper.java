@@ -1,6 +1,7 @@
 package com.company.policy.mapper;
 
 import com.company.policy.entity.CatalogCleaningJob;
+import com.company.policy.entity.CatalogCleaningJobItem;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.entity.UserInfo;
 import java.time.LocalDate;
@@ -196,17 +197,17 @@ public interface CatalogCleaningMapper {
 
     @Select(
             """
-        SELECT source_id, source_version FROM catalog_clean_job_item
+        SELECT job_id, source_id, source_version, outcome FROM catalog_clean_job_item
         WHERE job_id = #{id} AND outcome = 'PENDING' ORDER BY source_id LIMIT #{limit}
         """)
-    List<Member> pending(long id, int limit);
+    List<CatalogCleaningJobItem> pending(long id, int limit);
 
     @Update(
             """
         UPDATE catalog_clean_job_item SET outcome = #{outcome}
-        WHERE job_id = #{jobId} AND source_id = #{sourceId} AND outcome = 'PENDING'
+        WHERE job_id = #{member.jobId} AND source_id = #{member.sourceId} AND outcome = 'PENDING'
         """)
-    int finishMember(long jobId, long sourceId, String outcome);
+    int finishMember(CatalogCleaningJobItem member, String outcome);
 
     @Select(
             """
@@ -250,8 +251,6 @@ public interface CatalogCleaningMapper {
 
     @Select("SELECT status FROM goods_sync_job WHERE id = #{id}")
     String importStatus(long id);
-
-    record Member(long sourceId, int sourceVersion) {}
 
     record Count(String status, long total) {}
 

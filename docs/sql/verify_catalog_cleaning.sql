@@ -52,7 +52,7 @@ SELECT item.id AS source_id, item.sku_id AS source_sku, item.goods_no AS source_
        item.clean_status, item.reviewed_by, item.reviewed_at, item.review_reason,
        g.id AS goods_id, g.sku_id AS catalog_sku, g.product_no, g.goods_name,
        b.name AS brand_name, s.name AS series_name, p.name AS model_name, p.edition,
-       g.ram, g.rom, c.color_name, g.catalog_status, g.status AS sales_status
+       g.ram, g.rom, c.color_name, g.status AS sales_status
 FROM source_goods_item item
 JOIN goods g ON g.id = item.goods_id AND g.brand_id = item.catalog_brand_id
 JOIN brand b ON b.id = g.brand_id

@@ -5,6 +5,7 @@ import {
   readCatalogGood,
   readCatalogGoods,
   readCatalogGoodsSummary,
+  updateCatalogGood,
 } from '../api/catalog'
 import { CATALOG_SALES_STATES } from '../constants/catalog'
 import { catalogGoodsNameLabel } from '../utils/catalog-dictionary'
@@ -33,6 +34,7 @@ function toProduct(row) {
     sku: row.sourceSkuId,
     productNo: row.productNo,
     name: catalogGoodsNameLabel(row.goodsName),
+    goodsName: row.goodsName,
     source: row.sourceName,
     brandId: row.brandId,
     brand: row.brandName,
@@ -44,6 +46,7 @@ function toProduct(row) {
     color: row.colorName,
     version: row.edition,
     status: statusCodes[row.status] ?? '',
+    editVersion: row.editVersion,
     date,
     time,
   }
@@ -59,6 +62,7 @@ export function useCatalogCenter() {
   const list = useLatestQuery()
   const summary = useLatestQuery()
   const detail = useLatestQuery()
+  const edit = useLatestQuery()
   const detailId = ref('')
   const total = ref(0)
   const visibleRows = computed(() => list.data.value?.items ?? [])
@@ -137,6 +141,10 @@ export function useCatalogCenter() {
     return detail.run(async (signal) => (id ? toProduct(await readCatalogGood(id, signal)) : null))
   }
 
+  function loadForEdit(id) {
+    return edit.run(async (signal) => toProduct(await readCatalogGood(id, signal)))
+  }
+
   async function createProduct(product) {
     const created = await createCatalogGood(product)
     void loadSummary()
@@ -153,6 +161,15 @@ export function useCatalogCenter() {
     await deleteCatalogGood(id)
     void load()
     void loadSummary()
+  }
+
+  async function updateProduct(id, product, expectedVersion) {
+    await updateCatalogGood(id, product, expectedVersion)
+    void load()
+    void loadSummary()
+    if (detailId.value === id) {
+      void loadDetail()
+    }
   }
 
   watch([applied, page, size, ascending], load, { immediate: true })
@@ -240,6 +257,7 @@ export function useCatalogCenter() {
     list,
     summary,
     detail,
+    edit,
     detailId,
     changeBrand,
     changeSeries,
@@ -254,7 +272,9 @@ export function useCatalogCenter() {
     load,
     loadSummary,
     loadDetail,
+    loadForEdit,
     createProduct,
+    updateProduct,
     deleteProduct,
   }
 }

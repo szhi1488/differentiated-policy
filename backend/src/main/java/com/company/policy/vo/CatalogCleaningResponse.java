@@ -87,8 +87,6 @@ public final class CatalogCleaningResponse {
             @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime reviewedAt,
             String reviewReason) {}
 
-    public record Page<T>(List<T> items, long total) {}
-
     public record Results(List<Result> items, long total, Map<String, Long> counts) {}
 
     public record Preview(List<Result> items, long total, long eligible) {}

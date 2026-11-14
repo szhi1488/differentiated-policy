@@ -2,7 +2,6 @@ package com.company.policy.mapper;
 
 import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.entity.GoodsSyncJob;
-import com.company.policy.entity.UserInfo;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -72,13 +71,6 @@ public interface GoodsSyncJobMapper {
                     + SCOPE
                     + " AND status = 'CANCELLED' AND error_code IS NOT NULL")
     Boolean coolingDown(String sourceKey);
-
-    @Insert(
-            """
-        INSERT INTO catalog_operation_log (operator_id, operator_name, entity_type, entity_id, action_type)
-        VALUES (#{user.id}, #{user.name}, 'SYNC_JOB', #{id}, #{action})
-        """)
-    int audit(UserInfo user, long id, String action);
 
     @Update(
             """

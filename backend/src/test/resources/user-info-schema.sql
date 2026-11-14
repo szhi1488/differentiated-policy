@@ -9,5 +9,6 @@ CREATE TABLE IF NOT EXISTS user_info (
   is_deleted TINYINT NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (tenant_key, open_id)
+  UNIQUE (tenant_key, open_id),
+  UNIQUE (id, tenant_key)
 );

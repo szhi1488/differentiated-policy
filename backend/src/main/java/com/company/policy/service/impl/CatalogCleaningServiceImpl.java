@@ -9,21 +9,16 @@ import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogCleaningMapper;
-import com.company.policy.mapper.CatalogCleaningMapper.Change;
-import com.company.policy.mapper.CatalogCleaningMapper.Member;
-import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.service.CatalogCleaningService;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
-import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogCleaningResponse.Preview;
 import com.company.policy.vo.CatalogCleaningResponse.Result;
 import com.company.policy.vo.CatalogCleaningResponse.Results;
 import com.company.policy.vo.CatalogCleaningResponse.Status;
 import com.company.policy.vo.CurrentUserResponse;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.company.policy.vo.PageResponse;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -31,48 +26,38 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-@Slf4j
 @Service
 public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     private static final Set<String> TABS =
             Set.of("PENDING", "PASSED", "REVIEW_REQUIRED", "ERROR", "EXCLUDED");
-    private static final int BATCH_SIZE = 100;
     private final CatalogCleaningMapper mapper;
     private final CatalogAccess access;
-    private final CatalogGoodsMapper goods;
+    private final CatalogCleaningResultWriter writer;
     private final JackyunProperties config;
-    private final ObjectMapper json;
     private final TransactionTemplate tx;
-    private long lastWarning = System.nanoTime() - TimeUnit.MINUTES.toNanos(1);
 
     CatalogCleaningServiceImpl(
             CatalogCleaningMapper mapper,
             CatalogAccess access,
-            CatalogGoodsMapper goods,
+            CatalogCleaningResultWriter writer,
             JackyunProperties config,
-            ObjectMapper json,
             PlatformTransactionManager manager) {
         this.mapper = mapper;
         this.access = access;
-        this.goods = goods;
+        this.writer = writer;
         this.config = config;
-        this.json = json;
         this.tx = new TransactionTemplate(manager);
         this.tx.setTimeout(20);
     }
 
     @Override
-    public Page<Job> jobs(CurrentUserResponse session, int page, int size) {
+    public PageResponse<Job> jobs(CurrentUserResponse session, int page, int size) {
         access.requireAdmin(session);
         long offset = offset(page, size);
         return tx.execute(
@@ -88,7 +73,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                                                 row.jobId(), key -> new HashMap<>())
                                                         .put(row.status(), row.total()));
                     }
-                    return new Page<>(
+                    return new PageResponse<>(
                             jobs.stream()
                                     .map(
                                             job ->
@@ -321,7 +306,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                         throw conflict("CATALOG_SOURCE_CHANGED", "该商品尚无可审核的结果。");
                     }
                     var job = requireJob(source.getCleanJobId());
-                    Candidate previous = readCandidate(source);
+                    Candidate previous = writer.readCandidate(source);
                     Candidate candidate =
                             previous == null ? CatalogCleaningRule.parse(source) : previous;
                     String reason = request.reason();
@@ -331,12 +316,13 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                         reason = reason.strip();
                     }
                     if (request.decision() == Decision.EXCLUDE) {
-                        persist(
+                        writer.persist(
                                 job,
                                 source,
                                 candidate,
                                 Status.EXCLUDED,
-                                new Mapping("EXCLUDED", null, null, null),
+                                new CatalogCleaningResultWriter.Mapping(
+                                        "EXCLUDED", null, null, null),
                                 admin,
                                 reason);
                     } else {
@@ -352,8 +338,8 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 || candidate.colorName().matches(".*[/、|].*")) {
                             throw invalid("标准系列须以系列结尾，型号、配置和一个明确的颜色均须填写。");
                         }
-                        var mapping = resolve(source, candidate, "MANUAL");
-                        persist(
+                        var mapping = writer.resolve(source, candidate, "MANUAL");
+                        writer.persist(
                                 job,
                                 source,
                                 candidate,
@@ -383,265 +369,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                     }
                     checked(mapper.insertMember(desired.getId(), source));
                 });
-    }
-
-    @Override
-    public void processNextBatch() {
-        if (!config.hasImportScope()) {
-            return;
-        }
-        try {
-            var job = mapper.due(config.getSourceKey());
-            String token = UUID.randomUUID().toString();
-            if (job == null || mapper.claim(job, token) != 1) {
-                return;
-            }
-            for (var member : mapper.pending(job.getId(), BATCH_SIZE)) {
-                processMember(job, token, member);
-            }
-            tx.executeWithoutResult(
-                    ignored -> {
-                        lockClaim(job, token);
-                        var state = snapshot(job);
-                        long errors = state.resultCounts().getOrDefault("ERROR", 0L);
-                        long skipped = state.resultCounts().getOrDefault("SKIPPED", 0L);
-                        String status =
-                                state.processed() < state.total()
-                                        ? "RUNNING"
-                                        : errors == state.total()
-                                                ? "FAILED"
-                                                : errors > 0 || skipped > 0
-                                                        ? "PARTIAL"
-                                                        : "COMPLETED";
-                        checked(mapper.release(job, token, status));
-                    });
-        } catch (LeaseLost ignored) {
-            // 失去租约后停止写入，未完成明细由后续执行者接手。
-        } catch (RuntimeException error) {
-            long now = System.nanoTime();
-            if (now - lastWarning >= TimeUnit.MINUTES.toNanos(1)) {
-                lastWarning = now;
-                log.warn("商品清洗执行器暂不可用：{}", error.getClass().getSimpleName());
-            }
-        }
-    }
-
-    private void processMember(CatalogCleaningJob job, String token, Member member) {
-        Candidate candidate = null;
-        try {
-            var source = mapper.source(job.getSourceKey(), member.sourceId(), null);
-            if (matchesMember(job, member, source)) {
-                candidate = CatalogCleaningRule.parse(source);
-            }
-            try {
-                processTransaction(job, token, member, candidate, false);
-            } catch (DuplicateKeyException | TransientDataAccessException concurrent) {
-                processTransaction(job, token, member, candidate, false);
-            }
-        } catch (LeaseLost expired) {
-            throw expired;
-        } catch (RuntimeException error) {
-            processTransaction(job, token, member, candidate, true);
-            log.warn("来源商品 {} 清洗失败：{}", member.sourceId(), error.getClass().getSimpleName());
-        }
-    }
-
-    private void processTransaction(
-            CatalogCleaningJob job,
-            String token,
-            Member member,
-            Candidate candidate,
-            boolean failed) {
-        tx.executeWithoutResult(
-                ignored -> {
-                    lockClaim(job, token);
-                    var source = mapper.lockSource(job.getSourceKey(), member.sourceId());
-                    if (!matchesMember(job, member, source)) {
-                        checked(mapper.finishMember(job.getId(), member.sourceId(), "SKIPPED"));
-                        return;
-                    }
-                    var outcome =
-                            failed
-                                    ? saveFailure(job, source, candidate)
-                                    : applyCandidate(job, source, candidate);
-                    checked(mapper.finishMember(job.getId(), member.sourceId(), outcome.name()));
-                });
-    }
-
-    private static boolean matchesMember(
-            CatalogCleaningJob job, Member member, SourceGoodsItem source) {
-        return source != null
-                && source.getRecordVersion() == member.sourceVersion()
-                && job.getBrandName().equals(source.getBrandName());
-    }
-
-    private Status saveFailure(
-            CatalogCleaningJob job, SourceGoodsItem source, Candidate candidate) {
-        var failure =
-                candidate == null
-                        ? new Candidate(
-                                null,
-                                null,
-                                null,
-                                null,
-                                List.of(),
-                                null,
-                                null,
-                                null,
-                                "CLEAN_EXECUTION_FAILED",
-                                "清洗执行失败，可以重试。",
-                                "RETRY",
-                                List.of())
-                        : CatalogCleaningRule.issue(
-                                candidate, "CLEAN_EXECUTION_FAILED", "清洗执行失败，可以重试。", "RETRY");
-        persist(job, source, failure, Status.ERROR, null, null, failure.explanation());
-        return Status.ERROR;
-    }
-
-    private Status applyCandidate(
-            CatalogCleaningJob job, SourceGoodsItem source, Candidate candidate) {
-        if (candidate.code() != null) {
-            return saveReview(job, source, candidate);
-        }
-        Mapping mapping;
-        try {
-            mapping = resolve(source, candidate, "AUTO");
-        } catch (ApiException conflict) {
-            if (conflict.getStatus() != HttpStatus.CONFLICT) {
-                throw conflict;
-            }
-            return saveReview(
-                    job,
-                    source,
-                    CatalogCleaningRule.issue(
-                            candidate, conflict.getCode(), conflict.getMessage(), "REVIEW"));
-        }
-        boolean manual = "MANUAL".equals(source.getMappingOrigin());
-        var status = manual ? Status.MANUAL_PASSED : Status.AUTO_PASSED;
-        persist(
-                job,
-                source,
-                candidate,
-                status,
-                manual ? null : mapping,
-                null,
-                candidate.explanation());
-        return status;
-    }
-
-    private Status saveReview(CatalogCleaningJob job, SourceGoodsItem source, Candidate candidate) {
-        persist(
-                job,
-                source,
-                candidate,
-                Status.REVIEW_REQUIRED,
-                null,
-                null,
-                candidate.explanation());
-        return Status.REVIEW_REQUIRED;
-    }
-
-    private Mapping resolve(SourceGoodsItem source, Candidate candidate, String origin) {
-        var memory = CatalogCleaningRule.memory(candidate.spec());
-        if (memory == null) {
-            throw invalid("请填写有效的运行内存和机身存储，例如 16GB+512GB。");
-        }
-        String brandName = source.getBrandName();
-        String edition = Objects.requireNonNullElse(candidate.edition(), "");
-        boolean protect = "AUTO".equals(origin) && source.getGoodsId() != null;
-        Long brand = goods.lockBrand(brandName);
-        var model = brand == null ? null : goods.lockModel(brand, candidate.modelName(), edition);
-        if (model != null && !candidate.seriesName().equals(model.seriesName())) {
-            throw conflict("CATALOG_SERIES_CONFLICT", "同一机型版本已归属其他系列，请核对系列。");
-        }
-        Long color = goods.lockColor(candidate.colorName());
-        var existing =
-                model == null || color == null
-                        ? null
-                        : goods.lockGoods(model.id(), memory.ram(), memory.rom(), color);
-        if (protect && (existing == null || !Objects.equals(source.getGoodsId(), existing.id()))) {
-            throw conflict("CATALOG_MAPPING_CHANGED", "候选规格或颜色与已生效映射不同，需要人工确认。");
-        }
-        if (existing != null) {
-            if (!"ACTIVE".equals(existing.catalogStatus())) {
-                throw conflict("CATALOG_GOODS_INACTIVE", "该标准商品尚未启用，请先核对目录状态。");
-            }
-            if (existing.status() == null) {
-                checked(goods.defaultToOnSale(existing.id()));
-            }
-            return new Mapping("MAPPED", origin, brand, existing.id());
-        }
-
-        // 在确认目录无业务冲突后建档，避免待审结果留下部分目录记录。
-        if (brand == null) {
-            checked(goods.insertBrand(brandName));
-            brand = goods.lockBrand(brandName);
-        }
-        Long series =
-                model == null
-                        ? goods.lockSeries(brand, candidate.seriesName())
-                        : Long.valueOf(model.seriesId());
-        if (series == null) {
-            checked(goods.insertSeries(brand, candidate.seriesName()));
-            series = goods.lockSeries(brand, candidate.seriesName());
-        }
-        if (model == null) {
-            checked(goods.insertModel(brand, series, candidate.modelName(), edition));
-            model = goods.lockModel(brand, candidate.modelName(), edition);
-        }
-        if (color == null) {
-            checked(goods.insertColor(candidate.colorName()));
-            color = goods.lockColor(candidate.colorName());
-        }
-        String sku = "G-" + UUID.randomUUID();
-        String name =
-                String.join(
-                                " ",
-                                candidate.modelName(),
-                                memory.ram() + "+" + memory.rom(),
-                                candidate.colorName())
-                        + (edition.isEmpty() ? "" : "（" + edition + "）");
-        String productNo = source.getGoodsNo();
-        checked(
-                goods.insertGoods(
-                        sku,
-                        productNo == null || productNo.isBlank() ? null : productNo,
-                        brand,
-                        series,
-                        model.id(),
-                        name,
-                        memory.ram(),
-                        memory.rom(),
-                        color,
-                        1));
-        return new Mapping(
-                "MAPPED",
-                origin,
-                brand,
-                goods.lockGoods(model.id(), memory.ram(), memory.rom(), color).id());
-    }
-
-    private void persist(
-            CatalogCleaningJob job,
-            SourceGoodsItem source,
-            Candidate candidate,
-            Status status,
-            Mapping mapping,
-            UserInfo operator,
-            String reason) {
-        var change =
-                new Change(
-                        status.name(),
-                        write(candidate),
-                        status == Status.ERROR || status == Status.REVIEW_REQUIRED
-                                ? candidate.code()
-                                : null,
-                        reason,
-                        mapping == null ? null : mapping.status(),
-                        mapping == null ? null : mapping.origin(),
-                        mapping == null ? null : mapping.brandId(),
-                        mapping == null ? null : mapping.goodsId());
-        checked(mapper.save(job, source, change, operator));
     }
 
     private Job snapshot(CatalogCleaningJob job) {
@@ -698,12 +425,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return source;
     }
 
-    private void lockClaim(CatalogCleaningJob job, String token) {
-        if (mapper.lockClaim(job, token) == null) {
-            throw new LeaseLost();
-        }
-    }
-
     private static void checkSource(SourceGoodsItem source, int version, Status expected) {
         if (version != source.getRecordVersion()
                 || !expected.name().equals(source.getCleanStatus())) {
@@ -712,7 +433,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     private Detail toDetail(SourceGoodsItem source) {
-        var candidate = readCandidate(source);
+        var candidate = writer.readCandidate(source);
         return new Detail(
                 result(source, candidate),
                 source.original(),
@@ -726,7 +447,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     private Result storedResult(SourceGoodsItem source) {
-        return result(source, readCandidate(source));
+        return result(source, writer.readCandidate(source));
     }
 
     private static Result result(SourceGoodsItem source, Candidate candidate) {
@@ -748,24 +469,6 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 candidate == null ? null : candidate.code(),
                 candidate == null ? null : candidate.suggestedAction(),
                 source.getCleanedAt());
-    }
-
-    private Candidate readCandidate(SourceGoodsItem source) {
-        try {
-            return source.getCleanCandidate() == null
-                    ? null
-                    : json.readValue(source.getCleanCandidate(), Candidate.class);
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException("来源候选读取失败", error);
-        }
-    }
-
-    private String write(Object value) {
-        try {
-            return json.writeValueAsString(value);
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException("清洗结果序列化失败", error);
-        }
     }
 
     private static long offset(int page, int size) {
@@ -792,8 +495,4 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     private static ApiException invalid(String reason) {
         return new ApiException(HttpStatus.BAD_REQUEST, "CATALOG_CLEAN_INVALID_REQUEST", reason);
     }
-
-    private record Mapping(String status, String origin, Long brandId, Long goodsId) {}
-
-    private static final class LeaseLost extends RuntimeException {}
 }

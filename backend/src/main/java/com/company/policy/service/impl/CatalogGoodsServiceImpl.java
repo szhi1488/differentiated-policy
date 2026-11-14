@@ -2,20 +2,27 @@ package com.company.policy.service.impl;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.CatalogDictionaryRequest.Type;
-import com.company.policy.dto.CatalogGoodsCreate;
 import com.company.policy.dto.CatalogGoodsQuery;
+import com.company.policy.dto.CatalogGoodsUpdate;
+import com.company.policy.dto.CatalogGoodsWrite;
+import com.company.policy.entity.CatalogGoods;
+import com.company.policy.entity.Spu;
 import com.company.policy.mapper.CatalogDictionaryMapper;
 import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.service.CatalogGoodsService;
-import com.company.policy.vo.CatalogCleaningResponse.Page;
 import com.company.policy.vo.CatalogGoodsResponse;
 import com.company.policy.vo.CatalogGoodsResponse.Memory;
 import com.company.policy.vo.CatalogGoodsResponse.ModelCount;
 import com.company.policy.vo.CatalogGoodsResponse.SeriesCount;
 import com.company.policy.vo.CatalogGoodsResponse.Summary;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PageResponse;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -40,10 +47,84 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public CatalogGoodsResponse create(CurrentUserResponse session, CatalogGoodsCreate request) {
+    public CatalogGoodsResponse create(CurrentUserResponse session, CatalogGoodsWrite request) {
         access.requireAdmin(session);
-        String modelName = CatalogCleaningRule.normalize(request.modelName());
-        String edition = CatalogCleaningRule.normalize(request.edition());
+        if (request.status() == null) {
+            throw invalidGoods("请选择商品状态。");
+        }
+        try {
+            var target = resolveTarget(request);
+            checkDuplicate(target, null);
+            checkWrite(
+                    mapper.insertGoods(
+                            "G-" + UUID.randomUUID(),
+                            null,
+                            target.brand(),
+                            target.series(),
+                            target.spu(),
+                            request.name().strip(),
+                            target.ram(),
+                            target.rom(),
+                            target.color(),
+                            request.status()));
+            var saved = mapper.lockGoods(target.spu(), target.ram(), target.rom(), target.color());
+            return CatalogGoodsResponse.from(mapper.find(saved.id()));
+        } catch (DuplicateKeyException error) {
+            throw duplicate();
+        }
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CatalogGoodsResponse update(
+            CurrentUserResponse session, long id, CatalogGoodsUpdate request) {
+        access.requireAdmin(session);
+        if (id < 1) {
+            throw invalidGoods("商品 ID 无效。");
+        }
+        var product = request.product();
+        try {
+            // 与新增、清洗保持相同的字典及机型加锁顺序，再锁定商品。
+            var target = resolveTarget(product);
+            if (mapper.lockById(id) == null) {
+                throw notFound();
+            }
+            var current = mapper.find(id);
+            var response = CatalogGoodsResponse.from(current);
+            if (!response.editVersion().equals(request.expectedVersion())) {
+                throw conflict("CATALOG_GOODS_CHANGED", "该商品已被修改，请保留当前输入并重新打开商品核对。");
+            }
+            if (product.status() == null && current.status() != null) {
+                throw invalidGoods("请选择商品状态。");
+            }
+            checkReferences(current, target);
+            checkDuplicate(target, id);
+            String name = product.name().strip();
+            if (target.matches(current)
+                    && name.equals(current.goodsName())
+                    && Objects.equals(product.status(), current.status())) {
+                return response;
+            }
+            checkWrite(
+                    mapper.updateGoods(
+                            id,
+                            name,
+                            target.brand(),
+                            target.series(),
+                            target.spu(),
+                            target.ram(),
+                            target.rom(),
+                            target.color(),
+                            product.status()));
+            return CatalogGoodsResponse.from(mapper.find(id));
+        } catch (DuplicateKeyException error) {
+            throw duplicate();
+        }
+    }
+
+    private Target resolveTarget(CatalogGoodsWrite request) {
+        String modelName = CatalogText.normalize(request.modelName());
+        String edition = CatalogText.normalize(request.edition());
         if (modelName.isEmpty() || modelName.length() > 100 || edition.length() > 64) {
             throw invalidGoods("请核对机型名称和版本。");
         }
@@ -65,56 +146,71 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         if (dictionary.lockName(Type.color, color) == null) {
             throw invalidGoods("所选颜色已不存在，请重新选择。");
         }
-        try {
-            if (model == null) {
-                checkWrite(mapper.insertModel(brand, series, modelName, edition));
-                model = mapper.lockModel(brand, modelName, edition);
-            }
-            long spu = model.id();
-            var existing = mapper.lockGoods(spu, ram, rom, color);
-            if (existing != null && "DISABLED".equals(existing.catalogStatus())) {
-                throw conflict("CATALOG_GOODS_DISABLED", "相同配置和颜色的商品已停用，仍占用该规格。");
-            }
-            if (existing != null) {
-                throw duplicate();
-            }
-            checkWrite(
-                    mapper.insertGoods(
-                            "G-" + UUID.randomUUID(),
-                            null,
-                            brand,
-                            series,
-                            spu,
-                            request.name().strip(),
-                            ram,
-                            rom,
-                            color,
-                            request.status()));
-            var saved = mapper.lockGoods(spu, ram, rom, color);
-            return CatalogGoodsResponse.from(mapper.find(saved.id()));
-        } catch (DuplicateKeyException error) {
-            throw duplicate();
+        if (model == null) {
+            checkWrite(mapper.insertModel(new Spu(brand, series, modelName, edition)));
+            model = mapper.lockModel(brand, modelName, edition);
+        }
+        return new Target(brand, series, model.id(), ram, rom, color);
+    }
+
+    private void checkDuplicate(Target target, Long currentId) {
+        var existing = mapper.lockGoods(target.spu(), target.ram(), target.rom(), target.color());
+        if (existing == null || Objects.equals(existing.id(), currentId)) {
+            return;
+        }
+        throw duplicate();
+    }
+
+    private void checkReferences(CatalogGoods current, Target target) {
+        if (target.brand() != current.brandId() && mapper.hasSourceMapping(current.id())) {
+            throw conflict("CATALOG_GOODS_SOURCE_BOUND", "该商品已关联源商品，不能修改品牌。");
+        }
+        if ((!target.matches(current) && mapper.hasPolicyGoodsReference(current.id()))
+                || (!target.matchesConfiguration(current)
+                        && mapper.hasPolicyConfigurationReference(
+                                current.spuId(), current.ram(), current.rom()))) {
+            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品或配置已被政策引用，不能修改已引用的规格或颜色。");
+        }
+    }
+
+    private record Target(long brand, long series, long spu, String ram, String rom, long color) {
+        boolean matchesConfiguration(CatalogGoods current) {
+            return spu == current.spuId() && ram.equals(current.ram()) && rom.equals(current.rom());
+        }
+
+        boolean matches(CatalogGoods current) {
+            return matchesConfiguration(current) && color == current.colorId();
         }
     }
 
     @Override
-    @Transactional
-    public void disable(CurrentUserResponse session, long id) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void delete(CurrentUserResponse session, long id) {
         access.requireAdmin(session);
         if (id < 1) {
             throw invalidGoods("商品 ID 无效。");
         }
-        String status = mapper.lockCatalogStatus(id);
-        if (status == null) {
-            throw notFound();
+        if (mapper.lockById(id) == null) {
+            return;
         }
-        if (!"DISABLED".equals(status)) {
-            checkWrite(mapper.disable(id));
+        if (mapper.hasSourceMapping(id)) {
+            throw conflict("CATALOG_GOODS_SOURCE_BOUND", "该商品已关联吉客云来源，无法删除。");
+        }
+        var current = mapper.find(id);
+        if (mapper.hasPolicyGoodsReference(id)
+                || mapper.hasPolicyConfigurationReference(
+                        current.spuId(), current.ram(), current.rom())) {
+            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品或其配置已被政策引用，无法删除。");
+        }
+        try {
+            checkWrite(mapper.delete(id));
+        } catch (DataIntegrityViolationException error) {
+            throw conflict("CATALOG_GOODS_REFERENCED", "该商品已有其他记录引用，无法删除。");
         }
     }
 
     private static String capacity(String value, boolean storage) {
-        var match = CAPACITY.matcher(CatalogCleaningRule.normalize(value));
+        var match = CAPACITY.matcher(CatalogText.normalize(value));
         String message = storage ? "请填写有效的 ROM，例如 256GB 或 1T。" : "请填写有效的 RAM，例如 12GB。";
         if (!match.matches()) {
             throw invalidGoods(message);
@@ -150,7 +246,8 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
 
     @Override
     @Transactional(readOnly = true)
-    public Page<CatalogGoodsResponse> list(CurrentUserResponse session, CatalogGoodsQuery query) {
+    public PageResponse<CatalogGoodsResponse> list(
+            CurrentUserResponse session, CatalogGoodsQuery query) {
         access.requireAdmin(session);
         if (query.page() < 1
                 || query.size() < 1
@@ -164,14 +261,19 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                 || (query.status() != null && (query.status() < 1 || query.status() > 4))) {
             throw invalid();
         }
+        var keyword = CatalogText.normalize(search(query.keyword(), 128));
+        var keywords =
+                Arrays.stream(keyword.toLowerCase(Locale.ROOT).split(" "))
+                        .filter(term -> !term.isEmpty())
+                        .distinct()
+                        .toList();
         var filters =
                 new CatalogGoodsQuery(
                         search(query.brandName(), 50),
                         search(query.seriesName(), 64),
                         search(query.modelName(), 100),
-                        search(query.keyword(), 128),
+                        query.keyword(),
                         query.status(),
-                        query.catalogStatus(),
                         query.ascending(),
                         query.page(),
                         query.size(),
@@ -181,10 +283,10 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                         query.rom());
         long offset = (filters.page() - 1L) * filters.size();
         var items =
-                mapper.page(filters, filters.size(), offset).stream()
+                mapper.page(filters, keywords, filters.size(), offset).stream()
                         .map(CatalogGoodsResponse::from)
                         .toList();
-        return new Page<>(items, mapper.count(filters));
+        return new PageResponse<>(items, mapper.count(filters, keywords));
     }
 
     @Override

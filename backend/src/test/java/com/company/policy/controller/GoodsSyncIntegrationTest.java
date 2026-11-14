@@ -10,7 +10,7 @@ import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.dto.JackyunGoodsQuery.Phase;
-import com.company.policy.service.CatalogCleaningService;
+import com.company.policy.service.CatalogCleaningWorker;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.service.LoginSessionService;
@@ -18,7 +18,9 @@ import com.company.policy.service.UserInfoService;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -65,10 +67,17 @@ class GoodsSyncIntegrationTest {
     @Autowired UserInfoService users;
     @Autowired LoginSessionService sessions;
     @Autowired GoodsSyncService sync;
-    @Autowired CatalogCleaningService cleaning;
+    @Autowired CatalogCleaningWorker cleaning;
     @Autowired JdbcTemplate jdbc;
     @MockitoBean JackyunGoodsService upstream;
     private MockHttpSession admin;
+
+    @Test
+    void rejectsCleaningPreviewWithoutBrand() throws Exception {
+        mvc.perform(get(CLEANING + "/preview").session(admin))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_INVALID_REQUEST"));
+    }
 
     @DynamicPropertySource
     static void optionalDisposableMySql(DynamicPropertyRegistry registry) {
@@ -99,6 +108,8 @@ class GoodsSyncIntegrationTest {
                     .matches(
                             "(?i).*[\\\\/]\\.local-cache[\\\\/]catalog-import-mysql-[0-9]+[\\\\/]data[\\\\/]");
         }
+        jdbc.update("DELETE FROM policy_detail");
+        jdbc.update("DELETE FROM policy_master");
         jdbc.update("DELETE FROM catalog_operation_log");
         jdbc.update("DELETE FROM catalog_clean_job_item");
         jdbc.update("DELETE FROM source_goods_item");
@@ -640,7 +651,6 @@ class GoodsSyncIntegrationTest {
                                 .param("brandName", OPPO)
                                 .param("seriesName", "Find")
                                 .param("modelName", "X8")
-                                .param("catalogStatus", "ACTIVE")
                                 .param("status", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
@@ -657,7 +667,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.colorName").value("星耀黑"))
                 .andExpect(jsonPath("$.sourceSkuId").value(original.skuId()))
                 .andExpect(jsonPath("$.sourceName").value(original.goodsName()));
-        mvc.perform(get(GOODS).session(teammate).param("keyword", alias.skuId()))
+        mvc.perform(get(GOODS).session(teammate).param("keyword", alias.skuId().substring(12)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].sourceSkuId").value(original.skuId()));
@@ -692,8 +702,6 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(get(GOODS).session(session("other-tenant", "catalog-outsider", "ADMIN")))
                 .andExpect(status().isForbidden());
-        mvc.perform(get(GOODS).session(teammate).param("catalogStatus", "INVALID"))
-                .andExpect(status().isBadRequest());
         mvc.perform(get(GOODS + "/0").session(teammate)).andExpect(status().isNotFound());
 
         LocalDate date = LocalDate.of(2026, 11, 12);
@@ -872,6 +880,85 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
+    void releasesEmptySeriesAndPreservesModelsReferencedByPolicies() throws Exception {
+        var imported = importedGoodForEditing();
+        String brand = imported.path("brandId").asText();
+        String dictionary = "/api/admin/catalog/dictionary";
+        var seriesRequest = json.createObjectNode().put("name", "5555").put("parentId", brand);
+        mvc.perform(mutation(dictionary + "/series").content(seriesRequest.toString()))
+                .andExpect(status().isNoContent());
+        String seriesId =
+                jdbc.queryForObject("SELECT id FROM series WHERE name='5555'", String.class);
+        String seriesPath = dictionary + "/series/" + seriesId;
+        var product =
+                ((ObjectNode) editBody(imported).path("product"))
+                        .put("seriesId", seriesId)
+                        .put("modelName", "测试机型");
+        var created =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var item = json.readTree(created.getResponse().getContentAsByteArray());
+        long modelId = item.path("spuId").asLong();
+        var rename =
+                putGoods(
+                        seriesPath,
+                        json.createObjectNode().put("name", "空系列").put("expectedName", "5555"));
+        var remove = deleteGoods(seriesPath).param("expectedName", "5555");
+        String usage = "$[?(@.type == 'series' && @.id == '" + seriesId + "')].inUse";
+
+        mvc.perform(get(dictionary).session(admin))
+                .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(true)));
+        mvc.perform(rename).andExpect(status().isConflict());
+        mvc.perform(remove).andExpect(status().isConflict());
+        mvc.perform(deleteGoods(GOODS + "/" + item.path("id").asText()))
+                .andExpect(status().isNoContent());
+
+        jdbc.update(
+                """
+                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
+                SELECT tenant_key, 'SERIES-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
+                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
+                """);
+        jdbc.update(
+                """
+                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
+                SELECT id, 'JD', ?, '16GB', '256GB', 'ALL_COLORS'
+                FROM policy_master WHERE policy_code = 'SERIES-QA'
+                """,
+                modelId);
+        mvc.perform(get(dictionary).session(admin))
+                .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(true)));
+        mvc.perform(rename).andExpect(status().isConflict());
+        mvc.perform(remove)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_IN_USE"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM spu WHERE id=?", Integer.class, modelId))
+                .isOne();
+
+        jdbc.update("DELETE FROM policy_detail WHERE spu_id=?", modelId);
+        mvc.perform(get(dictionary).session(admin))
+                .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(false)));
+        mvc.perform(rename).andExpect(status().isNoContent());
+        mvc.perform(deleteGoods(seriesPath).param("expectedName", "空系列"))
+                .andExpect(status().isNoContent());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM spu WHERE series_id=?",
+                                Integer.class,
+                                seriesId))
+                .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM series WHERE id=?", Integer.class, seriesId))
+                .isZero();
+        mvc.perform(get(GOODS + "/" + imported.path("id").asText()).session(admin))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void createsStandardGoodsWithSeparateCapacityAndRejectsEquivalentDuplicate() throws Exception {
         String dictionary = "/api/admin/catalog/dictionary";
         mvc.perform(mutation(dictionary + "/brand").content("{\"name\":\"OPPO手机\"}"))
@@ -932,7 +1019,8 @@ class GoodsSyncIntegrationTest {
                         get(GOODS + "/" + id)
                                 .session(session("test-tenant", "goods-teammate", "ADMIN")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.catalogStatus").value("ACTIVE"));
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.catalogStatus").doesNotHaveJsonPath());
         mvc.perform(
                         mutation(GOODS)
                                 .session(session("test-tenant", "goods-applicant", "APPLICANT"))
@@ -941,20 +1029,231 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void deletesByDisablingGoodsAndPreservesSourceMapping() throws Exception {
-        var original =
-                goods(
-                        "Find X8 星耀黑 16+512",
-                        "X8-REMOVE",
-                        "16+512",
-                        "Find X8",
-                        "Find系列",
-                        "Find X8 16+512",
-                        null);
-        importForCleaning(List.of(original));
+    void searchesStandardGoodsByModelAndCombinedKeywords() throws Exception {
+        var current = importedGoodForEditing();
+        String id = current.path("id").asText();
+        var edit = editBody(current);
+        ((ObjectNode) edit.path("product"))
+                .put("name", "展示机")
+                .put("modelName", "一加 Ace7 Pro")
+                .put("edition", "典藏版");
+        mvc.perform(putGoods(GOODS + "/" + id, edit)).andExpect(status().isOk());
+
+        for (String keyword :
+                List.of("一加ACE7", "典藏 星耀黑  Ａｃｅ７", "find系列 x8-edit", "OPPO手机 Ace7", "　")) {
+            mvc.perform(get(GOODS).session(admin).param("keyword", keyword))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(1))
+                    .andExpect(jsonPath("$.items[0].id").value(id));
+        }
+        for (String keyword : List.of("Ace7 白色", "一加%")) {
+            mvc.perform(get(GOODS).session(admin).param("keyword", keyword))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(0))
+                    .andExpect(jsonPath("$.items").isEmpty());
+        }
+        mvc.perform(get(GOODS).session(admin).param("keyword", "Ace7").param("brandName", ONEPLUS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(
+                        get(GOODS)
+                                .session(admin)
+                                .param("keyword", "Ace7")
+                                .param("brandName", OPPO)
+                                .param("page", "2")
+                                .param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items").isEmpty());
+    }
+
+    @Test
+    void editsSourceGoodsInPlaceAndRejectsOldSnapshots() throws Exception {
+        var current = importedGoodForEditing();
+        String id = current.path("id").asText();
+        String path = GOODS + "/" + id;
+        var edit = editBody(current);
+        var product = (ObjectNode) edit.path("product");
+        product.put("name", "修正商品名")
+                .put("modelName", "Find X9")
+                .put("edition", "典藏版")
+                .put("rom", "1T")
+                .put("status", 3);
+        mvc.perform(
+                        put(path)
+                                .session(admin)
+                                .contentType("application/json")
+                                .content(edit.toString()))
+                .andExpect(status().isForbidden());
+        mvc.perform(
+                        putGoods(path, edit)
+                                .session(session("test-tenant", "edit-applicant", "APPLICANT")))
+                .andExpect(status().isForbidden());
+        var saved =
+                mvc.perform(putGoods(path, edit))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.id").value(id))
+                        .andExpect(jsonPath("$.skuId").value(current.path("skuId").asText()))
+                        .andExpect(
+                                jsonPath("$.sourceSkuId")
+                                        .value(current.path("sourceSkuId").asText()))
+                        .andExpect(jsonPath("$.productNo").value("X8-EDIT"))
+                        .andExpect(jsonPath("$.modelName").value("Find X9"))
+                        .andExpect(jsonPath("$.edition").value("典藏版"))
+                        .andExpect(jsonPath("$.rom").value("1024GB"))
+                        .andExpect(jsonPath("$.status").value(3))
+                        .andReturn();
+        var latest = json.readTree(saved.getResponse().getContentAsByteArray());
+        assertThat(latest.path("editVersion").asText())
+                .isNotEqualTo(current.path("editVersion").asText());
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_CHANGED"));
+        mvc.perform(get(path).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.goodsName").value("修正商品名"));
+        mvc.perform(get(GOODS).session(admin).param("status", "3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(id));
+        mvc.perform(get(GOODS + "/summary").session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(0))
+                .andExpect(jsonPath("$.models[0].modelName").value("Find X9"));
+        mvc.perform(putGoods(path, editBody(latest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.editVersion").value(latest.path("editVersion").asText()));
+    }
+
+    @Test
+    void protectsReferencedGoodsAndRejectsDuplicateTargets() throws Exception {
+        var current = importedGoodForEditing();
+        String id = current.path("id").asText();
+        String path = GOODS + "/" + id;
+        jdbc.update("INSERT INTO brand (name) VALUES (?)", ONEPLUS);
+        String otherBrand =
+                jdbc.queryForObject("SELECT id FROM brand WHERE name=?", String.class, ONEPLUS);
+        jdbc.update("INSERT INTO series (brand_id, name) VALUES (?, ?)", otherBrand, "数字系列");
+        String otherSeries =
+                jdbc.queryForObject(
+                        "SELECT id FROM series WHERE brand_id=?", String.class, otherBrand);
+        var edit = editBody(current);
+        ((ObjectNode) edit.path("product")).put("brandId", otherBrand).put("seriesId", otherSeries);
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_SOURCE_BOUND"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM spu WHERE brand_id=?",
+                                Integer.class,
+                                otherBrand))
+                .isZero();
+
+        edit = editBody(current);
+        var product = (ObjectNode) edit.path("product");
+        product.put("rom", "256GB");
+        mvc.perform(mutation(GOODS).content(product.toString())).andExpect(status().isCreated());
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_DUPLICATE"));
+
+        jdbc.update(
+                """
+                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
+                SELECT tenant_key, 'EDIT-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
+                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
+                """);
+        long policy =
+                jdbc.queryForObject(
+                        "SELECT id FROM policy_master WHERE policy_code='EDIT-QA'", Long.class);
+        jdbc.update(
+                """
+                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
+                SELECT ?, 'JD', spu_id, ram, rom, 'ALL_COLORS' FROM goods WHERE id=?
+                """,
+                policy,
+                id);
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
+        jdbc.update(
+                "UPDATE policy_detail SET goods_id=?, color_scope='SPECIFIC_COLOR', color='星耀黑' WHERE policy_id=?",
+                id,
+                policy);
+        jdbc.update("INSERT INTO color_dict (color_name) VALUES ('白色')");
+        String white =
+                jdbc.queryForObject(
+                        "SELECT id FROM color_dict WHERE color_name='白色'", String.class);
+        edit = editBody(current);
+        ((ObjectNode) edit.path("product")).put("colorId", white);
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
+        edit = editBody(current);
+        ((ObjectNode) edit.path("product")).put("name", "仅修改名称");
+        mvc.perform(putGoods(path, edit)).andExpect(status().isOk());
+    }
+
+    private JsonNode importedGoodForEditing() throws Exception {
+        importForCleaning(
+                List.of(
+                        goods(
+                                "Find X8 星耀黑 16+512",
+                                "X8-EDIT",
+                                "16+512",
+                                "Find X8",
+                                "Find系列",
+                                "Find X8 16+512",
+                                null)));
         startClean(OPPO, null, false, 1);
         cleaning.processNextBatch();
         long id = jdbc.queryForObject("SELECT id FROM goods", Long.class);
+        var result =
+                mvc.perform(get(GOODS + "/" + id).session(admin))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        return json.readTree(result.getResponse().getContentAsByteArray());
+    }
+
+    private ObjectNode editBody(JsonNode current) {
+        var body =
+                json.createObjectNode()
+                        .put("expectedVersion", current.path("editVersion").asText());
+        var product = body.putObject("product");
+        product.set("name", current.get("goodsName"));
+        for (String field :
+                List.of(
+                        "brandId",
+                        "seriesId",
+                        "modelName",
+                        "edition",
+                        "ram",
+                        "rom",
+                        "colorId",
+                        "status")) {
+            product.set(field, current.get(field));
+        }
+        return body;
+    }
+
+    private MockHttpServletRequestBuilder putGoods(String path, ObjectNode body) {
+        return put(path)
+                .session(admin)
+                .header("Origin", "http://localhost:5173")
+                .header("X-Policy-Request", "1")
+                .contentType("application/json")
+                .content(body.toString());
+    }
+
+    @Test
+    void permanentlyDeletesUnreferencedGoodsAndReleasesSpecification() throws Exception {
+        var imported = importedGoodForEditing();
+        var product = ((ObjectNode) editBody(imported).path("product")).put("rom", "256GB");
+        var created =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var createdGoods = json.readTree(created.getResponse().getContentAsByteArray());
+        String id = createdGoods.path("id").asText();
         String path = GOODS + "/" + id;
         mvc.perform(delete(path).session(admin)).andExpect(status().isForbidden());
         mvc.perform(
@@ -964,48 +1263,67 @@ class GoodsSyncIntegrationTest {
                                 .header("X-Policy-Request", "1"))
                 .andExpect(status().isForbidden());
         for (int attempt = 0; attempt < 2; attempt++) {
-            mvc.perform(
-                            delete(path)
-                                    .session(admin)
-                                    .header("Origin", "http://localhost:5173")
-                                    .header("X-Policy-Request", "1"))
-                    .andExpect(status().isNoContent());
+            mvc.perform(deleteGoods(path)).andExpect(status().isNoContent());
         }
-        assertThat(jdbc.queryForObject("SELECT goods_id FROM source_goods_item", Long.class))
-                .isEqualTo(id);
-        mvc.perform(get(path).session(admin))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.catalogStatus").value("DISABLED"));
-        mvc.perform(get(GOODS).session(admin).param("status", "1"))
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods WHERE id=?", Integer.class, id))
+                .isZero();
+        mvc.perform(get(path).session(admin)).andExpect(status().isNotFound());
+        mvc.perform(putGoods(path, editBody(createdGoods))).andExpect(status().isNotFound());
+        mvc.perform(get(GOODS).session(admin).param("ram", "16GB").param("rom", "256GB"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(0));
         mvc.perform(get(GOODS + "/summary").session(admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(0))
-                .andExpect(jsonPath("$.active").value(0))
-                .andExpect(jsonPath("$.models").isEmpty());
-        mvc.perform(get(GOODS).session(admin).param("catalogStatus", "DISABLED"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].id").value(Long.toString(id)));
+                .andExpect(jsonPath("$.total").value(1));
+        mvc.perform(mutation(GOODS).content(product.toString())).andExpect(status().isCreated());
+    }
 
-        var alias =
-                goods(
-                        "Find X8 星耀黑 16+512",
-                        "X8-REMOVE-ALIAS",
-                        "16+512",
-                        "Find X8",
-                        "Find系列",
-                        "Find X8 16+512",
-                        null);
-        importForCleaning(List.of(alias));
-        String job = startClean(OPPO, null, false, 1);
-        cleaning.processNextBatch();
-        mvc.perform(get(CLEANING + "/jobs/" + job).session(admin))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.resultCounts.REVIEW_REQUIRED").value(1));
-        mvc.perform(get(path).session(admin))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.catalogStatus").value("DISABLED"));
+    @Test
+    void rejectsDeletingGoodsWithSourceOrPolicyReferences() throws Exception {
+        var imported = importedGoodForEditing();
+        String importedId = imported.path("id").asText();
+        mvc.perform(deleteGoods(GOODS + "/" + importedId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_SOURCE_BOUND"));
+        assertThat(jdbc.queryForObject("SELECT goods_id FROM source_goods_item", String.class))
+                .isEqualTo(importedId);
+        var product = ((ObjectNode) editBody(imported).path("product")).put("rom", "256GB");
+        var created =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        String id =
+                json.readTree(created.getResponse().getContentAsByteArray()).path("id").asText();
+        jdbc.update(
+                """
+                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
+                SELECT tenant_key, 'DELETE-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
+                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
+                """);
+        jdbc.update(
+                """
+                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
+                SELECT m.id, 'JD', g.spu_id, g.ram, g.rom, 'ALL_COLORS'
+                FROM policy_master m CROSS JOIN goods g WHERE m.policy_code = 'DELETE-QA' AND g.id = ?
+                """,
+                id);
+        mvc.perform(deleteGoods(GOODS + "/" + id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
+        jdbc.update(
+                "UPDATE policy_detail SET goods_id=?, color_scope='SPECIFIC_COLOR', color='星耀黑'",
+                id);
+        mvc.perform(deleteGoods(GOODS + "/" + id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isEqualTo(2);
+    }
+
+    private MockHttpServletRequestBuilder deleteGoods(String path) {
+        return delete(path)
+                .session(admin)
+                .header("Origin", "http://localhost:5173")
+                .header("X-Policy-Request", "1");
     }
 
     private String start(String brand, String key) throws Exception {
@@ -1169,6 +1487,9 @@ class GoodsSyncIntegrationTest {
         try {
             cleaning.processNextBatch();
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM spu", Integer.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM color_dict", Integer.class))
+                    .isZero();
             mvc.perform(get(CLEANING + "/jobs/" + batch).session(admin))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("FAILED"))

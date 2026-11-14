@@ -13,12 +13,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
-import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.TransientDataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -69,7 +66,9 @@ public class CatalogDictionaryController {
 
     @DeleteMapping("/{type}/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "删除未被引用的字典项", description = "expectedName 为读取时的名称。")
+    @Operation(
+            summary = "删除未被引用的字典项",
+            description = "expectedName 为读取时的名称。删除系列时会同时删除其下未被商品和政策引用的机型。")
     public void delete(
             @PathVariable Type type,
             @PathVariable long id,
@@ -87,15 +86,9 @@ public class CatalogDictionaryController {
                 .body(new ApiError("CATALOG_DICTIONARY_INVALID", "字典类型或参数无效。"));
     }
 
-    @ExceptionHandler({DataIntegrityViolationException.class, TransientDataAccessException.class})
+    @ExceptionHandler(PessimisticLockingFailureException.class)
     ResponseEntity<ApiError> conflict() {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ApiError("CATALOG_DICTIONARY_CONFLICT", "字典项的名称或引用状态已变化，请刷新后操作。"));
-    }
-
-    @ExceptionHandler({DataAccessException.class, TransactionException.class})
-    ResponseEntity<ApiError> storageUnavailable() {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ApiError("CATALOG_STORAGE_UNAVAILABLE", "商品数据字典暂不可用，请稍后重试。"));
+                .body(new ApiError("CATALOG_DICTIONARY_CONFLICT", "字典项正在更新，请刷新后操作。"));
     }
 }

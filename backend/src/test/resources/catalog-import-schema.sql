@@ -57,7 +57,6 @@ CREATE TABLE `goods` (
   `rom` VARCHAR(20) NOT NULL,
   `color_id` BIGINT NOT NULL,
   `status` TINYINT DEFAULT NULL,
-  `catalog_status` VARCHAR(16) NOT NULL DEFAULT 'DRAFT',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -72,8 +71,33 @@ CREATE TABLE `goods` (
     REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
     AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
   ),
-  CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4)),
-  CONSTRAINT `ck_goods_catalog_status` CHECK (`catalog_status` IN ('DRAFT', 'ACTIVE', 'DISABLED'))
+  CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4))
+);
+
+-- 商品编辑测试所需的政策字段和引用键。
+CREATE TABLE `policy_master` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_key` VARCHAR(64) NOT NULL,
+  `policy_code` VARCHAR(64) NOT NULL UNIQUE,
+  `applicant_id` BIGINT NOT NULL,
+  `perspective` VARCHAR(32) NOT NULL,
+  `channel_type` VARCHAR(32) NOT NULL,
+  FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`)
+);
+
+CREATE TABLE `policy_detail` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `policy_id` BIGINT NOT NULL,
+  `platform_code` VARCHAR(32) NOT NULL,
+  `spu_id` BIGINT,
+  `ram` VARCHAR(20),
+  `rom` VARCHAR(20),
+  `color_scope` VARCHAR(32),
+  `goods_id` BIGINT,
+  `color` VARCHAR(64),
+  FOREIGN KEY (`policy_id`) REFERENCES `policy_master` (`id`),
+  FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
+  FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`)
 );
 
 CREATE TABLE `goods_sync_job` (

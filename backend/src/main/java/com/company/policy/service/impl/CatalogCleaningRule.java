@@ -1,11 +1,11 @@
 package com.company.policy.service.impl;
 
+import static com.company.policy.service.impl.CatalogText.normalize;
+
 import com.company.policy.dto.CatalogCleaningRequest.Target;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Evidence;
-import java.text.Normalizer;
-import java.text.Normalizer.Form;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -16,7 +16,6 @@ import java.util.stream.Collectors;
 
 final class CatalogCleaningRule {
     static final String EXCLUSION = "RULE_EXCLUSION";
-    private static final Pattern SPACE = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern SKU =
             Pattern.compile(
                     "([1-9][0-9]?)\\s*(?:GB?)?\\s*\\+\\s*([1-9][0-9]{0,7})\\s*(TB?|GB?)?",
@@ -466,12 +465,6 @@ final class CatalogCleaningRule {
         return COLOR.matcher(candidate).matches() && !NOT_COLOR.matcher(candidate).find()
                 ? candidate
                 : null;
-    }
-
-    static String normalize(String value) {
-        return value == null
-                ? ""
-                : SPACE.matcher(Normalizer.normalize(value, Form.NFKC)).replaceAll(" ").strip();
     }
 
     private record Names(String goods, String sku) {}

@@ -6,7 +6,7 @@
 
 - 管理员登录后进入 `#/admin/catalog/sources`。右上角「导入商品」弹窗支持选品牌、全量或按建档日期导入。可在弹窗续跑和查看该日商品，列表按品牌、建档日和关键词筛选，并分别显示 SKU 与商品修改时间。[管理员工作台](architecture/admin-workspace.md)
 - 吉客云导入按 SKU 更新原文，支持全量、按建档日和按修改日。管理员在「商品清洗与识别」按品牌和日期预览 SKU，二次确认后手动发起。结果页默认汇总两个品牌，清洗记录可查进度和结果统计。商品审核保留系列、型号、配置、颜色四项，直接点通过或不通过，无需填写原因。[管理员工作台](architecture/admin-workspace.md) · [商品管理接口](api/catalog-api.md)
-- 管理员可从「商品 → 商品中心」按品牌、系列和机型浏览标准商品，使用即时下拉筛选，手工新增或停用商品，并维护品牌、系列和颜色字典。[商品中心](architecture/admin-workspace.md#商品中心)
+- 管理员可从「商品 → 商品中心」按品牌、系列和机型浏览标准商品，使用即时下拉筛选，手工新增、编辑或删除未被引用的商品，并维护品牌、系列和颜色字典。商品编辑已接通保存，支持版本冲突提示和引用保护，使用现有十四表基线。[商品中心](architecture/admin-workspace.md#商品中心) · [商品编辑接口](api/catalog-api.md#商品编辑)
 - 飞书客户端自动免登，失败可手动重试。浏览器可扫码、刷新二维码或跳转网页授权。已在本机看到飞书官方二维码，扫码回调和会话恢复已通过模拟验证。真实手机确认后的登录待联调。[飞书登录验证记录](architecture/feishu-auth-flow.md#验证记录)
 
 ## 当前数据库基线与重设计约定
@@ -30,7 +30,7 @@
 | [前端开发入口](../frontend/README.md) | 阅读顺序、常用命令及实现边界 | 入口导航，不另建 Agent 指令 |
 | [管理员工作台](architecture/admin-workspace.md) | 角色分流、源商品库、清洗和商品中心 | 导入、清洗、目录查询与维护已接入后端 |
 | [前端组件与页面现状](architecture/system-overview.md#前端组件与页面现状) | Element Plus 替换范围、样式边界、响应式适配和验证记录 | 已完成组件替换；业务接入边界单独说明 |
-| [商品后台确认方案](architecture/catalog-admin-design.md) | 原始导入、手动清洗、异常审核和标准目录 | 标准目录查询、手工新增、停用和字典维护已实现 |
+| [商品后台确认方案](architecture/catalog-admin-design.md) | 原始导入、手动清洗、异常审核和标准目录 | 标准目录查询、手工新增、编辑、删除和字典维护已实现 |
 | [商品清洗细则](business/catalog-cleaning.md) | 手动清洗范围、识别、结果、重试与人工审核 | 已接入新目录 |
 | [飞书鉴权](architecture/feishu-auth-flow.md) | 客户端 JS-SDK 免登、网页扫码与 OAuth 授权、服务端会话 | 已实现；真实手机扫码完成后的登录待联调 |
 | [动态表单](business/perspective-rules.md) | 渠道、平台、补贴、颜色范围 | 同步确认版规则；业务持久化待接入 |
@@ -41,7 +41,7 @@
 | [清洗结构核对 SQL](sql/verify_catalog_cleaning.sql) | 检查独立任务、外键、并发唯一键和执行索引 | 建表后只读执行 |
 | [SKU 与标准目录核对 SQL](sql/verify_sku_sync.sql) | 检查表、唯一键、任务范围及字段覆盖 | 建表和导入后只读执行 |
 | [数据库字典](sql/database-design.md) | 十四表关联、全部字段、SQL/SVC 约束边界和 Navicat 步骤 | 与 SQL 对应 |
-| [商品管理接口](api/catalog-api.md) | 来源、导入清洗、标准商品及字典维护 | 商品修改保存和标准商品批量导入待接入 |
+| [商品管理接口](api/catalog-api.md) | 来源、导入清洗、标准商品及字典维护 | 标准商品批量导入待接入 |
 | [政策接口](api/policy-api.md) | 申请保存、提交、查询及颜色范围 | 未实现契约 |
 | [审核接口](api/admin-api.md) | 审核、候选影响、权限 | 未实现契约 |
 | [附件接口](api/attachment-api.md) | 附件接口边界 | 实际接入以源码及对应文档为准 |

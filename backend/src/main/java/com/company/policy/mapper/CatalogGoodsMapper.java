@@ -1,8 +1,13 @@
 package com.company.policy.mapper;
 
 import com.company.policy.dto.CatalogGoodsQuery;
+import com.company.policy.entity.Brand;
 import com.company.policy.entity.CatalogGoods;
+import com.company.policy.entity.ColorDict;
+import com.company.policy.entity.Series;
+import com.company.policy.entity.Spu;
 import java.util.List;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -11,14 +16,15 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface CatalogGoodsMapper {
-    @Select("SELECT id FROM brand WHERE name = #{name} FOR UPDATE")
-    Long lockBrand(String name);
+    @Select("SELECT id, name, created_at FROM brand WHERE name = #{name} FOR UPDATE")
+    Brand lockBrand(String name);
 
     @Insert("INSERT INTO brand (name) VALUES (#{name})")
     int insertBrand(String name);
 
-    @Select("SELECT id FROM series WHERE brand_id = #{brand} AND name = #{name} FOR UPDATE")
-    Long lockSeries(long brand, String name);
+    @Select(
+            "SELECT id, brand_id, name, created_at FROM series WHERE brand_id = #{brand} AND name = #{name} FOR UPDATE")
+    Series lockSeries(long brand, String name);
 
     @Insert("INSERT INTO series (brand_id, name) VALUES (#{brand}, #{name})")
     int insertSeries(long brand, String name);
@@ -38,19 +44,19 @@ public interface CatalogGoodsMapper {
     @Insert(
             """
         INSERT INTO spu (brand_id, series_id, name, edition)
-        VALUES (#{brand}, #{series}, #{name}, #{edition})
+        VALUES (#{brandId}, #{seriesId}, #{name}, #{edition})
         """)
-    int insertModel(long brand, long series, String name, String edition);
+    int insertModel(Spu model);
 
-    @Select("SELECT id FROM color_dict WHERE color_name = #{name} FOR UPDATE")
-    Long lockColor(String name);
+    @Select("SELECT id, color_name FROM color_dict WHERE color_name = #{name} FOR UPDATE")
+    ColorDict lockColor(String name);
 
     @Insert("INSERT INTO color_dict (color_name) VALUES (#{name})")
     int insertColor(String name);
 
     @Select(
             """
-        SELECT id, catalog_status, status FROM goods
+        SELECT id, status FROM goods
         WHERE spu_id = #{spu} AND ram = #{ram} AND rom = #{rom} AND color_id = #{color}
         FOR UPDATE
         """)
@@ -59,9 +65,9 @@ public interface CatalogGoodsMapper {
     @Insert(
             """
         INSERT INTO goods (sku_id, product_no, brand_id, series_id, spu_id, goods_name,
-                           ram, rom, color_id, status, catalog_status)
+                           ram, rom, color_id, status)
         VALUES (#{sku}, #{productNo}, #{brand}, #{series}, #{spu}, #{name},
-                #{ram}, #{rom}, #{color}, #{status}, 'ACTIVE')
+                #{ram}, #{rom}, #{color}, #{status})
         """)
     int insertGoods(
             String sku,
@@ -75,25 +81,51 @@ public interface CatalogGoodsMapper {
             long color,
             int status);
 
-    @Update(
-            "UPDATE goods SET status = 1 WHERE id = #{id} AND catalog_status = 'ACTIVE' AND status IS NULL")
+    @Update("UPDATE goods SET status = 1 WHERE id = #{id} AND status IS NULL")
     int defaultToOnSale(long id);
+
+    @Delete("DELETE FROM goods WHERE id = #{id}")
+    int delete(long id);
+
+    @Select("SELECT id FROM goods WHERE id = #{id} FOR UPDATE")
+    Long lockById(long id);
+
+    @Select("SELECT EXISTS(SELECT 1 FROM source_goods_item WHERE goods_id = #{id})")
+    boolean hasSourceMapping(long id);
+
+    @Select("SELECT EXISTS(SELECT 1 FROM policy_detail WHERE goods_id = #{id})")
+    boolean hasPolicyGoodsReference(long id);
+
+    @Select(
+            """
+        SELECT EXISTS(SELECT 1 FROM policy_detail
+                      WHERE spu_id = #{spu} AND ram = #{ram} AND rom = #{rom})
+        """)
+    boolean hasPolicyConfigurationReference(long spu, String ram, String rom);
 
     @Update(
             """
-        UPDATE goods SET catalog_status = 'DISABLED'
-        WHERE id = #{id} AND catalog_status IN ('ACTIVE', 'DRAFT')
+        UPDATE goods SET goods_name = #{name}, brand_id = #{brand}, series_id = #{series},
+                         spu_id = #{spu}, ram = #{ram}, rom = #{rom}, color_id = #{color},
+                         status = #{status,jdbcType=TINYINT}
+        WHERE id = #{id}
         """)
-    int disable(long id);
-
-    @Select("SELECT catalog_status FROM goods WHERE id = #{id} FOR UPDATE")
-    String lockCatalogStatus(long id);
+    int updateGoods(
+            long id,
+            String name,
+            long brand,
+            long series,
+            long spu,
+            String ram,
+            String rom,
+            long color,
+            Integer status);
 
     String COLUMNS =
             """
         SELECT g.id, g.sku_id, g.product_no, g.goods_name, g.brand_id, b.name AS brand_name,
           g.series_id, s.name AS series_name, g.spu_id, p.name AS model_name, p.edition,
-          g.ram, g.rom, g.color_id, c.color_name, g.status, g.catalog_status, g.updated_at,
+          g.ram, g.rom, g.color_id, c.color_name, g.status, g.updated_at,
           source.sku_id AS source_sku_id, source.goods_name AS source_name
         """;
     String JOINED =
@@ -120,20 +152,23 @@ public interface CatalogGoodsMapper {
           <if test="query.spuId != null">AND g.spu_id = #{query.spuId}</if>
           <if test="query.ram != null">AND g.ram = #{query.ram} AND g.rom = #{query.rom}</if>
           <if test="query.modelName != null">AND LOCATE(#{query.modelName}, p.name) > 0</if>
-          <choose>
-            <when test="query.catalogStatus != null">AND g.catalog_status = #{query.catalogStatus}</when>
-            <otherwise>AND g.catalog_status IN ('ACTIVE', 'DRAFT')</otherwise>
-          </choose>
           <if test="query.status != null">AND g.status = #{query.status}</if>
-          <if test="query.keyword != null">
-            AND (LOCATE(#{query.keyword}, g.goods_name) > 0
-                 OR LOCATE(#{query.keyword}, g.product_no) > 0
-                 OR LOCATE(#{query.keyword}, g.sku_id) > 0
-                 OR LOCATE(#{query.keyword}, c.color_name) > 0
+          <foreach collection="keywords" item="term">
+            AND (LOCATE(#{term}, REPLACE(LOWER(g.goods_name), ' ', '')) > 0
+                 OR LOCATE(#{term}, REPLACE(LOWER(p.name), ' ', '')) > 0
+                 OR LOCATE(#{term}, LOWER(b.name)) > 0
+                 OR LOCATE(#{term}, LOWER(s.name)) > 0
+                 OR LOCATE(#{term}, LOWER(p.edition)) > 0
+                 OR LOCATE(#{term}, LOWER(c.color_name)) > 0
+                 OR LOCATE(#{term}, LOWER(g.product_no)) > 0
+                 OR LOCATE(#{term}, LOWER(g.sku_id)) > 0
+                 <if test="term.matches('[0-9]{1,19}')">
                  OR EXISTS (SELECT 1 FROM source_goods_item item
                    WHERE item.goods_id = g.id AND item.catalog_brand_id = g.brand_id
-                     AND LOCATE(#{query.keyword}, item.sku_id) > 0))
-          </if>
+                     AND LOCATE(#{term}, item.sku_id) > 0)
+                 </if>
+            )
+          </foreach>
         </where>
         """;
 
@@ -151,10 +186,14 @@ public interface CatalogGoodsMapper {
         LIMIT #{size} OFFSET #{offset}
         </script>
         """)
-    List<CatalogGoods> page(CatalogGoodsQuery query, int size, long offset);
+    List<CatalogGoods> page(
+            @Param("query") CatalogGoodsQuery query,
+            @Param("keywords") List<String> keywords,
+            @Param("size") int size,
+            @Param("offset") long offset);
 
     @Select("<script>SELECT COUNT(*) " + JOINED + FILTER + "</script>")
-    long count(@Param("query") CatalogGoodsQuery query);
+    long count(@Param("query") CatalogGoodsQuery query, @Param("keywords") List<String> keywords);
 
     @Select(COLUMNS + JOINED + REPRESENTATIVE_SOURCE + " WHERE g.id = #{id}")
     CatalogGoods find(long id);
@@ -166,7 +205,6 @@ public interface CatalogGoodsMapper {
                COUNT(CASE WHEN g.status = 1 THEN 1 END) AS active,
                COUNT(CASE WHEN g.status = 4 THEN 1 END) AS stopped
         FROM goods g JOIN brand b ON b.id = g.brand_id JOIN series s ON s.id = g.series_id
-        WHERE g.catalog_status IN ('ACTIVE', 'DRAFT')
         GROUP BY b.id, b.name, s.id, s.name ORDER BY b.id, s.id
         """)
     List<SeriesCount> seriesCounts();
@@ -176,13 +214,11 @@ public interface CatalogGoodsMapper {
         SELECT g.series_id, p.id AS spu_id, p.name AS model_name, p.edition,
                COUNT(*) AS total, COUNT(CASE WHEN g.status = 1 THEN 1 END) AS active
         FROM goods g JOIN spu p ON p.id = g.spu_id
-        WHERE g.catalog_status IN ('ACTIVE', 'DRAFT')
         GROUP BY g.series_id, p.id, p.name, p.edition ORDER BY g.series_id, p.name, p.edition, p.id
         """)
     List<ModelCount> modelCounts();
 
-    @Select(
-            "SELECT DISTINCT ram, rom FROM goods WHERE catalog_status IN ('ACTIVE', 'DRAFT') ORDER BY ram, rom")
+    @Select("SELECT DISTINCT ram, rom FROM goods ORDER BY ram, rom")
     List<Memory> configurations();
 
     record SeriesCount(
@@ -200,5 +236,5 @@ public interface CatalogGoodsMapper {
 
     record Model(long id, long seriesId, String seriesName) {}
 
-    record Match(long id, String catalogStatus, Integer status) {}
+    record Match(long id, Integer status) {}
 }

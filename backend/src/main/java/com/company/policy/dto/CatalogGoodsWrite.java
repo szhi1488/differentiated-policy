@@ -7,7 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
-public record CatalogGoodsCreate(
+public record CatalogGoodsWrite(
         @NotBlank @Size(max = 384) String name,
         @NotNull @Positive Long brandId,
         @NotNull @Positive Long seriesId,
@@ -16,4 +16,4 @@ public record CatalogGoodsCreate(
         @NotBlank @Size(max = 20) String ram,
         @NotBlank @Size(max = 20) String rom,
         @NotNull @Positive Long colorId,
-        @NotNull @Min(1) @Max(4) Integer status) {}
+        @Min(1) @Max(4) Integer status) {}

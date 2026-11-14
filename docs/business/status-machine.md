@@ -41,7 +41,7 @@ stateDiagram-v2
 | 日志 `submission_version` | 指向该提交轮次 |
 | `submission_snapshot` | 提交/重提保存完整主表与明细，不含凭证 |
 
-快照含平台、机型 ID、RAM 和 ROM、品牌系列型号配置、colorScope、指定商品 ID/颜色名称、数量、补贴、时间、备注和附件链接，提交后不可改写。正式提交校验配置可选，指定颜色时还须确认商品属于该配置且为 ACTIVE。ALL_COLORS 的商品 ID 和颜色名称为空，范围由 colorScope 明确表示。待审、通过版本必须可追溯，不能只留最近主表字段。
+快照含平台、机型 ID、RAM 和 ROM、品牌系列型号配置、colorScope、指定商品 ID/颜色名称、数量、补贴、时间、备注和附件链接，提交后不可改写。正式提交校验配置可选，指定颜色时还须确认商品存在且属于该配置。ALL_COLORS 的商品 ID 和颜色名称为空，范围由 colorScope 明确表示。待审、通过版本必须可追溯，不能只留最近主表字段。
 
 动作沿用 SQL：`CREATE_DRAFT`、`UPDATE_DRAFT`、`SUBMIT`、`RESUBMIT`、`APPROVE`、`REJECT`。修改拒绝申请记录 `UPDATE_DRAFT`，前后状态均 `REJECTED`。
 

@@ -14,11 +14,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
-import org.springframework.dao.DataAccessException;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -102,12 +100,6 @@ public class GoodsSyncController {
             HttpServletRequest request) {
         return service.sources(
                 sessions.requireLogin(request).user(), brandName, keyword, createdDate, page, size);
-    }
-
-    @ExceptionHandler({DataAccessException.class, TransactionException.class})
-    ResponseEntity<ApiError> storageUnavailable() {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ApiError("CATALOG_STORAGE_UNAVAILABLE", "源商品库暂不可用，请检查数据库连接和九表建表版本。"));
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)

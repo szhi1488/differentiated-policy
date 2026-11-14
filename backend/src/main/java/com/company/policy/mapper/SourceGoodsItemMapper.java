@@ -131,15 +131,6 @@ public interface SourceGoodsItemMapper {
 
     @Insert(
             """
-        INSERT INTO catalog_operation_log
-          (actor_type, entity_type, entity_id, action_type, batch_key, before_data, after_data, reason)
-        VALUES ('SYSTEM', 'SOURCE_GOODS_ITEM', #{id}, 'UPDATE',
-          #{batchKey}, #{before}, #{after}, '吉客云 SKU 来源字段更新。')
-        """)
-    int auditUpdate(long id, String batchKey, String before, String after);
-
-    @Insert(
-            """
         <script>
         INSERT INTO catalog_operation_log
           (actor_type, entity_type, entity_id, action_type, batch_key, reason)
