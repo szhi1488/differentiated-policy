@@ -15,7 +15,7 @@ public interface CatalogDictionaryMapper {
     String MODEL_IN_USE =
             """
         (EXISTS (SELECT 1 FROM goods g WHERE g.spu_id = spu.id)
-         OR EXISTS (SELECT 1 FROM policy_detail d WHERE d.spu_id = spu.id))
+         OR EXISTS (SELECT 1 FROM policy_goods_detail d WHERE d.spu_id = spu.id))
         """;
 
     @Select(

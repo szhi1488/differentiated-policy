@@ -70,35 +70,277 @@
 .workspace .section-heading h2 {
   margin-bottom: 0;
 }
-.workspace .section-description {
+.policy-goods-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: var(--el-text-color-secondary);
-  margin-bottom: 18px;
-  line-height: 1.7;
+  margin-bottom: 14px;
 }
-.workspace .platform-detail-nav .el-tag {
-  margin-left: 6px;
-}
-.workspace .details-table {
-  --el-table-header-bg-color: #f5f7fc;
-}
-.workspace .details-table .el-table__empty-text {
-  width: 100%;
-  line-height: 1.6;
-}
-.workspace .subsidy-inputs {
-  display: grid;
+.policy-goods-actions,
+.policy-model-list {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 4px 0;
 }
-.workspace .subsidy-inputs label {
+.policy-goods-actions > .el-button + .el-button {
+  margin-left: 0;
+}
+.policy-model-list {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 14px;
+}
+.policy-model-empty {
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+  padding: 22px 12px;
+}
+.policy-model-card {
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.policy-model-header,
+.policy-subsidy-heading,
+.policy-subsidy-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.policy-model-header {
+  justify-content: flex-start;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  background: #f3f7ff;
+}
+.policy-model-header > .el-button {
+  margin-left: auto;
+}
+.policy-model-header h3,
+.policy-subsidy-heading h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.policy-model-fields {
+  padding: 16px;
+}
+.policy-model-summary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.6fr);
+  gap: 12px;
+  margin: 0;
+}
+.policy-model-summary-row + .policy-model-summary-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.policy-model-fields dt {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+.policy-model-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.policy-model-fields .policy-model-configs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.policy-model-configs .el-tag {
+  height: auto;
+  min-height: 24px;
+  max-width: 100%;
+  padding-block: 3px;
+  white-space: normal;
+}
+.policy-model-configs .el-tag__content {
+  min-width: 0;
+  line-height: 1.4;
+}
+.policy-goods-picker .el-drawer__header {
+  margin-bottom: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+.policy-goods-picker .el-drawer__title {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+.policy-goods-picker .el-drawer__footer {
+  border-top: 1px solid var(--el-border-color-light);
+  padding-top: 14px;
+}
+.policy-picker-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.policy-picker-summary,
+.policy-picker-footer {
+  display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  white-space: nowrap;
+  color: var(--el-text-color-secondary);
 }
-.workspace .subsidy-inputs .el-input-group__append {
+.policy-picker-summary {
+  justify-content: space-between;
+  margin: 16px 0 10px;
+}
+.policy-picker-footer > span {
+  margin-right: auto;
+}
+.policy-picker-footer > .el-button + .el-button {
+  margin-left: 0;
+}
+.policy-goods-picker .policy-picker-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+.policy-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+}
+.policy-picker-row.is-selected {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+.policy-picker-row :is(.el-checkbox, .el-radio) {
+  height: auto;
+  margin: 0;
+  white-space: normal;
+  min-width: 0;
+}
+.policy-picker-row :is(.el-checkbox__label, .el-radio__label) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.policy-picker-spec {
+  color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.policy-model-rules {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  border-top: 1px solid var(--el-border-color-light);
+}
+.policy-platform-panel,
+.policy-subsidy-panel {
+  min-width: 0;
+  padding: 16px;
+}
+.policy-subsidy-panel {
+  border-left: 1px solid var(--el-border-color-light);
+  background: var(--el-fill-color-extra-light);
+}
+.policy-model-platforms,
+.policy-subsidy-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.policy-model-platforms .el-checkbox {
+  margin-right: 6px;
+}
+.policy-platform-heading,
+.policy-platform-actions,
+.policy-applicable-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.policy-platform-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.policy-platform-heading h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.policy-platform-actions .el-button + .el-button {
+  margin-left: 0;
+}
+.policy-platform-editor {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+}
+.policy-platform-rows {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.policy-platform-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: end;
+  gap: 8px 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding-top: 8px;
+}
+.policy-platform-row strong {
+  align-self: end;
+  line-height: 32px;
+  font-size: 13px;
+}
+.policy-platform-row--with-scheme {
+  grid-template-columns: 56px repeat(2, minmax(0, 1fr));
+}
+.policy-subsidy-heading {
+  margin-bottom: 8px;
+}
+.policy-subsidy {
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+}
+.policy-subsidy + .policy-subsidy {
+  margin-top: 8px;
+}
+.policy-subsidy-meta {
+  justify-content: flex-start;
+  font-size: 12px;
+}
+.policy-subsidy-meta > .el-button {
+  margin-left: auto;
+}
+.policy-subsidy-meta > strong {
+  color: var(--el-color-primary);
+}
+.policy-subsidy-platforms > span:not(.el-tag),
+.policy-detail-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.policy-detail-hint {
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.policy-subsidy-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.policy-subsidy-fields .el-input-group__append {
   padding: 0 10px;
 }
 .workspace .policy-form .el-upload {
@@ -150,6 +392,16 @@
   }
 }
 @media (max-width: 1100px) {
+  .policy-model-rules {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .policy-subsidy-panel {
+    border-top: 1px solid var(--el-border-color-light);
+    border-left: 0;
+  }
+  .policy-model-summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .workspace .two-columns {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -173,6 +425,34 @@
   }
 }
 @media (max-width: 520px) {
+  .policy-picker-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .policy-picker-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 8px;
+  }
+  .policy-picker-row > .el-tag {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .policy-picker-spec {
+    grid-column: 1 / -1;
+    padding-left: 22px;
+    font-size: 12px;
+  }
+  .policy-model-header,
+  .policy-model-fields,
+  .policy-platform-panel,
+  .policy-subsidy-panel {
+    padding-inline: 12px;
+  }
+  .policy-subsidy-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .policy-subsidy-fields > .el-form-item:first-child {
+    grid-column: 1 / -1;
+  }
   .workspace .policy-form .el-date-editor--datetimerange {
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr) 18px;
@@ -247,4 +527,18 @@
   .workspace .form-actions > span {
     display: none;
   }
+}
+
+.policy-goods-picker .policy-picker-search {
+  width: min(260px, 62%);
+}
+
+.policy-goods-picker .policy-picker-pagination {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.policy-goods-picker .policy-picker-error {
+  color: var(--el-color-danger);
+  padding: 8px 0;
 }

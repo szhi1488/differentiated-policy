@@ -8,13 +8,13 @@
 
 当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`。管理员可在「商品 → 源商品库」分别导入 OPPO、一加，查询当前 SKU 原文、完整分类路径和修改时间，或在「商品 → 商品清洗与识别」启动清洗并处理异常。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。[管理员工作台](docs/architecture/admin-workspace.md)
 
-已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。商品管理接口已接入十四表基线，政策提交和审核接口待接入。
+已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。商品管理与政策申请接口使用十四表基线。提交政策页已接入在售目录、草稿、回填和提交。「我的提交」已接入本人分页列表、详情和历轮审核，草稿和已驳回申请可继续编辑提交。管理员审核待接入。
 
 后端包结构约定：`controller` 接收请求，`dto` 定义请求对象，`vo` 定义响应对象，`entity` 映射数据库，`mapper` 执行持久化操作。服务接口放在 `service`，对应实现放在 `service.impl` 并命名为 `接口名Impl`；Controller 和服务之间通过接口注入，组件及事务注解放在实现类。`common.config` 负责配置注册，`common.interceptor` 承担登录态与请求来源校验。登录 challenge 响应独立为 `LoginChallengeResponse`。
 
 前端目录约定：`api/request.js` 负责公共请求、超时和错误处理，其他 `api/` 模块定义业务接口；`constants/` 放固定选项，`composables/` 管理表单状态与交互，`utils/` 放纯函数。申请人工作台负责布局，表单、明细表格等拆分在 `views/apply/components/`；通用组件放在 `components/`。列表使用稳定标识，组件通过 props / emit 或 v-model 交互。
 
-前端已引入 Element Plus，组件和样式由 unplugin-vue-components 按需导入，统一中文语言；申请工作台登录后延迟加载。表单、日期范围、明细表格、平台页签、附件选择、按钮、提示和确认框使用组件库，自定义 CSS 负责业务布局与响应式适配。附件选择仍仅暂存页面，政策提交仍提示尚未接入。
+前端已引入 Element Plus，组件和样式由 unplugin-vue-components 按需导入，统一中文语言；申请工作台登录后延迟加载。表单、日期范围、明细表格、平台页签、附件选择、按钮、提示和确认框使用组件库，自定义 CSS 负责业务布局与响应式适配。附件文件仅暂存页面。
 
 源码说明性注释使用中文。根目录 `.editorconfig` 统一编码和缩进；前端通过 ESLint / Prettier 检查未使用变量、控制语句、Vue 组件和格式，后端通过 Spotless 统一 Java 导入与格式。日常检查和格式修复命令见下文。
 
@@ -100,7 +100,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 前端开发从 [frontend/README.md](frontend/README.md) 进入，目录职责、组件数据流、接口模型、会话路由、样式及整改验收见[前端架构与开发规范](docs/architecture/frontend-development.md)。前三阶段适用整改已实施，管理员商品链路已接入，政策业务接口待完成；当前能力以源码和整体架构的实现记录为准。
 
-九张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
+十四张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 
 用户已确认目标库空表重建，由用户在 Navicat 执行。商品导入和清洗已接入持久化。建表脚本仅恢复结构，旧用户、商品和政策记录须通过备份恢复或重新导入。
 

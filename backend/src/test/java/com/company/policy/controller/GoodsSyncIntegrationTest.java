@@ -26,6 +26,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -108,8 +111,9 @@ class GoodsSyncIntegrationTest {
                     .matches(
                             "(?i).*[\\\\/]\\.local-cache[\\\\/]catalog-import-mysql-[0-9]+[\\\\/]data[\\\\/]");
         }
-        jdbc.update("DELETE FROM policy_detail");
-        jdbc.update("DELETE FROM policy_master");
+        jdbc.update("DELETE FROM policy_goods_detail");
+        jdbc.update("DELETE FROM policy_audit_log");
+        jdbc.update("DELETE FROM policy_apply");
         jdbc.update("DELETE FROM catalog_operation_log");
         jdbc.update("DELETE FROM catalog_clean_job_item");
         jdbc.update("DELETE FROM source_goods_item");
@@ -911,22 +915,8 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(true)));
         mvc.perform(rename).andExpect(status().isConflict());
         mvc.perform(remove).andExpect(status().isConflict());
-        mvc.perform(deleteGoods(GOODS + "/" + item.path("id").asText()))
-                .andExpect(status().isNoContent());
-
-        jdbc.update(
-                """
-                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
-                SELECT tenant_key, 'SERIES-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
-                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
-                """);
-        jdbc.update(
-                """
-                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
-                SELECT id, 'JD', ?, '16GB', '256GB', 'ALL_COLORS'
-                FROM policy_master WHERE policy_code = 'SERIES-QA'
-                """,
-                modelId);
+        String goodsId = item.path("id").asText();
+        referenceGoods("SERIES-QA", goodsId);
         mvc.perform(get(dictionary).session(admin))
                 .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(true)));
         mvc.perform(rename).andExpect(status().isConflict());
@@ -938,7 +928,8 @@ class GoodsSyncIntegrationTest {
                                 "SELECT COUNT(*) FROM spu WHERE id=?", Integer.class, modelId))
                 .isOne();
 
-        jdbc.update("DELETE FROM policy_detail WHERE spu_id=?", modelId);
+        jdbc.update("DELETE FROM policy_goods_detail WHERE spu_id=?", modelId);
+        mvc.perform(deleteGoods(GOODS + "/" + goodsId)).andExpect(status().isNoContent());
         mvc.perform(get(dictionary).session(admin))
                 .andExpect(jsonPath(usage, org.hamcrest.Matchers.contains(false)));
         mvc.perform(rename).andExpect(status().isNoContent());
@@ -1156,29 +1147,10 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CATALOG_GOODS_DUPLICATE"));
 
-        jdbc.update(
-                """
-                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
-                SELECT tenant_key, 'EDIT-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
-                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
-                """);
-        long policy =
-                jdbc.queryForObject(
-                        "SELECT id FROM policy_master WHERE policy_code='EDIT-QA'", Long.class);
-        jdbc.update(
-                """
-                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
-                SELECT ?, 'JD', spu_id, ram, rom, 'ALL_COLORS' FROM goods WHERE id=?
-                """,
-                policy,
-                id);
+        referenceGoods("EDIT-QA", id);
         mvc.perform(putGoods(path, edit))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
-        jdbc.update(
-                "UPDATE policy_detail SET goods_id=?, color_scope='SPECIFIC_COLOR', color='星耀黑' WHERE policy_id=?",
-                id,
-                policy);
         jdbc.update("INSERT INTO color_dict (color_name) VALUES ('白色')");
         String white =
                 jdbc.queryForObject(
@@ -1294,29 +1266,449 @@ class GoodsSyncIntegrationTest {
                         .andReturn();
         String id =
                 json.readTree(created.getResponse().getContentAsByteArray()).path("id").asText();
-        jdbc.update(
-                """
-                INSERT INTO policy_master (tenant_key, policy_code, applicant_id, perspective, channel_type)
-                SELECT tenant_key, 'DELETE-QA', id, 'RETAIL', 'RETAIL_CHANNEL' FROM user_info
-                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
-                """);
-        jdbc.update(
-                """
-                INSERT INTO policy_detail (policy_id, platform_code, spu_id, ram, rom, color_scope)
-                SELECT m.id, 'JD', g.spu_id, g.ram, g.rom, 'ALL_COLORS'
-                FROM policy_master m CROSS JOIN goods g WHERE m.policy_code = 'DELETE-QA' AND g.id = ?
-                """,
-                id);
-        mvc.perform(deleteGoods(GOODS + "/" + id))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
-        jdbc.update(
-                "UPDATE policy_detail SET goods_id=?, color_scope='SPECIFIC_COLOR', color='星耀黑'",
-                id);
+        referenceGoods("DELETE-QA", id);
         mvc.perform(deleteGoods(GOODS + "/" + id))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CATALOG_GOODS_POLICY_BOUND"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isEqualTo(2);
+    }
+
+    @Test
+    void applicantSubmitsOnlySavedGoodsAndFreezesTheirNames() throws Exception {
+        var imported = importedGoodForEditing();
+        String blackId = imported.path("id").asText();
+        String spu = imported.path("spuId").asText();
+        jdbc.update("INSERT INTO color_dict (color_name) VALUES ('白色'), ('蓝色')");
+        var product = (ObjectNode) editBody(imported).path("product");
+        var white =
+                mvc.perform(
+                                mutation(GOODS)
+                                        .content(
+                                                product.deepCopy()
+                                                        .put(
+                                                                "colorId",
+                                                                jdbc.queryForObject(
+                                                                        "SELECT id FROM color_dict WHERE color_name='白色'",
+                                                                        String.class))
+                                                        .toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        String whiteId =
+                json.readTree(white.getResponse().getContentAsByteArray()).path("id").asText();
+        mvc.perform(
+                        mutation(GOODS)
+                                .content(
+                                        product.deepCopy()
+                                                .put(
+                                                        "colorId",
+                                                        jdbc.queryForObject(
+                                                                "SELECT id FROM color_dict WHERE color_name='蓝色'",
+                                                                String.class))
+                                                .put("status", 2)
+                                                .toString()))
+                .andExpect(status().isCreated());
+        var owner = session("test-tenant", "policy-owner", "APPLICANT");
+        var other = session("test-tenant", "policy-other", "APPLICANT");
+        var external = session("other-tenant", "policy-external", "APPLICANT");
+        String policies = "/api/policies";
+
+        mvc.perform(get("/api/catalog/options").session(owner).param("spuId", spu))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configurations.length()").value(1))
+                .andExpect(jsonPath("$.configurations[0].spuId").value(spu));
+        mvc.perform(get("/api/catalog/goods").session(external)).andExpect(status().isForbidden());
+        mvc.perform(
+                        get("/api/catalog/goods")
+                                .session(owner)
+                                .param("spuId", spu)
+                                .param("ram", "16GB")
+                                .param("rom", "512GB")
+                                .param("page", "2")
+                                .param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[0].goodsId").value(whiteId))
+                .andExpect(jsonPath("$.items[0].sourceSkuId").doesNotExist());
+
+        mvc.perform(mutation(GOODS).content(product.deepCopy().put("rom", "256GB").toString()))
+                .andExpect(status().isCreated());
+        mvc.perform(
+                        get("/api/catalog/goods")
+                                .session(owner)
+                                .param("configuration", spu + "/16GB/512GB", spu + "/16GB/256GB")
+                                .param("keyword", "Find X8")
+                                .param("page", "2")
+                                .param("size", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].rom").value("256GB"));
+        mvc.perform(
+                        get("/api/catalog/goods")
+                                .session(owner)
+                                .param("configuration", spu + "/16GB", spu + "/16GB/256GB"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CATALOG_INVALID_FILTER"));
+
+        String key = UUID.randomUUID().toString();
+        String incomplete =
+                """
+                {"perspective":"RETAIL","selectedPlatforms":["JD"]}
+                """;
+        var saved =
+                mvc.perform(
+                                policyRequest(post(policies + "/drafts"), owner)
+                                        .header("Idempotency-Key", key)
+                                        .content(incomplete))
+                        .andExpect(status().isCreated())
+                        .andExpect(jsonPath("$.recordVersion").value(1))
+                        .andReturn();
+        String id = json.readTree(saved.getResponse().getContentAsByteArray()).path("id").asText();
+        String path = policies + "/" + id;
+        mvc.perform(
+                        policyRequest(post(policies + "/drafts"), owner)
+                                .header("Idempotency-Key", key)
+                                .content(incomplete))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(id));
+        mvc.perform(get(path).session(other)).andExpect(status().isNotFound());
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":1}"))
+                .andExpect(status().isBadRequest());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_audit_log", Integer.class))
+                .isZero();
+
+        String full =
+                """
+                {"recordVersion":1,"perspective":"RETAIL","selectedPlatforms":["JD","PDD"],
+                "verifyType":"SALES","sceneType":"NATIONAL_SUB","estimated":false,
+                "startTime":"2026-11-10T09:00:00+08:00","endTime":"2026-11-20T18:00:00+08:00",
+                "goodsForm":{"cards":[{"key":"common","cardType":"COMMON","followsOrderPlatforms":true,
+                "targets":[{"goodsId":"%s","spuId":"%s","ram":"16GB","rom":"512GB"}],
+                "subsidyPlans":[{"key":"fixed","subsidyMode":"FIXED","fixedAmount":"0.10"}],
+                "platformAssignments":[{"platformCode":"JD","planKey":"fixed"},{"platformCode":"PDD","planKey":"fixed"}]}]}}
+                """
+                        .formatted(blackId, spu);
+        mvc.perform(policyRequest(put(path + "/draft"), owner).content(full))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recordVersion").value(2));
+        mvc.perform(policyRequest(put(path + "/draft"), owner).content(full))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_VERSION_CONFLICT"));
+        mvc.perform(get(path).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.form.startTime").value("2026-11-10T09:00:00+08:00"))
+                .andExpect(jsonPath("$.form.goodsForm.cards[0].targets[0].goodsId").value(blackId));
+        jdbc.update("UPDATE goods SET status = 3 WHERE id = ?", blackId);
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_GOODS_CHANGED"));
+        assertThat(jdbc.queryForObject("SELECT status FROM policy_apply", String.class))
+                .isEqualTo("DRAFT");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_audit_log", Integer.class))
+                .isZero();
+        jdbc.update("UPDATE goods SET status = 1 WHERE id = ?", blackId);
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.submissionVersion").value(1));
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+                .andExpect(status().isConflict());
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT goods_id FROM policy_goods_detail ORDER BY platform_code",
+                                String.class))
+                .containsExactly(blackId, blackId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_audit_log", Integer.class))
+                .isOne();
+        mvc.perform(deleteGoods(GOODS + "/" + whiteId)).andExpect(status().isNoContent());
+        jdbc.update("UPDATE goods SET goods_name = '修改后的名称' WHERE id = ?", blackId);
+        mvc.perform(get(path).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.goods.length()").value(1))
+                .andExpect(jsonPath("$.goods[0].goodsId").value(blackId))
+                .andExpect(
+                        jsonPath("$.goods[0].goodsName")
+                                .value(imported.path("goodsName").asText()));
+    }
+
+    @Test
+    void listsOnlyOwnedPoliciesWithServerSideFiltersAndStablePagination() throws Exception {
+        var owner = session("test-tenant", "mine-owner", "APPLICANT");
+        var other = session("test-tenant", "mine-other", "APPLICANT");
+        var external = session("other-tenant", "mine-external", "APPLICANT");
+        String base = "/api/policies";
+        String retail = "{\"perspective\":\"RETAIL\",\"selectedPlatforms\":[\"JD\",\"PDD\"]}";
+        String billion = "{\"perspective\":\"BILLION\",\"selectedPlatforms\":[\"PDD\"]}";
+        String first = createPolicy(owner, retail).path("id").asText();
+        String newest = createPolicy(owner, billion).path("id").asText();
+        String deleted = createPolicy(owner, retail).path("id").asText();
+        createPolicy(other, retail);
+        jdbc.update("UPDATE policy_apply SET is_deleted = 1 WHERE id = ?", deleted);
+        jdbc.update("UPDATE policy_apply SET created_at = '2026-11-14 10:00:00'");
+
+        mvc.perform(get(base + "/mine").session(owner).param("pageSize", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.pageSize").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(newest))
+                .andExpect(jsonPath("$.items[0].createdAt").value("2026-11-14T10:00:00+08:00"));
+        mvc.perform(get(base + "/mine").session(owner).param("pageSize", "1").param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(first));
+        mvc.perform(
+                        get(base + "/mine")
+                                .session(owner)
+                                .param("status", "DRAFT")
+                                .param("perspective", "RETAIL")
+                                .param("platformCode", "JD"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(first))
+                .andExpect(jsonPath("$.items[0].selectedPlatforms[1]").value("PDD"));
+        mvc.perform(get(base + "/mine").session(owner).param("status", "APPROVED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isEmpty());
+        mvc.perform(get(base + "/mine").session(owner).param("status", "INVALID"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("POLICY_VALIDATION_FAILED"));
+        mvc.perform(get(base + "/mine").session(owner).param("pageSize", "101"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(base + "/mine").session(external)).andExpect(status().isForbidden());
+        mvc.perform(get(base + "/mine").session(admin)).andExpect(status().isForbidden());
+        mvc.perform(get(base + "/mine")).andExpect(status().isUnauthorized());
+        mvc.perform(get(base + "/" + deleted + "/audit-logs").session(owner))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(base + "/" + first + "/audit-logs").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isEmpty());
+    }
+
+    @Test
+    void rejectedPolicyResubmitsUnderOriginalIdAndPreservesEachAuditSnapshot() throws Exception {
+        var good = importedGoodForEditing();
+        var owner = session("test-tenant", "resubmit-owner", "APPLICANT");
+        var other = session("test-tenant", "resubmit-other", "APPLICANT");
+        var external = session("other-tenant", "resubmit-external", "APPLICANT");
+        String full =
+                """
+                {"perspective":"BILLION","selectedPlatforms":["PDD"],"specialRemark":"首轮说明",
+                "startTime":"2026-11-10T09:00:00+08:00","endTime":"2026-11-20T18:00:00+08:00",
+                "goodsForm":{"cards":[{"key":"common","cardType":"COMMON","followsOrderPlatforms":true,
+                "targets":[{"goodsId":"%s","spuId":"%s","ram":"%s","rom":"%s"}],
+                "subsidyPlans":[{"key":"fixed","subsidyMode":"FIXED","fixedAmount":"0.10"}],
+                "platformAssignments":[{"platformCode":"PDD","planKey":"fixed"}]}]}}
+                """
+                        .formatted(
+                                good.path("id").asText(), good.path("spuId").asText(),
+                                good.path("ram").asText(), good.path("rom").asText());
+        var created = createPolicy(owner, full);
+        String id = created.path("id").asText();
+        String path = "/api/policies/" + id;
+        String logs = path + "/audit-logs";
+        String otherId = createPolicy(owner, full).path("id").asText();
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":1}"))
+                .andExpect(status().isOk());
+        String oldLog =
+                jdbc.queryForObject(
+                        "SELECT id FROM policy_audit_log WHERE policy_id=?", String.class, id);
+        long adminId =
+                jdbc.queryForObject(
+                        "SELECT id FROM user_info WHERE tenant_key='test-tenant' AND open_id='admin'",
+                        Long.class);
+        // 在隔离测试库准备审核结果，审核写入接口另行交付。
+        jdbc.update(
+                """
+                UPDATE policy_audit_log SET audit_status='REJECTED', auditor_id=?, auditor_name='采购审核人',
+                audit_comment='请补充说明', audit_time='2026-11-14 11:20:30' WHERE id=?
+                """,
+                adminId,
+                oldLog);
+        jdbc.update("UPDATE policy_apply SET status='REJECTED', record_version=3 WHERE id=?", id);
+        jdbc.update("UPDATE goods SET goods_name='第二轮商品名称' WHERE id=?", good.path("id").asText());
+
+        mvc.perform(get(path).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.recordVersion").value(3))
+                .andExpect(jsonPath("$.goods[0].goodsName").value("第二轮商品名称"));
+        String edited =
+                ((ObjectNode) json.readTree(full))
+                        .put("recordVersion", 3)
+                        .put("specialRemark", "补充后的说明")
+                        .toString();
+        mvc.perform(policyRequest(put(path + "/draft"), owner).content(edited))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.recordVersion").value(4));
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policyCode").value(created.path("policyCode").asText()))
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.submissionVersion").value(2));
+        mvc.perform(get(path).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.form.specialRemark").value("补充后的说明"));
+        mvc.perform(get(logs).session(owner).param("pageSize", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(2))
+                .andExpect(jsonPath("$.items[0].auditStatus").value("SUBMITTED"))
+                .andExpect(jsonPath("$.items[0].auditorName").isEmpty())
+                .andExpect(jsonPath("$.items[0].snapshot").doesNotExist());
+        mvc.perform(get(logs).session(owner).param("pageSize", "1").param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(oldLog))
+                .andExpect(jsonPath("$.items[0].auditComment").value("请补充说明"));
+        mvc.perform(get(logs + "/" + oldLog).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.log.auditTime").value("2026-11-14T11:20:30+08:00"))
+                .andExpect(jsonPath("$.log.auditorName").value("采购审核人"))
+                .andExpect(jsonPath("$.snapshot.form.specialRemark").value("首轮说明"))
+                .andExpect(
+                        jsonPath("$.snapshot.goods[0].goodsName")
+                                .value(good.path("goodsName").asText()));
+        mvc.perform(get(logs).session(other)).andExpect(status().isNotFound());
+        mvc.perform(get(logs + "/" + oldLog).session(other)).andExpect(status().isNotFound());
+        mvc.perform(get(logs + "/" + oldLog).session(external)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/policies/" + otherId + "/audit-logs/" + oldLog).session(owner))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("POLICY_AUDIT_NOT_FOUND"));
+    }
+
+    private JsonNode createPolicy(MockHttpSession owner, String form) throws Exception {
+        var result =
+                mvc.perform(policyRequest(post("/api/policies/drafts"), owner).content(form))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        return json.readTree(result.getResponse().getContentAsByteArray());
+    }
+
+    @Test
+    void submittingAndDeletingTheSameProductCannotBothSucceed() throws Exception {
+        var imported = importedGoodForEditing();
+        var product = ((ObjectNode) editBody(imported).path("product")).put("rom", "256GB");
+        var created =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var selected = json.readTree(created.getResponse().getContentAsByteArray());
+        String goodsId = selected.path("id").asText();
+        var owner = session("test-tenant", "policy-race", "APPLICANT");
+        String full =
+                """
+                {"perspective":"BILLION","selectedPlatforms":["PDD"],
+                "startTime":"2026-11-10T09:00:00+08:00","endTime":"2026-11-20T18:00:00+08:00",
+                "goodsForm":{"cards":[{"key":"specified","cardType":"SPECIFIED","followsOrderPlatforms":true,
+                "targets":[{"goodsId":"%s","spuId":"%s","ram":"16GB","rom":"256GB"}],
+                "subsidyPlans":[{"key":"ratio","subsidyMode":"RATIO","ratio":"9.25","priceBase":"POLICY_PRICE"}],
+                "platformAssignments":[{"platformCode":"PDD","planKey":"ratio","quantity":null}]}]}}
+                """
+                        .formatted(goodsId, selected.path("spuId").asText());
+        var saved =
+                mvc.perform(policyRequest(post("/api/policies/drafts"), owner).content(full))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        String id = json.readTree(saved.getResponse().getContentAsByteArray()).path("id").asText();
+
+        var executor = Executors.newFixedThreadPool(2);
+        var start = new CountDownLatch(1);
+        try {
+            var submit =
+                    executor.submit(
+                            () -> {
+                                start.await();
+                                return mvc.perform(
+                                                policyRequest(
+                                                                post(
+                                                                        "/api/policies/"
+                                                                                + id
+                                                                                + "/submit"),
+                                                                owner)
+                                                        .content("{\"recordVersion\":1}"))
+                                        .andReturn()
+                                        .getResponse()
+                                        .getStatus();
+                            });
+            var delete =
+                    executor.submit(
+                            () -> {
+                                start.await();
+                                return mvc.perform(deleteGoods(GOODS + "/" + goodsId))
+                                        .andReturn()
+                                        .getResponse()
+                                        .getStatus();
+                            });
+            start.countDown();
+            int submitted = submit.get(10, TimeUnit.SECONDS);
+            int deleted = delete.get(10, TimeUnit.SECONDS);
+            if (submitted == 200) {
+                assertThat(deleted).isEqualTo(409);
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT status FROM policy_apply WHERE id=?",
+                                        String.class,
+                                        id))
+                        .isEqualTo("PENDING");
+                assertThat(
+                                jdbc.queryForList(
+                                        "SELECT goods_id FROM policy_goods_detail", String.class))
+                        .containsExactly(goodsId);
+            } else {
+                assertThat(submitted).isEqualTo(409);
+                assertThat(deleted).isEqualTo(204);
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT status FROM policy_apply WHERE id=?",
+                                        String.class,
+                                        id))
+                        .isEqualTo("DRAFT");
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT COUNT(*) FROM policy_audit_log", Integer.class))
+                        .isZero();
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT COUNT(*) FROM policy_goods_detail", Integer.class))
+                        .isZero();
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private MockHttpServletRequestBuilder policyRequest(
+            MockHttpServletRequestBuilder request, MockHttpSession owner) {
+        return request.session(owner)
+                .header("Origin", "http://localhost:5173")
+                .header("X-Policy-Request", "1")
+                .contentType("application/json");
+    }
+
+    private void referenceGoods(String code, String goodsId) {
+        jdbc.update(
+                """
+                INSERT INTO policy_apply (tenant_key, policy_no, applicant_id, applicant_name,
+                    channel_type, status, current_version)
+                SELECT tenant_key, ?, id, name, 'RETAIL', 'PENDING', 1 FROM user_info
+                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
+                """,
+                code);
+        jdbc.update(
+                """
+                INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data)
+                SELECT id, tenant_key, 1, '{}' FROM policy_apply WHERE policy_no = ?
+                """,
+                code);
+        jdbc.update(
+                """
+                INSERT INTO policy_goods_detail (policy_id, version, platform_code, goods_id, spu_id, ram, rom)
+                SELECT p.id, 1, 'JD', g.id, g.spu_id, g.ram, g.rom
+                FROM policy_apply p CROSS JOIN goods g WHERE p.policy_no = ? AND g.id = ?
+                """,
+                code,
+                goodsId);
     }
 
     private MockHttpServletRequestBuilder deleteGoods(String path) {

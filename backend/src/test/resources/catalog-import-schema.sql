@@ -74,30 +74,115 @@ CREATE TABLE `goods` (
   CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4))
 );
 
--- 商品编辑测试所需的政策字段和引用键。
-CREATE TABLE `policy_master` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+CREATE ALIAS IF NOT EXISTS JSON_QUOTE FOR "com.company.policy.controller.PolicyJsonFunctions.quote";
+CREATE ALIAS IF NOT EXISTS JSON_CONTAINS FOR "com.company.policy.controller.PolicyJsonFunctions.contains";
+
+CREATE TABLE `policy_apply` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `policy_no` VARCHAR(32) NOT NULL,
   `tenant_key` VARCHAR(64) NOT NULL,
-  `policy_code` VARCHAR(64) NOT NULL UNIQUE,
   `applicant_id` BIGINT NOT NULL,
-  `perspective` VARCHAR(32) NOT NULL,
-  `channel_type` VARCHAR(32) NOT NULL,
-  FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`)
+  `applicant_name` VARCHAR(64) NOT NULL,
+  `channel_type` VARCHAR(20) NOT NULL,
+  `platforms` TEXT DEFAULT NULL,
+  `write_off_type` VARCHAR(20) DEFAULT NULL,
+  `scene` VARCHAR(20) DEFAULT NULL,
+  `is_estimated` TINYINT DEFAULT NULL,
+  `start_time` DATETIME DEFAULT NULL,
+  `end_time` DATETIME DEFAULT NULL,
+  `remark` TEXT,
+  `other_desc` TEXT,
+  `goods_form_json` TEXT DEFAULT NULL,
+  `attachment_urls` TEXT DEFAULT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+  `current_version` INT NOT NULL DEFAULT 0,
+  `record_version` INT NOT NULL DEFAULT 1,
+  `is_deleted` TINYINT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_apply_policy_no` (`policy_no`),
+  UNIQUE KEY `uk_apply_tenant_binding` (`id`, `tenant_key`),
+  KEY `idx_apply_mine` (`applicant_id`, `tenant_key`, `is_deleted`, `created_at`, `id`),
+  KEY `idx_apply_status` (`tenant_key`, `is_deleted`, `status`, `created_at`, `id`),
+
+  CONSTRAINT `fk_apply_applicant`
+    FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_apply_channel` CHECK (`channel_type` IN ('RETAIL', 'BILLION')),
+  CONSTRAINT `ck_apply_retail_fields` CHECK (
+    (`write_off_type` IS NULL OR `write_off_type` IN ('SALES', 'ACTIVATION'))
+    AND (`scene` IS NULL OR `scene` IN ('NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB'))
+    AND (`is_estimated` IS NULL OR `is_estimated` IN (0, 1))
+    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene` IS NULL AND `is_estimated` IS NULL))
+  ),
+  CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`),
+  CONSTRAINT `ck_apply_status_version` CHECK (
+    (`status` = 'DRAFT' AND `current_version` = 0)
+    OR (`status` IN ('PENDING', 'APPROVED', 'REJECTED') AND `current_version` > 0)
+  ),
+  CONSTRAINT `ck_apply_deleted` CHECK (`is_deleted` IN (0, 1))
 );
 
-CREATE TABLE `policy_detail` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE `policy_audit_log` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
   `policy_id` BIGINT NOT NULL,
+  `tenant_key` VARCHAR(64) NOT NULL,
+  `version` INT NOT NULL,
+  `snapshot_data` TEXT NOT NULL,
+  `audit_status` VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED',
+  `auditor_id` BIGINT DEFAULT NULL,
+  `auditor_name` VARCHAR(64) DEFAULT NULL,
+  `audit_comment` VARCHAR(512) DEFAULT NULL,
+  `audit_time` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_policy_audit_round` (`policy_id`, `version`),
+  KEY `idx_policy_audit_tenant` (`policy_id`, `tenant_key`),
+  KEY `idx_policy_audit_auditor` (`auditor_id`, `tenant_key`),
+
+  CONSTRAINT `fk_policy_audit_apply`
+    FOREIGN KEY (`policy_id`, `tenant_key`) REFERENCES `policy_apply` (`id`, `tenant_key`),
+  CONSTRAINT `fk_policy_audit_user`
+    FOREIGN KEY (`auditor_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_policy_audit_snapshot` CHECK (`version` > 0),
+  CONSTRAINT `ck_policy_audit_result` CHECK (
+    (`audit_status` = 'SUBMITTED' AND `auditor_id` IS NULL AND `auditor_name` IS NULL
+      AND `audit_comment` IS NULL AND `audit_time` IS NULL)
+    OR (`audit_status` IN ('APPROVED', 'REJECTED') AND `auditor_id` IS NOT NULL
+      AND `auditor_name` IS NOT NULL AND `audit_time` IS NOT NULL)
+  )
+);
+
+CREATE TABLE `policy_goods_detail` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `policy_id` BIGINT NOT NULL,
+  `version` INT NOT NULL,
   `platform_code` VARCHAR(32) NOT NULL,
-  `spu_id` BIGINT,
-  `ram` VARCHAR(20),
-  `rom` VARCHAR(20),
-  `color_scope` VARCHAR(32),
-  `goods_id` BIGINT,
-  `color` VARCHAR(64),
-  FOREIGN KEY (`policy_id`) REFERENCES `policy_master` (`id`),
-  FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
-  FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`)
+  `spu_id` BIGINT NOT NULL,
+  `ram` VARCHAR(20) NOT NULL,
+  `rom` VARCHAR(20) NOT NULL,
+  `goods_id` BIGINT NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_policy_goods_round_platform` (`policy_id`, `version`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_config` (`spu_id`, `ram`, `rom`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_binding` (`goods_id`, `spu_id`, `ram`, `rom`),
+
+  CONSTRAINT `fk_policy_goods_round`
+    FOREIGN KEY (`policy_id`, `version`) REFERENCES `policy_audit_log` (`policy_id`, `version`),
+  CONSTRAINT `fk_policy_goods_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
+  CONSTRAINT `fk_policy_goods_sku`
+    FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`),
+  CONSTRAINT `ck_policy_goods_platform` CHECK (
+    `platform_code` IN ('KUAISHOU', 'PDD', 'JD', 'DOUYIN', 'TMALL', 'TAOBAO', 'ZHAOSHANG', 'DEWU', 'UNICOM', 'GOV_ENTERPRISE')
+  ),
+  CONSTRAINT `ck_policy_goods_memory` CHECK (
+    REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
+    AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
+  )
 );
 
 CREATE TABLE `goods_sync_job` (

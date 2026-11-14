@@ -10,6 +10,8 @@ import com.company.policy.entity.Spu;
 import com.company.policy.mapper.CatalogDictionaryMapper;
 import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.service.CatalogGoodsService;
+import com.company.policy.vo.ApplicantCatalogResponse;
+import com.company.policy.vo.ApplicantCatalogResponse.Options;
 import com.company.policy.vo.CatalogGoodsResponse;
 import com.company.policy.vo.CatalogGoodsResponse.Memory;
 import com.company.policy.vo.CatalogGoodsResponse.ModelCount;
@@ -18,6 +20,7 @@ import com.company.policy.vo.CatalogGoodsResponse.Summary;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
@@ -165,11 +168,8 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         if (target.brand() != current.brandId() && mapper.hasSourceMapping(current.id())) {
             throw conflict("CATALOG_GOODS_SOURCE_BOUND", "该商品已关联源商品，不能修改品牌。");
         }
-        if ((!target.matches(current) && mapper.hasPolicyGoodsReference(current.id()))
-                || (!target.matchesConfiguration(current)
-                        && mapper.hasPolicyConfigurationReference(
-                                current.spuId(), current.ram(), current.rom()))) {
-            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品或配置已被政策引用，不能修改已引用的规格或颜色。");
+        if (!target.matches(current) && mapper.hasPolicyGoodsReference(current.id())) {
+            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品已被政策引用，不能修改已引用的规格或颜色。");
         }
     }
 
@@ -196,11 +196,8 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         if (mapper.hasSourceMapping(id)) {
             throw conflict("CATALOG_GOODS_SOURCE_BOUND", "该商品已关联吉客云来源，无法删除。");
         }
-        var current = mapper.find(id);
-        if (mapper.hasPolicyGoodsReference(id)
-                || mapper.hasPolicyConfigurationReference(
-                        current.spuId(), current.ram(), current.rom())) {
-            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品或其配置已被政策引用，无法删除。");
+        if (mapper.hasPolicyGoodsReference(id)) {
+            throw conflict("CATALOG_GOODS_POLICY_BOUND", "该商品已被政策引用，无法删除。");
         }
         try {
             checkWrite(mapper.delete(id));
@@ -249,11 +246,78 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     public PageResponse<CatalogGoodsResponse> list(
             CurrentUserResponse session, CatalogGoodsQuery query) {
         access.requireAdmin(session);
+        var filters = filters(query);
+        var keywords = keywords(filters.keyword());
+        return new PageResponse<>(
+                mapper.page(filters, keywords, filters.size(), offset(filters), false).stream()
+                        .map(CatalogGoodsResponse::from)
+                        .toList(),
+                mapper.count(filters, keywords, false));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ApplicantCatalogResponse> onSale(
+            CurrentUserResponse session, CatalogGoodsQuery query) {
+        access.requireApplicant(session);
+        var filters =
+                filters(
+                        new CatalogGoodsQuery(
+                                null,
+                                null,
+                                null,
+                                query.keyword(),
+                                1,
+                                true,
+                                query.page(),
+                                query.size(),
+                                query.seriesId(),
+                                query.spuId(),
+                                query.ram(),
+                                query.rom(),
+                                query.brandId(),
+                                query.configurations()));
+        var keywords = keywords(filters.keyword());
+        return new PageResponse<>(
+                mapper.page(filters, keywords, filters.size(), offset(filters), true).stream()
+                        .map(ApplicantCatalogResponse::from)
+                        .toList(),
+                mapper.count(filters, keywords, true));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Options onSaleOptions(
+            CurrentUserResponse session, Long brandId, Long seriesId, Long spuId) {
+        access.requireApplicant(session);
+        if (invalidId(brandId) || invalidId(seriesId) || invalidId(spuId)) {
+            throw invalid();
+        }
+        return Options.from(mapper.onSaleConfigurations(), brandId, seriesId, spuId);
+    }
+
+    private static boolean invalidId(Long id) {
+        return id != null && id < 1;
+    }
+
+    private static long offset(CatalogGoodsQuery query) {
+        return (query.page() - 1L) * query.size();
+    }
+
+    private static CatalogGoodsQuery filters(CatalogGoodsQuery query) {
         if (query.page() < 1
                 || query.size() < 1
                 || query.size() > 100
-                || (query.seriesId() != null && query.seriesId() < 1)
-                || (query.spuId() != null && query.spuId() < 1)
+                || invalidId(query.brandId())
+                || invalidId(query.seriesId())
+                || invalidId(query.spuId())
+                || (!query.configurations().isEmpty() && query.ram() != null)
+                || query.configurations().stream()
+                        .anyMatch(
+                                config ->
+                                        config.spuId() < 1
+                                                || !MEMORY.matcher(config.ram()).matches()
+                                                || !MEMORY.matcher(config.rom()).matches())
                 || (query.ram() == null) != (query.rom() == null)
                 || (query.ram() != null
                         && (!MEMORY.matcher(query.ram()).matches()
@@ -261,32 +325,29 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                 || (query.status() != null && (query.status() < 1 || query.status() > 4))) {
             throw invalid();
         }
-        var keyword = CatalogText.normalize(search(query.keyword(), 128));
-        var keywords =
-                Arrays.stream(keyword.toLowerCase(Locale.ROOT).split(" "))
-                        .filter(term -> !term.isEmpty())
-                        .distinct()
-                        .toList();
-        var filters =
-                new CatalogGoodsQuery(
-                        search(query.brandName(), 50),
-                        search(query.seriesName(), 64),
-                        search(query.modelName(), 100),
-                        query.keyword(),
-                        query.status(),
-                        query.ascending(),
-                        query.page(),
-                        query.size(),
-                        query.seriesId(),
-                        query.spuId(),
-                        query.ram(),
-                        query.rom());
-        long offset = (filters.page() - 1L) * filters.size();
-        var items =
-                mapper.page(filters, keywords, filters.size(), offset).stream()
-                        .map(CatalogGoodsResponse::from)
-                        .toList();
-        return new PageResponse<>(items, mapper.count(filters, keywords));
+        return new CatalogGoodsQuery(
+                search(query.brandName(), 50),
+                search(query.seriesName(), 64),
+                search(query.modelName(), 100),
+                query.keyword(),
+                query.status(),
+                query.ascending(),
+                query.page(),
+                query.size(),
+                query.seriesId(),
+                query.spuId(),
+                query.ram(),
+                query.rom(),
+                query.brandId(),
+                query.configurations());
+    }
+
+    private static List<String> keywords(String value) {
+        var keyword = CatalogText.normalize(search(value, 128));
+        return Arrays.stream(keyword.toLowerCase(Locale.ROOT).split(" "))
+                .filter(term -> !term.isEmpty())
+                .distinct()
+                .toList();
     }
 
     @Override

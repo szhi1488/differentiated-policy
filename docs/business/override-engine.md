@@ -1,24 +1,10 @@
 # 覆盖提示与政策范围交集
 
-更新日期：2026-11-13。标准规格及颜色范围已确认；优先级、时间端点、正式替换和最新生效算法仍待确认，尚未实现。原按名称快照和 NULL 颜色精确分组的示例已撤下，避免与确认版范围表达冲突。
+更新日期：2026-11-14。适用商品按实际选中的商品 ID 确定。覆盖优先级、时间端点及最终生效规则待确认。
 
-## 1. 已确认的身份与颜色交集
+## 1. 商品范围交集
 
-政策按 tenant_key、渠道、平台、spu_id、ram、rom 定位范围，名称用于历史快照。不同型号或不同配置使用不同的机型配置键，不因颜色同名而重叠。
-
-同规格的颜色交集如下：
-
-| 新旧范围 | 是否有颜色交集 |
-| --- | --- |
-| ALL_COLORS 与 ALL_COLORS | 有，当前规格不限颜色 |
-| ALL_COLORS 与 SPECIFIC_COLOR | 有，指定的那个颜色 |
-| SPECIFIC_COLOR 与同一个 goods_id | 有，该颜色 |
-| SPECIFIC_COLOR 与不同 goods_id | 无 |
-| 任意范围未选择或指定颜色未补齐 | 草稿不完整，不能给确定结论 |
-
-ALL_COLORS 不使用颜色 NULL 推断，也不按当前颜色列表展开。政策提交后新增颜色是否自动适用既有不限颜色政策仍需确认；结构能表达不限颜色范围，但不能把目录新增颜色当作已确认的政策扩展或覆盖行为。
-
-指定颜色引用的商品必须属于当前配置，后端校验商品记录并生成快照。已提交政策按快照回读。同平台同申请的重复及不限/指定交集应在提交前提示整理；不同申请之间出现交集须在审核候选中展示。
+同一租户、渠道及平台下，按 `goods_id` 判断商品范围。普通卡和指定卡使用同一套匹配规则。同配置黑色与白色为不同商品，分别选中才各自适用。当前轮次同一平台重复选择同一商品时，提交前须提示整理。来自不同申请的同平台同商品进入覆盖候选。
 
 ## 2. 候选查询草案
 
@@ -26,48 +12,41 @@ ALL_COLORS 不使用颜色 NULL 推断，也不按当前颜色列表展开。政
 
 
 ```sql
-SELECT m.id AS policy_id, m.policy_code, m.status,
-       m.start_time, m.end_time, m.review_time,
+SELECT m.id AS policy_id, m.policy_no, m.status,
+       m.start_time, m.end_time, a.audit_time,
+       a.id AS audit_id, a.version,
        d.id AS detail_id, d.platform_code, d.spu_id, d.ram, d.rom,
-       d.color_scope, d.goods_id, d.color,
-       d.model_full_name, d.single_model, d.spec,
-       d.subsidy_mode, d.fixed_amount, d.max_subsidy_amount,
-       d.subsidy_ratio, d.base_price_type
-FROM policy_master m
-JOIN policy_detail d
-  ON d.policy_id = m.id
+       d.goods_id
+FROM policy_apply m
+JOIN policy_audit_log a
+  ON a.policy_id = m.id AND a.version = m.current_version
+JOIN policy_goods_detail d
+  ON d.policy_id = a.policy_id AND d.version = a.version
 WHERE m.tenant_key = :tenantKey
   AND m.is_deleted = 0
   AND m.id <> :newPolicyId
   AND m.status = 'APPROVED'
-  AND m.perspective = :perspective
-  AND (m.verify_type <=> :verifyType)
-  AND (m.scene_type <=> :sceneType)
+  AND a.audit_status = 'APPROVED'
+  AND m.channel_type = :perspective
+  AND (m.write_off_type <=> :verifyType)
+  AND (m.scene <=> :sceneType)
   AND (m.is_estimated <=> :estimated)
   AND d.platform_code = :platformCode
-  AND d.spu_id = :spuId
-  AND d.ram = :ram
-  AND d.rom = :rom
-  AND d.color_scope IS NOT NULL
-  AND (d.color_scope = 'ALL_COLORS' OR d.goods_id IS NOT NULL)
-  AND (:newColorScope = 'ALL_COLORS'
-       OR d.color_scope = 'ALL_COLORS'
-       OR (d.color_scope = 'SPECIFIC_COLOR'
-           AND d.goods_id = :newGoodsId))
+  AND d.goods_id = :goodsId
   AND m.start_time < :newEndTime
   AND :newStartTime < m.end_time;
 ```
 
-示例暂假设核销、场景、预估参与匹配，须在规则确认后定稿。查询前验证待审规格、颜色范围、时间和版本；查询不能把缺失参数当作无交集。主表租户直接过滤，不再借申请人当前状态推导政策租户。
+示例暂假设核销、场景、预估参与匹配，须在规则确认后定稿。查询前验证待审商品、平台、时间和版本；查询不能把缺失参数当作无交集。主表按会话租户过滤。候选关联相同提交轮次，名称、数量和补贴按平台与商品范围从本轮 `snapshot_data` 读取。
 
 ## 3. 审核与生效边界
 
-候选返回新旧政策、平台、机型 ID、RAM 和 ROM、颜色范围/具体颜色、快照、补贴和时间交集。区分当前时间内与未来重叠，标注 CANDIDATE 或 UNCONFIRMED；没有最终规则时不显示“已确定无覆盖”。
+候选返回新旧政策、平台、机型 ID、RAM 和 ROM、商品 ID、提交时的名称和颜色、补贴及时间交集。区分当前时间内与未来重叠，标注 CANDIDATE 或 UNCONFIRMED；没有最终规则时不显示“已确定无覆盖”。
 
-不限颜色与某颜色相交不意味着整条不限颜色政策失效，更不意味着同政策其他平台或规格失效。不能默认具体颜色优先，不能按审核时间或创建时间擅自宣布胜出，也不能删除旧记录实现覆盖。
+覆盖候选以实际相交的平台、商品和时间为单位。优先级、替换范围及旧政策恢复按正式业务规则判定，保留历史记录。
 
 正式审核需重新校验状态、提交/记录版本和交集；同一政策乐观锁不足以防两个不同政策同时审批，需要最终匹配范围的串行化方案。规则尚未确认时，不开放声称最终生效的通过替换闭环；拒绝和历史展示独立实现。
 
-待确认：时间端点、最新/优先级、核销场景预估是否参与、相同优先级、局部颜色及时间替换、新政策结束后旧政策是否恢复、正式生效时点。确认后再实现最新生效查询与并发测试。
+待确认：时间端点、最新/优先级、核销场景预估是否参与、相同优先级、局部商品及时间替换、新政策结束后旧政策是否恢复、正式生效时点。确认后再实现最新生效查询与并发测试。
 
 关联：[状态机](status-machine.md)、[审核接口](../api/admin-api.md)、[数据库字典](../sql/database-design.md)。

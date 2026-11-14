@@ -1,6 +1,7 @@
 package com.company.policy.common.exception;
 
 import com.company.policy.common.api.ApiError;
+import com.company.policy.controller.ApplicantCatalogController;
 import com.company.policy.controller.CatalogCleaningController;
 import com.company.policy.controller.CatalogDictionaryController;
 import com.company.policy.controller.CatalogGoodsController;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Order(0)
 @RestControllerAdvice(
         assignableTypes = {
+            ApplicantCatalogController.class,
             CatalogCleaningController.class,
             CatalogDictionaryController.class,
             CatalogGoodsController.class,
@@ -26,6 +28,6 @@ public class CatalogExceptionHandler {
     public ResponseEntity<ApiError> storageUnavailable() {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header("Cache-Control", "no-store")
-                .body(new ApiError("CATALOG_STORAGE_UNAVAILABLE", "商品管理暂不可用，请稍后重试。"));
+                .body(new ApiError("CATALOG_STORAGE_UNAVAILABLE", "商品目录暂不可用，请稍后重试。"));
     }
 }

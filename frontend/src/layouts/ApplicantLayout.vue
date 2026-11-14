@@ -1,5 +1,5 @@
 <script setup>
-import { onScopeDispose, provide, watch } from 'vue'
+import { computed, onScopeDispose, provide, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import PolicyBanner from './components/PolicyBanner.vue'
@@ -10,6 +10,10 @@ import './applicant-layout.css'
 
 const route = useRoute()
 const state = usePolicyForm(confirmPolicyAction)
+const applicationRoute = computed(() => ({
+  name: 'apply',
+  query: state.record.value ? { policyId: state.record.value.id } : {},
+}))
 provide('policyForm', state)
 watch(authSession.revision, state.clear, { flush: 'sync' })
 onScopeDispose(state.clear)
@@ -17,7 +21,7 @@ onScopeDispose(state.clear)
 <template>
   <div class="workspace">
     <aside class="sidebar">
-      <router-link class="workspace-brand" :to="{ name: 'apply' }" aria-label="电商运营平台首页">
+      <router-link class="workspace-brand" :to="applicationRoute" aria-label="电商运营平台首页">
         <span class="logo-grid">
           <i></i>
           <i></i>
@@ -36,7 +40,7 @@ onScopeDispose(state.clear)
           class="nav-item"
           :class="{ active: route.name === 'apply' }"
           :aria-current="route.name === 'apply' ? 'page' : undefined"
-          @click="$router.push({ name: 'apply' })"
+          @click="$router.push(applicationRoute)"
         >
           <span></span>
           提交政策

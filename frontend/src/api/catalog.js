@@ -84,7 +84,11 @@ const cleaningJobsPath = cleaningPath + '/jobs'
 function getPage(path, values, signal) {
   const params = new URLSearchParams()
   for (const [name, value] of Object.entries(values)) {
-    if (value) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        params.append(name, item)
+      }
+    } else if (value) {
       params.set(name, value)
     }
   }
@@ -144,4 +148,12 @@ export function updateCatalogGood(id, product, expectedVersion) {
 
 export function deleteCatalogGood(id) {
   return request(goodsPath + '/' + encodeURIComponent(id), { method: 'DELETE' })
+}
+
+export function readApplicantGoods(filters, signal) {
+  return getPage('/api/catalog/goods', filters, signal)
+}
+
+export function readApplicantCatalogOptions(signal) {
+  return request('/api/catalog/options', { signal })
 }

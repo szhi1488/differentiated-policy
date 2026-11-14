@@ -1,6 +1,6 @@
 # 商品管理接口契约
 
-更新日期：2026-11-14。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护已接入十四表基线。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期：2026-11-14。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护已接入原十四表基线。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
@@ -67,7 +67,7 @@
 
 商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。商品响应包含本地 SKU、货品编号、标准商品名称、RAM、ROM、销售状态。响应中的 `skuId` 为本地标准 SKU，`sourceSkuId` 为关联来源的吉客云 SKU 字符串。多条来源归并时，`sourceSkuId` 与 `sourceName` 均取本地来源 ID 最小的一条，名称使用来源原文 `goodsName`。缺少来源时两项均为 null。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
 
-删除在事务内检查引用。关联来源 SKU 时返回 `CATALOG_GOODS_SOURCE_BOUND`，商品或其配置被政策引用时返回 `CATALOG_GOODS_POLICY_BOUND`，数据库拒绝删除其他已关联记录时返回 `CATALOG_GOODS_REFERENCED`。删除成功释放规格唯一键，原商品 ID 查询详情返回 404。
+删除在事务内检查引用。关联来源 SKU 时返回 `CATALOG_GOODS_SOURCE_BOUND`，政策明细引用该商品的 `goods_id` 时返回 `CATALOG_GOODS_POLICY_BOUND`，数据库拒绝删除其他已关联记录时返回 `CATALOG_GOODS_REFERENCED`。删除成功释放规格唯一键，原商品 ID 查询详情返回 404。
 
 自动清洗通过时，标准目录、来源 `goodsId` 和任务成员结果同事务写入。人工审核通过时，同事务保存标准目录、来源映射和审核信息，本轮任务成员保留当时的分流结果。自动清洗的审核人为空，人工审核记录实际操作人。重复处理复用同配置同颜色的商品。修改现有映射按来源版本校验，冲突返回 409。标准商品批量导入接口待接入。
 
@@ -106,7 +106,7 @@
 | `CATALOG_GOODS_DUPLICATE` | 其他商品已占用目标机型版本、配置和颜色 |
 | `CATALOG_SERIES_CONFLICT` | 目标机型版本已归属同品牌的其他系列 |
 | `CATALOG_GOODS_SOURCE_BOUND` | 已关联源商品的标准商品试图改品牌 |
-| `CATALOG_GOODS_POLICY_BOUND` | 已被政策引用的商品试图改规格或颜色，或已被政策引用的配置试图改机型版本或容量 |
+| `CATALOG_GOODS_POLICY_BOUND` | 已被政策明细按商品 ID 引用的商品试图修改机型版本、容量或颜色 |
 
 收到版本冲突时，保留当前输入并重新读取详情核对，确认后再用新版本提交。
 
@@ -123,8 +123,19 @@
 
 系列的 `inUse` 表示该系列的机型仍被商品或政策明细引用。只剩无引用机型时，系列可以改名或删除。删除系列时，后台在同一事务清理这些机型。发现引用时返回 `409 CATALOG_DICTIONARY_IN_USE`。
 
-## 待接入的申请人目录
+## 申请人目录
 
-按品牌、系列、机型版本筛选，从标准商品按 `spuId`、`ram`、`rom` 去重得到配置。选配置后返回该配置下标准商品的 `goodsId` 和字典颜色名称。切换配置清空旧颜色。
+两个选品抽屉共用申请人只读接口，沿用目录查询逻辑并校验有效会话、本地申请人角色和公司租户。服务端只返回在售的标准商品及选品所需字段。
 
-选择 ALL_COLORS 时提交配置和颜色范围。选择 SPECIFIC_COLOR 时另传该配置下的 `goodsId`，颜色快照由服务端生成。请求契约见 [政策接口](policy-api.md)。
+| 方法 | 路径 | 请求和返回 |
+| --- | --- | --- |
+| GET | `/api/catalog/options` | 可传 `brandId`、`seriesId`、`spuId`。返回 `brands`、`series`、`models` 和 `configurations`。前三组为字符串 ID 和名称，系列附 `brandId`，机型附 `seriesId` 和 `edition`。每组受上级筛选限制。配置以 `spuId + ram + rom` 标识。 |
+| GET | `/api/catalog/goods` | 可按 `brandId`、`seriesId`、`spuId`、`ram`、`rom`、`keyword` 分页查在售商品。RAM 和 ROM 成对传入，也可重复传 `configuration`（例如 `101/16GB/512GB`）匹配任一配置，两种配置参数互斥。返回 `items`、`total`，每项含 `goodsId`、品牌、系列、机型版本、RAM、ROM、`goodsName`、`colorName` 和 `onSale`。ID 为字符串。分页从 1 开始，`size` 最大 100，按商品 ID 升序。 |
+
+普通卡选配置时按每页 100 件取齐所选配置下的在售商品。「全部配置」沿用当前品牌、系列及机型条件，省略配置参数。关键词只筛选显示列表，翻页不会取消已有勾选，也不会重新勾上用户取消的项。提交时使用最终勾选的 `goodsId` 列表。
+
+普通卡和指定卡均提交实际所选在售商品，颜色快照由服务端生成。[政策接口](policy-api.md)
+
+## 待接入的标准商品批量导入
+
+商品中心已有批量导入入口。建议使用 `POST /api/admin/catalog/goods/import`，具体文件校验、重复处理、错误行反馈及事务方式在接入时定义。模板下载和当前页导出沿用现有前端逻辑。

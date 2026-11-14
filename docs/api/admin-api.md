@@ -2,9 +2,9 @@
 
 商品导入、清洗及标准目录接入情况见 [商品同步与管理员后台方案](../architecture/catalog-admin-design.md)。本文件维护政策审核契约。
 
-更新日期：2026-11-11。**以下接口均未实现**。政策表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
+更新日期：2026-11-14。**以下接口均未实现**。政策表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
 
-管理员[展示工作台](../architecture/admin-workspace.md)已完成路由、演示筛选和详情结构，但不调用本文接口；通过、驳回等按钮禁用，不写审核记录。前端角色分流不代替本文要求的服务端鉴权。
+当前管理员工作台侧栏只有商品相关页面。建议增加「政策审核」入口 `#/admin/policies`，含待审列表、详情和历轮记录。列表默认筛选待审核，可切换已通过或已驳回。[管理员工作台](../architecture/admin-workspace.md)
 
 ## 权限及接口
 
@@ -13,11 +13,11 @@
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/api/admin/policies` | 分页筛选申请和政策 |
-| GET | `/api/admin/policies/{id}` | 主表、逐平台明细、版本和最近审核 |
+| GET | `/api/admin/policies/{id}` | 当前提交快照、版本和最近审核 |
 | GET | `/api/admin/policies/{id}/audit-logs` | 分页审核历史 |
 | GET | `/api/admin/policies/{id}/audit-logs/{logId}` | 经父申请鉴权后读取该轮提交快照 |
-| GET | `/api/admin/policies/{id}/override-preview` | 读取待审版本的候选影响 |
 | POST | `/api/admin/policies/{id}/review` | 通过或拒绝当前提交版本 |
+| GET | `/api/admin/policies/{id}/override-preview` | 后续接入，读取待审版本的覆盖候选 |
 
 成功默认 200。当前只设计查询/审核，不提供直接修改申请人内容、覆盖删除、批量通过或通过后修改接口。
 
@@ -25,11 +25,11 @@
 
 建议参数：`page`（默认 1）、`pageSize`（默认 20，最大 100）、`perspective`、`platformCode`、`modelKeyword`、`status`、`applicantId`、`startTimeFrom`、`startTimeTo`、`endTimeFrom`、`endTimeTo`；零售可用 `verifyType`、`sceneType`、`estimated`。时间筛选暂定义为对应字段闭区间上下界，不把它混成未确认的“当前最终生效”条件。
 
-modelKeyword 仅名称搜索，精确筛选采用 spuId、ram、rom、colorScope、goodsId；商品必须属于该配置。查询按 policy_master.tenant_key 隔离，不能由客户端指定其他租户。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
+modelKeyword 匹配本轮提交快照中的机型名称。精确筛选采用当前轮次的 `policy_goods_detail`，按 spuId、ram、rom、goodsId 匹配。商品必须属于该配置。查询按 `policy_apply.tenant_key` 和服务端会话限定。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
 
 返回 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`，列表项至少含 ID、单号、申请人、视角、平台集合、起止时间、审核状态、版本和最近审核时间。默认 `created_at DESC, id DESC`。明细筛选用 EXISTS 或先去重 ID，total 按申请数计算。不能用状态 APPROVED 显示“当前生效”。
 
-详情包含所有明细及完整补贴参数，快照展示提交时名称。历史日志分页且不可修改，SUBMIT/RESUBMIT 的不可变快照可独立查看。
+管理员按当前轮次的 `snapshot_data` 查看商品、补贴方案、各平台数量及提交时名称。每轮审核结果和提交快照支持独立查看。
 
 ## 覆盖候选预览
 
@@ -50,9 +50,13 @@ modelKeyword 仅名称搜索，精确筛选采用 spuId、ram、rom、colorScope
 
 `determination` 草案枚举：`UNCONFIRMED` 尚不能判定、`CANDIDATE` 仅候选、`CONFIRMED` 最终口径计算；最后一种须规则及实现均完成后启用。
 
-候选 item 应含新旧 policyId/policyCode/detailId、平台、spuId、ram、rom、colorScope、goodsId、品牌系列型号配置颜色快照、旧新补贴及全部参数、起止时间和候选相交范围。不限颜色与任一指定颜色有交集，两个不同指定颜色不相交；优先级和替换仍待确认，不能自动指定颜色优先。预览不改变数据库，不隐含二次确认要求。
+候选 item 应含新旧 policyId/policyCode/detailId、平台、spuId、ram、rom、goodsId、品牌系列型号配置颜色快照、补贴参数及时间范围。商品范围相交须为同一个平台和同一个实际选中的商品 ID，优先级与替换规则仍待确认。预览不改变数据库，不隐含二次确认要求。
 
 算法假设、SQL 及局限见 [覆盖查询草案](../business/override-engine.md)。最终通过时须重新检查候选与并发，不能把预览结果当锁或提交凭证。
+
+## 有效政策查询
+
+优先复用管理员列表筛选。业务确认生效时间和覆盖规则后，再定查询时点、平台、`goodsId` 与最终适用政策的响应契约。
 
 ## 审核请求与响应
 
@@ -67,7 +71,7 @@ modelKeyword 仅名称搜索，精确筛选采用 spuId、ram、rom、colorScope
 
 `decision` 仅 `APPROVE` / `REJECT`，不直接接受 status；`reviewRemark` 最长 512 字符，拒绝是否必填待确认。审核人、姓名、时间从服务端取得，禁止客户端伪造。
 
-通过或拒绝仅允许当前 PENDING、指定提交版本、指定记录版本。同事务条件更新、递增 recordVersion、写独立审核意见和日志；返回 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。
+通过或拒绝仅允许当前 PENDING、指定提交版本、指定记录版本。在同一事务中条件更新申请、递增 recordVersion，并更新本轮待审记录的审核结果、审核人、意见和时间；返回 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。
 
 ```json
 {

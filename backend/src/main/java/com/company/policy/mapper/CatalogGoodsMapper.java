@@ -93,15 +93,8 @@ public interface CatalogGoodsMapper {
     @Select("SELECT EXISTS(SELECT 1 FROM source_goods_item WHERE goods_id = #{id})")
     boolean hasSourceMapping(long id);
 
-    @Select("SELECT EXISTS(SELECT 1 FROM policy_detail WHERE goods_id = #{id})")
+    @Select("SELECT EXISTS(SELECT 1 FROM policy_goods_detail WHERE goods_id = #{id})")
     boolean hasPolicyGoodsReference(long id);
-
-    @Select(
-            """
-        SELECT EXISTS(SELECT 1 FROM policy_detail
-                      WHERE spu_id = #{spu} AND ram = #{ram} AND rom = #{rom})
-        """)
-    boolean hasPolicyConfigurationReference(long spu, String ram, String rom);
 
     @Update(
             """
@@ -121,13 +114,15 @@ public interface CatalogGoodsMapper {
             long color,
             Integer status);
 
-    String COLUMNS =
+    String PRODUCT_COLUMNS =
             """
         SELECT g.id, g.sku_id, g.product_no, g.goods_name, g.brand_id, b.name AS brand_name,
           g.series_id, s.name AS series_name, g.spu_id, p.name AS model_name, p.edition,
-          g.ram, g.rom, g.color_id, c.color_name, g.status, g.updated_at,
-          source.sku_id AS source_sku_id, source.goods_name AS source_name
+          g.ram, g.rom, g.color_id, c.color_name, g.status, g.updated_at
         """;
+    String COLUMNS =
+            PRODUCT_COLUMNS + ", source.sku_id AS source_sku_id, source.goods_name AS source_name ";
+    String APPLICANT_COLUMNS = PRODUCT_COLUMNS + ", NULL AS source_sku_id, NULL AS source_name ";
     String JOINED =
             """
         FROM goods g JOIN brand b ON b.id = g.brand_id
@@ -146,11 +141,18 @@ public interface CatalogGoodsMapper {
     String FILTER =
             """
         <where>
+          <if test="query.brandId != null">AND g.brand_id = #{query.brandId}</if>
           <if test="query.brandName != null">AND b.name = #{query.brandName}</if>
           <if test="query.seriesName != null">AND LOCATE(#{query.seriesName}, s.name) > 0</if>
           <if test="query.seriesId != null">AND g.series_id = #{query.seriesId}</if>
           <if test="query.spuId != null">AND g.spu_id = #{query.spuId}</if>
           <if test="query.ram != null">AND g.ram = #{query.ram} AND g.rom = #{query.rom}</if>
+          <if test="!query.configurations.isEmpty()">
+            AND
+            <foreach collection="query.configurations" item="config" open="(" separator=" OR " close=")">
+              (g.spu_id = #{config.spuId} AND g.ram = #{config.ram} AND g.rom = #{config.rom})
+            </foreach>
+          </if>
           <if test="query.modelName != null">AND LOCATE(#{query.modelName}, p.name) > 0</if>
           <if test="query.status != null">AND g.status = #{query.status}</if>
           <foreach collection="keywords" item="term">
@@ -160,12 +162,14 @@ public interface CatalogGoodsMapper {
                  OR LOCATE(#{term}, LOWER(s.name)) > 0
                  OR LOCATE(#{term}, LOWER(p.edition)) > 0
                  OR LOCATE(#{term}, LOWER(c.color_name)) > 0
+                 <if test="!applicant">
                  OR LOCATE(#{term}, LOWER(g.product_no)) > 0
                  OR LOCATE(#{term}, LOWER(g.sku_id)) > 0
                  <if test="term.matches('[0-9]{1,19}')">
                  OR EXISTS (SELECT 1 FROM source_goods_item item
                    WHERE item.goods_id = g.id AND item.catalog_brand_id = g.brand_id
                      AND LOCATE(#{term}, item.sku_id) > 0)
+                 </if>
                  </if>
             )
           </foreach>
@@ -174,12 +178,19 @@ public interface CatalogGoodsMapper {
 
     @Select(
             "<script>"
+                    + "<choose><when test='applicant'>"
+                    + APPLICANT_COLUMNS
+                    + "</when><otherwise>"
                     + COLUMNS
+                    + "</otherwise></choose>"
                     + JOINED
+                    + "<if test='!applicant'>"
                     + REPRESENTATIVE_SOURCE
+                    + "</if>"
                     + FILTER
                     + """
         <choose>
+          <when test="applicant">ORDER BY g.id ASC</when>
           <when test="query.ascending">ORDER BY g.updated_at ASC, g.id ASC</when>
           <otherwise>ORDER BY g.updated_at DESC, g.id DESC</otherwise>
         </choose>
@@ -190,10 +201,58 @@ public interface CatalogGoodsMapper {
             @Param("query") CatalogGoodsQuery query,
             @Param("keywords") List<String> keywords,
             @Param("size") int size,
-            @Param("offset") long offset);
+            @Param("offset") long offset,
+            @Param("applicant") boolean applicant);
 
     @Select("<script>SELECT COUNT(*) " + JOINED + FILTER + "</script>")
-    long count(@Param("query") CatalogGoodsQuery query, @Param("keywords") List<String> keywords);
+    long count(
+            @Param("query") CatalogGoodsQuery query,
+            @Param("keywords") List<String> keywords,
+            @Param("applicant") boolean applicant);
+
+    @Select(
+            "<script>"
+                    + APPLICANT_COLUMNS
+                    + JOINED
+                    + """
+        WHERE g.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        </script>
+        """)
+    List<CatalogGoods> findForPolicy(@Param("ids") List<Long> ids);
+
+    @Select(
+            """
+        <script>
+        SELECT id FROM goods WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY id FOR UPDATE
+        </script>
+        """)
+    List<Long> lockSelected(@Param("ids") List<Long> ids);
+
+    @Select(
+            """
+        SELECT DISTINCT b.id AS brand_id, b.name AS brand_name, s.id AS series_id,
+            s.name AS series_name, p.id AS spu_id, p.name AS model_name, p.edition, g.ram, g.rom
+        """
+                    + JOINED
+                    + """
+        WHERE g.status = 1
+        ORDER BY brand_id, series_id, spu_id, g.ram, g.rom
+        """)
+    List<OnSaleConfiguration> onSaleConfigurations();
+
+    record OnSaleConfiguration(
+            long brandId,
+            String brandName,
+            long seriesId,
+            String seriesName,
+            long spuId,
+            String modelName,
+            String edition,
+            String ram,
+            String rom) {}
 
     @Select(COLUMNS + JOINED + REPRESENTATIVE_SOURCE + " WHERE g.id = #{id}")
     CatalogGoods find(long id);

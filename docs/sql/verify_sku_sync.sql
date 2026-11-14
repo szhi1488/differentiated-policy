@@ -9,7 +9,7 @@ FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN (
     'user_info', 'brand', 'series', 'spu', 'color_dict', 'goods', 'goods_sync_job',
-    'source_goods_item', 'catalog_clean_job', 'catalog_clean_job_item', 'catalog_operation_log', 'policy_master', 'policy_detail', 'policy_audit_log'
+    'source_goods_item', 'catalog_clean_job', 'catalog_clean_job_item', 'catalog_operation_log', 'policy_apply', 'policy_goods_detail', 'policy_audit_log'
   )
 ORDER BY TABLE_NAME;
 
@@ -30,7 +30,7 @@ FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'tenant_key'
   AND TABLE_NAME IN ('brand', 'series', 'spu', 'color_dict', 'goods', 'goods_sync_job',
                      'source_goods_item', 'catalog_clean_job', 'catalog_clean_job_item',
-                     'catalog_operation_log', 'policy_detail');
+                     'catalog_operation_log', 'policy_goods_detail');
 
 -- 旧品牌字段和标准商品编辑版本检查预期无结果。
 SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS
@@ -48,7 +48,7 @@ SELECT TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENC
 FROM information_schema.KEY_COLUMN_USAGE
 WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME IN (
   'fk_source_catalog_brand', 'fk_source_goods', 'fk_goods_color',
-  'fk_detail_spu', 'fk_detail_goods'
+  'fk_policy_goods_spu', 'fk_policy_goods_sku'
 )
 ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION;
 
@@ -67,7 +67,7 @@ LEFT JOIN color_dict c ON c.id = g.color_id
 WHERE c.id IS NULL;
 
 SELECT d.id
-FROM policy_detail d
+FROM policy_goods_detail d
 LEFT JOIN goods g ON g.id = d.goods_id
   AND g.spu_id = d.spu_id AND g.ram = d.ram AND g.rom = d.rom
 WHERE d.goods_id IS NOT NULL AND g.id IS NULL;

@@ -22,6 +22,23 @@ class CatalogAccess {
         this.config = config;
     }
 
+    UserInfo requireApplicant(CurrentUserResponse session) {
+        var user = users.findIdentity(session.tenantKey(), session.openId());
+        if (!config.hasCompanyTenant()) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "POLICY_SCOPE_MISSING", "请先配置公司飞书租户。");
+        }
+        if (user == null
+                || !Objects.equals(session.id(), user.getId().toString())
+                || !"APPLICANT".equals(user.getRoleType())
+                || !Integer.valueOf(0).equals(user.getIsDeleted())
+                || !config.getTenantKey().equals(user.getTenantKey())) {
+            throw new ApiException(
+                    HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "只有本公司有效申请人可使用政策申请。");
+        }
+        return user;
+    }
+
     UserInfo requireAdmin(CurrentUserResponse session) {
         var user = users.findIdentity(session.tenantKey(), session.openId());
         if (user == null

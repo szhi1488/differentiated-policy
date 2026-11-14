@@ -307,295 +307,113 @@ CREATE TABLE `catalog_operation_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='商品导入记录与来源建档日证据';
 
 
-CREATE TABLE `policy_master` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '政策主键',
-  `tenant_key` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '申请所属租户，由会话确定',
-  `policy_code` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '政策单号，创建草稿时生成',
-
-  `applicant_id` BIGINT NOT NULL COMMENT '申请人，关联 user_info.id',
-  `applicant_name` VARCHAR(64) DEFAULT NULL COMMENT '申请人姓名快照',
-
-  `perspective` VARCHAR(32) NOT NULL COMMENT 'RETAIL-零售，BILLION-百亿',
-  `channel_type` VARCHAR(32) NOT NULL COMMENT 'RETAIL_CHANNEL-零售渠道，BILLION_CHANNEL-百亿渠道',
-  `selected_platforms` JSON DEFAULT NULL COMMENT '已选具体平台编码数组，不保存 ALL',
-
-  `verify_type` VARCHAR(32) DEFAULT NULL COMMENT 'SALES-销售维度，ACTIVATION-激活维度；百亿为空',
-  `scene_type` VARCHAR(32) DEFAULT NULL COMMENT 'NATIONAL_SUB-国补，LOCAL_SUB-地补，SELF_SUB-自补；百亿为空',
-  `is_estimated` TINYINT DEFAULT NULL COMMENT '0-否，1-是；百亿及未填写的草稿为空',
-
-  `start_time` DATETIME DEFAULT NULL COMMENT '政策开始时间，草稿可为空',
-  `end_time` DATETIME DEFAULT NULL COMMENT '政策结束时间，草稿可为空',
-  `special_remark` TEXT COMMENT '特别备注',
-  `attachment_info` JSON DEFAULT NULL COMMENT '附件及链接信息数组，不保存文件二进制内容',
-
-  `status` VARCHAR(32) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT-草稿，PENDING-待审核，APPROVED-已通过，REJECTED-已拒绝',
-  `submission_version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '提交版本，未提交为0，每次提交或重提递增',
-  `record_version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '并发控制版本号，每次修改递增',
-
-  `reviewer_id` BIGINT DEFAULT NULL COMMENT '最近一次审核人，关联 user_info.id',
-  `reviewer_name` VARCHAR(64) DEFAULT NULL COMMENT '最近一次审核人姓名快照',
-  `review_remark` VARCHAR(512) DEFAULT NULL COMMENT '最近一次审核意见，完整历史保存在日志表',
-  `review_time` DATETIME DEFAULT NULL COMMENT '最近一次审核时间',
-
-  `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '0-未删除，1-已删除',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+CREATE TABLE `policy_apply` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '政策申请主键',
+  `policy_no` VARCHAR(32) NOT NULL COMMENT '政策单号，创建草稿时生成',
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '申请所属租户，由会话确定',
+  `applicant_id` BIGINT NOT NULL COMMENT '本地申请人 ID',
+  `applicant_name` VARCHAR(64) NOT NULL COMMENT '申请人姓名快照',
+  `channel_type` VARCHAR(20) NOT NULL COMMENT 'RETAIL-零售，BILLION-百亿',
+  `platforms` JSON DEFAULT NULL COMMENT '整单已选平台编码数组',
+  `write_off_type` VARCHAR(20) DEFAULT NULL COMMENT 'SALES-销售维度，ACTIVATION-激活维度',
+  `scene` VARCHAR(20) DEFAULT NULL COMMENT 'NATIONAL_SUB-国补，LOCAL_SUB-地补，SELF_SUB-自补',
+  `is_estimated` TINYINT DEFAULT NULL COMMENT '0-否，1-是，百亿为 NULL',
+  `start_time` DATETIME DEFAULT NULL COMMENT '政策开始时间，北京时间',
+  `end_time` DATETIME DEFAULT NULL COMMENT '政策结束时间，北京时间',
+  `remark` TEXT COMMENT '特别备注',
+  `other_desc` TEXT COMMENT '其他说明',
+  `goods_form_json` JSON DEFAULT NULL COMMENT '供草稿回填的商品卡、选品、平台联动和补贴方案',
+  `attachment_urls` JSON DEFAULT NULL COMMENT '附件文件 ID 和外部链接的结构化列表',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT-草稿，PENDING-待审核，APPROVED-已通过，REJECTED-已驳回',
+  `current_version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '最近提交轮次，首次提交前为 0',
+  `record_version` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '并发控制版本，每次业务写入递增',
+  `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '0-正常，1-已删除',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '建单时间，北京时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间，北京时间',
 
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_policy_id_tenant` (`id`, `tenant_key`),
-  UNIQUE KEY `uk_policy_code` (`policy_code`),
-  KEY `idx_policy_applicant_status` (`applicant_id`, `tenant_key`, `status`, `created_at`),
-  KEY `idx_policy_perspective_status` (`tenant_key`, `perspective`, `status`, `created_at`),
-  KEY `idx_policy_time_range` (`start_time`, `end_time`),
-  KEY `idx_policy_reviewer` (`reviewer_id`, `tenant_key`),
+  UNIQUE KEY `uk_apply_policy_no` (`policy_no`),
+  UNIQUE KEY `uk_apply_tenant_binding` (`id`, `tenant_key`),
+  KEY `idx_apply_mine` (`applicant_id`, `tenant_key`, `is_deleted`, `created_at`, `id`),
+  KEY `idx_apply_status` (`tenant_key`, `is_deleted`, `status`, `created_at`, `id`),
 
-  CONSTRAINT `fk_policy_applicant`
-    FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`)
-    ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT `fk_policy_reviewer`
-    FOREIGN KEY (`reviewer_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`)
-    ON DELETE RESTRICT ON UPDATE RESTRICT,
-
-  CONSTRAINT `ck_policy_channel`
-    CHECK (
-      (`perspective` = 'RETAIL' AND `channel_type` = 'RETAIL_CHANNEL')
-      OR
-      (`perspective` = 'BILLION' AND `channel_type` = 'BILLION_CHANNEL')
-    ),
-
-  CONSTRAINT `ck_policy_platform_array`
-    CHECK (
-      `selected_platforms` IS NULL
-      OR JSON_TYPE(`selected_platforms`) = 'ARRAY'
-    ),
-
-  CONSTRAINT `ck_policy_attachment_array`
-    CHECK (
-      `attachment_info` IS NULL
-      OR JSON_TYPE(`attachment_info`) = 'ARRAY'
-    ),
-
-  CONSTRAINT `ck_policy_verify_type`
-    CHECK (
-      `verify_type` IS NULL
-      OR `verify_type` IN ('SALES', 'ACTIVATION')
-    ),
-
-  CONSTRAINT `ck_policy_scene_type`
-    CHECK (
-      `scene_type` IS NULL
-      OR `scene_type` IN ('NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB')
-    ),
-
-  CONSTRAINT `ck_policy_estimated`
-    CHECK (`is_estimated` IS NULL OR `is_estimated` IN (0, 1)),
-
-  CONSTRAINT `ck_policy_billion_fields`
-    CHECK (
-      `perspective` <> 'BILLION'
-      OR (
-        `verify_type` IS NULL
-        AND `scene_type` IS NULL
-        AND `is_estimated` IS NULL
-      )
-    ),
-
-  CONSTRAINT `ck_policy_time_range`
-    CHECK (
-      `start_time` IS NULL
-      OR `end_time` IS NULL
-      OR `start_time` < `end_time`
-    ),
-
-  CONSTRAINT `ck_policy_status`
-    CHECK (`status` IN ('DRAFT', 'PENDING', 'APPROVED', 'REJECTED')),
-
-  CONSTRAINT `ck_policy_deleted`
-    CHECK (`is_deleted` IN (0, 1))
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci
-  COMMENT='政策申请主表';
-
-CREATE TABLE `policy_detail` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '明细主键',
-  `policy_id` BIGINT NOT NULL COMMENT '关联 policy_master.id',
-
-  `platform_code` VARCHAR(32) NOT NULL COMMENT '具体平台编码，不保存 ALL',
-
-  `spu_id` BIGINT DEFAULT NULL COMMENT '标准机型及版本，草稿可暂未选',
-  `ram` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '配置身份的运行内存，统一GB',
-  `rom` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '配置身份的机身存储，统一GB',
-  `brand_name_snapshot` VARCHAR(50) DEFAULT NULL COMMENT '提交时品牌快照',
-  `series_name_snapshot` VARCHAR(64) DEFAULT NULL COMMENT '提交时系列快照',
-  `color_scope` VARCHAR(32) DEFAULT NULL COMMENT 'ALL_COLORS-不限颜色，SPECIFIC_COLOR-指定颜色；NULL仅为草稿未选择',
-  `goods_id` BIGINT DEFAULT NULL COMMENT '指定颜色时引用当前配置下的标准商品',
-  `model_full_name` VARCHAR(384) DEFAULT NULL COMMENT '涉及型号全称快照，草稿可为空',
-  `single_model` VARCHAR(100) DEFAULT NULL COMMENT '单型号快照，草稿可为空',
-  `spec` VARCHAR(64) DEFAULT NULL COMMENT '配置快照，草稿可为空',
-  `color` VARCHAR(64) DEFAULT NULL COMMENT '指定颜色的名称快照，不限颜色时为NULL',
-  `quantity` INT DEFAULT NULL COMMENT '该平台该机型的数量；未填写为NULL，不自动记为0',
-
-  `subsidy_mode` VARCHAR(32) DEFAULT NULL COMMENT 'FIXED-固定补贴，RATIO-比例补贴；草稿可为空',
-  `fixed_amount` DECIMAL(10,2) DEFAULT NULL COMMENT '固定补贴金额',
-  `max_subsidy_amount` DECIMAL(10,2) DEFAULT NULL COMMENT '固定补贴上限金额，具体作用范围待确认',
-  `subsidy_ratio` DECIMAL(5,2) DEFAULT NULL COMMENT '补贴比例，百分数；10.00表示10%',
-  `base_price_type` VARCHAR(32) DEFAULT NULL COMMENT 'RETAIL_PRICE-零售价，POLICY_PRICE-政策价，HAND_PRICE-到手价，LOCAL_ACTUAL-地补实际，MERCHANT_CONTROL-商家配控',
-
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-
-  PRIMARY KEY (`id`),
-  KEY `idx_detail_policy_platform` (`policy_id`, `platform_code`),
-  KEY `idx_detail_scope` (`platform_code`, `spu_id`, `ram`, `rom`, `color_scope`, `goods_id`),
-  KEY `idx_detail_spu` (`spu_id`),
-  KEY `idx_detail_goods` (`goods_id`, `spu_id`, `ram`, `rom`),
-
-  CONSTRAINT `fk_detail_policy`
-    FOREIGN KEY (`policy_id`) REFERENCES `policy_master` (`id`)
-    ON DELETE RESTRICT ON UPDATE RESTRICT,
-
-  CONSTRAINT `fk_detail_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
-  CONSTRAINT `fk_detail_goods` FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`),
-  CONSTRAINT `ck_detail_memory` CHECK (
-    (`ram` IS NULL AND `rom` IS NULL)
-    OR (`spu_id` IS NOT NULL AND `ram` IS NOT NULL AND `rom` IS NOT NULL
-      AND REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
-      AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB')
+  CONSTRAINT `fk_apply_applicant`
+    FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_apply_channel` CHECK (`channel_type` IN ('RETAIL', 'BILLION')),
+  CONSTRAINT `ck_apply_platforms` CHECK (`platforms` IS NULL OR JSON_TYPE(`platforms`) = 'ARRAY'),
+  CONSTRAINT `ck_apply_goods_form` CHECK (`goods_form_json` IS NULL OR JSON_TYPE(`goods_form_json`) = 'OBJECT'),
+  CONSTRAINT `ck_apply_attachments` CHECK (`attachment_urls` IS NULL OR JSON_TYPE(`attachment_urls`) = 'ARRAY'),
+  CONSTRAINT `ck_apply_retail_fields` CHECK (
+    (`write_off_type` IS NULL OR `write_off_type` IN ('SALES', 'ACTIVATION'))
+    AND (`scene` IS NULL OR `scene` IN ('NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB'))
+    AND (`is_estimated` IS NULL OR `is_estimated` IN (0, 1))
+    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene` IS NULL AND `is_estimated` IS NULL))
   ),
-  CONSTRAINT `ck_detail_color_scope` CHECK (
-    ((`color_scope` IS NULL OR `color_scope` = 'ALL_COLORS') AND `goods_id` IS NULL AND `color` IS NULL)
-    OR (`color_scope` IS NOT NULL AND `color_scope` = 'SPECIFIC_COLOR'
-      AND `spu_id` IS NOT NULL AND `ram` IS NOT NULL AND `rom` IS NOT NULL
-      AND ((`goods_id` IS NULL AND `color` IS NULL)
-        OR (`goods_id` IS NOT NULL AND `color` IS NOT NULL AND CHAR_LENGTH(TRIM(`color`)) > 0)))
+  CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`),
+  CONSTRAINT `ck_apply_status_version` CHECK (
+    (`status` = 'DRAFT' AND `current_version` = 0)
+    OR (`status` IN ('PENDING', 'APPROVED', 'REJECTED') AND `current_version` > 0)
   ),
-
-  CONSTRAINT `ck_detail_platform`
-    CHECK (
-      `platform_code` IN (
-        'KUAISHOU', 'PDD', 'JD', 'DOUYIN', 'TMALL',
-        'TAOBAO', 'ZHAOSHANG', 'DEWU', 'UNICOM', 'GOV_ENTERPRISE'
-      )
-    ),
-
-  CONSTRAINT `ck_detail_quantity`
-    CHECK (`quantity` IS NULL OR `quantity` >= 0),
-
-  CONSTRAINT `ck_detail_subsidy_mode`
-    CHECK (
-      `subsidy_mode` IS NULL
-      OR `subsidy_mode` IN ('FIXED', 'RATIO')
-    ),
-
-  CONSTRAINT `ck_detail_fixed_amount`
-    CHECK (`fixed_amount` IS NULL OR `fixed_amount` >= 0),
-
-  CONSTRAINT `ck_detail_max_amount`
-    CHECK (`max_subsidy_amount` IS NULL OR `max_subsidy_amount` >= 0),
-
-  CONSTRAINT `ck_detail_ratio`
-    CHECK (`subsidy_ratio` IS NULL OR `subsidy_ratio` >= 0),
-
-  CONSTRAINT `ck_detail_base_price`
-    CHECK (
-      `base_price_type` IS NULL
-      OR `base_price_type` IN (
-        'RETAIL_PRICE', 'POLICY_PRICE', 'HAND_PRICE',
-        'LOCAL_ACTUAL', 'MERCHANT_CONTROL'
-      )
-    ),
-
-  CONSTRAINT `ck_detail_subsidy_exclusive`
-    CHECK (
-      (
-        `subsidy_mode` IS NOT NULL
-        AND `subsidy_mode` = 'FIXED'
-        AND `subsidy_ratio` IS NULL
-        AND `base_price_type` IS NULL
-      )
-      OR (
-        `subsidy_mode` IS NOT NULL
-        AND `subsidy_mode` = 'RATIO'
-        AND `fixed_amount` IS NULL
-        AND `max_subsidy_amount` IS NULL
-      )
-      OR (
-        `subsidy_mode` IS NULL
-        AND `fixed_amount` IS NULL
-        AND `max_subsidy_amount` IS NULL
-        AND `subsidy_ratio` IS NULL
-        AND `base_price_type` IS NULL
-      )
-    )
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci
-  COMMENT='政策明细：平台、机型、数量与补贴规则';
+  CONSTRAINT `ck_apply_deleted` CHECK (`is_deleted` IN (0, 1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='政策申请与当前编辑内容';
 
 CREATE TABLE `policy_audit_log` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '日志主键',
-  `tenant_key` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '与政策和操作人相同的租户',
-  `policy_id` BIGINT NOT NULL COMMENT '关联 policy_master.id',
-  `submission_version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '对应的提交版本，首次提交前为0',
-
-  `operator_id` BIGINT NOT NULL COMMENT '操作人，关联 user_info.id',
-  `operator_name` VARCHAR(64) DEFAULT NULL COMMENT '操作人姓名快照',
-
-  `action_type` VARCHAR(32) NOT NULL COMMENT 'CREATE_DRAFT、UPDATE_DRAFT、SUBMIT、APPROVE、REJECT、RESUBMIT',
-  `from_status` VARCHAR(32) DEFAULT NULL COMMENT '操作前状态，创建时为空',
-  `to_status` VARCHAR(32) NOT NULL COMMENT '操作后状态',
-  `action_desc` VARCHAR(255) DEFAULT NULL COMMENT '操作描述',
-  `review_remark` VARCHAR(512) DEFAULT NULL COMMENT '本次审核意见，不随后续重提覆盖',
-  `submission_snapshot` JSON DEFAULT NULL COMMENT '提交或重提时的完整主表及明细快照',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '审核记录主键',
+  `policy_id` BIGINT NOT NULL COMMENT '政策申请 ID',
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '与政策和审核人相同的租户',
+  `version` INT UNSIGNED NOT NULL COMMENT '正式提交轮次，从 1 开始',
+  `snapshot_data` JSON NOT NULL COMMENT '本轮提交的完整内容快照',
+  `audit_status` VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED' COMMENT 'SUBMITTED-待审，APPROVED-通过，REJECTED-驳回',
+  `auditor_id` BIGINT DEFAULT NULL COMMENT '本地审核人 ID',
+  `auditor_name` VARCHAR(64) DEFAULT NULL COMMENT '审核人姓名快照',
+  `audit_comment` VARCHAR(512) DEFAULT NULL COMMENT '本轮审核意见',
+  `audit_time` DATETIME DEFAULT NULL COMMENT '本轮审核时间，北京时间',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '本轮提交时间，北京时间',
 
   PRIMARY KEY (`id`),
-  KEY `idx_log_policy_version` (`policy_id`, `tenant_key`, `submission_version`, `id`),
-  KEY `idx_log_operator_time` (`operator_id`, `tenant_key`, `created_at`),
+  UNIQUE KEY `uk_policy_audit_round` (`policy_id`, `version`),
+  KEY `idx_policy_audit_tenant` (`policy_id`, `tenant_key`),
+  KEY `idx_policy_audit_auditor` (`auditor_id`, `tenant_key`),
 
-  CONSTRAINT `fk_log_policy`
-    FOREIGN KEY (`policy_id`, `tenant_key`) REFERENCES `policy_master` (`id`, `tenant_key`)
-    ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT `fk_log_operator`
-    FOREIGN KEY (`operator_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`)
-    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_policy_audit_apply`
+    FOREIGN KEY (`policy_id`, `tenant_key`) REFERENCES `policy_apply` (`id`, `tenant_key`),
+  CONSTRAINT `fk_policy_audit_user`
+    FOREIGN KEY (`auditor_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_policy_audit_snapshot` CHECK (`version` > 0 AND JSON_TYPE(`snapshot_data`) = 'OBJECT'),
+  CONSTRAINT `ck_policy_audit_result` CHECK (
+    (`audit_status` = 'SUBMITTED' AND `auditor_id` IS NULL AND `auditor_name` IS NULL
+      AND `audit_comment` IS NULL AND `audit_time` IS NULL)
+    OR (`audit_status` IN ('APPROVED', 'REJECTED') AND `auditor_id` IS NOT NULL
+      AND `auditor_name` IS NOT NULL AND `audit_time` IS NOT NULL)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='每轮提交快照和审核结果';
 
-  CONSTRAINT `ck_log_action`
-    CHECK (
-      `action_type` IN (
-        'CREATE_DRAFT', 'UPDATE_DRAFT', 'SUBMIT',
-        'APPROVE', 'REJECT', 'RESUBMIT'
-      )
-    ),
+CREATE TABLE `policy_goods_detail` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '商品适用明细主键',
+  `policy_id` BIGINT NOT NULL COMMENT '政策申请 ID',
+  `version` INT UNSIGNED NOT NULL COMMENT '所属正式提交轮次',
+  `platform_code` VARCHAR(32) NOT NULL COMMENT '实际适用的具体平台编码',
+  `spu_id` BIGINT NOT NULL COMMENT '标准机型及版本',
+  `ram` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '配置 RAM，统一 GB',
+  `rom` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '配置 ROM，统一 GB',
+  `goods_id` BIGINT NOT NULL COMMENT '普通卡和指定卡实际选中的标准商品 ID',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '明细生成时间，北京时间',
 
-  CONSTRAINT `ck_log_from_status`
-    CHECK (
-      `from_status` IS NULL
-      OR `from_status` IN ('DRAFT', 'PENDING', 'APPROVED', 'REJECTED')
-    ),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_policy_goods_round_platform` (`policy_id`, `version`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_config` (`spu_id`, `ram`, `rom`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_binding` (`goods_id`, `spu_id`, `ram`, `rom`),
 
-  CONSTRAINT `ck_log_to_status`
-    CHECK (`to_status` IN ('DRAFT', 'PENDING', 'APPROVED', 'REJECTED')),
-
-  CONSTRAINT `ck_log_submission_snapshot`
-    CHECK (
-      `action_type` NOT IN ('SUBMIT', 'RESUBMIT')
-      OR (
-        `submission_version` > 0
-        AND `submission_snapshot` IS NOT NULL
-        AND JSON_TYPE(`submission_snapshot`) = 'OBJECT'
-      )
-    ),
-
-  CONSTRAINT `ck_log_review_version`
-    CHECK (
-      `action_type` NOT IN ('APPROVE', 'REJECT')
-      OR `submission_version` > 0
-    )
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci
-  COMMENT='政策操作、提交快照与审核历史';
+  CONSTRAINT `fk_policy_goods_round`
+    FOREIGN KEY (`policy_id`, `version`) REFERENCES `policy_audit_log` (`policy_id`, `version`),
+  CONSTRAINT `fk_policy_goods_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
+  CONSTRAINT `fk_policy_goods_sku`
+    FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`),
+  CONSTRAINT `ck_policy_goods_platform` CHECK (
+    `platform_code` IN ('KUAISHOU', 'PDD', 'JD', 'DOUYIN', 'TMALL', 'TAOBAO', 'ZHAOSHANG', 'DEWU', 'UNICOM', 'GOV_ENTERPRISE')
+  ),
+  CONSTRAINT `ck_policy_goods_memory` CHECK (
+    REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
+    AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='逐轮次、平台和具体标准商品的政策适用明细';
