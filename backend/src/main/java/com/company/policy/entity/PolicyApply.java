@@ -18,7 +18,6 @@ public class PolicyApply {
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private String remark;
-    private String otherDesc;
     private String goodsFormJson;
     private String attachmentUrls;
     private String status;

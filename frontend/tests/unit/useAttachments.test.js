@@ -12,6 +12,23 @@ afterEach(() => vi.resetAllMocks())
 const pdf = () => new File(['%PDF-1.7'], '政策.pdf', { type: 'application/pdf' })
 
 describe('附件上传交互', () => {
+  it('账号切换后丢弃迟到的上传响应，恢复的绑定文件只移除引用', async () => {
+    let complete
+    uploadAttachment.mockReturnValue(new Promise((resolve) => (complete = resolve)))
+    const onChange = vi.fn()
+    const state = useAttachments({ onChange })
+    const pending = state.addFiles([pdf()])
+    state.restore()
+    complete({ id: 'old-owner', originalName: '政策.pdf' })
+    await pending
+    expect(state.files.value).toEqual([])
+    expect(onChange).not.toHaveBeenCalled()
+    state.restore([{ type: 'FILE', id: 'saved', originalName: '政策.pdf' }])
+    await state.removeFile(state.files.value[0])
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalledWith([])
+  })
+
   it('等待真实响应显示成功，期间阻止重复选择，移除时删除服务端文件', async () => {
     let complete
     uploadAttachment.mockReturnValue(new Promise((resolve) => (complete = resolve)))

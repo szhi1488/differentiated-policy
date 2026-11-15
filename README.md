@@ -1,5 +1,9 @@
 # 差异化政策管理
 
+「我的提交」已接入本人未提交草稿物理删除。服务端限定 DRAFT、提交轮次 0、无提交历史和当前记录版本，成功后刷新列表及清理同一草稿的编辑缓存。附件继续按引用独立处理。[草稿删除接口](docs/api/policy-api.md#删除未提交草稿)
+
+2026-11-15 政策附件已接入申请页上传、失败重试、草稿绑定回填和提交快照。本人详情、历轮快照及管理员详情支持授权下载，历史引用保护和绑定/删除并发校验已实现。当前沿用每份最多 10 个、单文件 20MiB 的工程限制。生产构建已与隔离 H2 后端完成 HTTP 联调，真实飞书和目标 MySQL 待联调。[附件接口与验证记录](docs/api/attachment-api.md)
+
 2026-11-11 前端规范化重构：已完成数据边界、页面与样式、基础状态三个阶段的适用整改。布局移至 `frontend/src/layouts/`，商品五类独立路由在 `views/admin/catalog/`；申请表单区块通过事件修改集中状态，切菜单保留内容，身份变化/退出清理；统一 `useAuthSession`、query 白名单、请求错误及取消边界。展示样例集中在 `mocks/`，缺失历史显示空状态，不生成审核或同步结果。无新增依赖，未新增业务接口或启用上传。实现清单见 [前端规范](docs/architecture/frontend-development.md#9-验证记录与维护)。
 
 本轮在 frontend 运行 `npm.cmd run check`，通过 ESLint、Prettier、19 个测试文件的 77 项测试及生产构建。隔离组件预览已检查 1440×1000、768×1000、390×844 的日期到秒显示、弹层边界/滚动、表格横向查看/固定操作列、分页及取消回显；截图保存在 `.local-cache/refactor-ui/`。本轮未重新进行真实飞书授权或 Cookie 恢复/退出联调，未连接数据库、修改后端、运行后端检查或部署。标准目录、共享补贴、持久化、审核和附件契约等仍属后续业务接入，不能据此标记已实现。
@@ -8,13 +12,13 @@
 
 当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`。管理员可在「商品 → 源商品库」分别导入 OPPO、一加，查询当前 SKU 原文、完整分类路径和修改时间，或在「商品 → 商品清洗与识别」启动清洗并处理异常。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。[管理员工作台](docs/architecture/admin-workspace.md)
 
-已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。商品管理与政策申请接口使用十四表基线。提交政策页已接入在售目录、草稿、回填和提交。「我的提交」已接入本人分页列表、详情和历轮审核，草稿和已驳回申请可继续编辑提交。管理员审核待接入。
+已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。商品管理与政策申请接口使用十四表基线。提交政策页已接入在售目录、草稿、回填和提交。「我的提交」已接入本人分页列表、当前详情和驳回原因，申请人界面不显示提交轮次或历轮审核。对外短单号如 `ZC-000005`，重提不变；后台保留原有创建幂等标识、日志和快照。草稿和已驳回申请可继续编辑提交，管理员审核已接入。
 
 后端包结构约定：`controller` 接收请求，`dto` 定义请求对象，`vo` 定义响应对象，`entity` 映射数据库，`mapper` 执行持久化操作。服务接口放在 `service`，对应实现放在 `service.impl` 并命名为 `接口名Impl`；Controller 和服务之间通过接口注入，组件及事务注解放在实现类。`common.config` 负责配置注册，`common.interceptor` 承担登录态与请求来源校验。登录 challenge 响应独立为 `LoginChallengeResponse`。
 
 前端目录约定：`api/request.js` 负责公共请求、超时和错误处理，其他 `api/` 模块定义业务接口；`constants/` 放固定选项，`composables/` 管理表单状态与交互，`utils/` 放纯函数。申请人工作台负责布局，表单、明细表格等拆分在 `views/apply/components/`；通用组件放在 `components/`。列表使用稳定标识，组件通过 props / emit 或 v-model 交互。
 
-前端已引入 Element Plus，组件和样式由 unplugin-vue-components 按需导入，统一中文语言；申请工作台登录后延迟加载。表单、日期范围、明细表格、平台页签、附件选择、按钮、提示和确认框使用组件库，自定义 CSS 负责业务布局与响应式适配。附件文件仅暂存页面。
+前端已引入 Element Plus，组件和样式由 unplugin-vue-components 按需导入，统一中文语言；申请工作台登录后延迟加载。表单、日期范围、明细表格、平台页签、附件选择、按钮、提示和确认框使用组件库，自定义 CSS 负责业务布局与响应式适配。附件已接入上传、草稿绑定回填和提交快照，申请人和管理员按政策权限下载。
 
 源码说明性注释使用中文。根目录 `.editorconfig` 统一编码和缩进；前端通过 ESLint / Prettier 检查未使用变量、控制语句、Vue 组件和格式，后端通过 Spotless 统一 Java 导入与格式。日常检查和格式修复命令见下文。
 
@@ -90,6 +94,8 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `FEISHU_TENANT_KEY` 为公司的飞书租户标识，原有 `JACKYUN_TENANT_KEY` 可回退使用。`JACKYUN_SOURCE_KEY` 是稳定的本地账套标识，默认 `jackyun`。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 
+2026-11-15 商品 SKU 调整：每条通过的源商品单独对应一条 `goods`，`sku_id` 延续该来源的原始 SKU；不同来源的相同规格颜色不归并，手工无来源商品 SKU 为空。用户确认现有数据无需保留，由用户在 Navicat 删除旧表后，按[执行说明](docs/sql/database-design.md#2026-11-15-原始-sku-一对一调整)对空库执行最新基线二选一。代码与新结构须配套使用。
+
 首次可为两个品牌分别全量导入，后续按建档日或修改日补录。任务断点和 SKU 原文按页一起落库，异常暂停，可继续或结束。导入完成后，管理员在清洗页面选择品牌和建档日范围，预览 SKU 后二次确认。清洗记录可查看任务进度，结果页可跨品牌查询、审核和重试。「商品中心」分页查看标准商品及详情。公司内管理员共用商品数据，新基线只保存清洗结果和任务进度。[商品流程与只读实测](docs/architecture/catalog-admin-design.md) · [管理接口](docs/api/catalog-api.md)
 
 仅核对 API 时，可在 `backend/` 将凭证临时设为进程环境变量，设置 `JACKYUN_LIVE_CHECK=1`，运行 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-Dtest=JackyunGoodsLiveTest' test`。该测试每品牌查询 3 条，只输出字段统计，不连接数据库。
@@ -103,6 +109,8 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 十四张表的关联、全部字段、草稿与审核历史见 [数据库设计与字段字典](docs/sql/database-design.md)。在 Navicat 选中已有空库，执行 [完整建表入口](docs/sql/schema.sql)（与 [V1](docs/sql/V1__create_policy_tables.sql) 完全相同，二选一，不能执行两遍），适用 MySQL 8.0.16+。SQL 不建库、不删表、不插入用户或示例商品；执行前 SELECT VERSION(), DATABASE(); 和 SHOW TABLES; 核对版本、库名和空表状态。
 
 用户已确认目标库空表重建，由用户在 Navicat 执行。商品导入和清洗已接入持久化。建表脚本仅恢复结构，旧用户、商品和政策记录须通过备份恢复或重新导入。
+
+2026-11-15 已确认新增用户头像字段。已有十四表库由用户在 Navicat 按 [头像增量 SQL](docs/sql/add_user_avatar_url.sql) 的检查、加列、核对顺序执行，再启动新版后端并重新登录；保留现有用户及业务数据。新空库两份基线已包含 `avatar_url`，无需再执行增量。申请人与管理员顶部栏共用头像展示，空头像或图片失败显示姓名首字。
 
 本机数据库为 `127.0.0.1:3306` 下的 `differentiated policy`（库名包含空格，JDBC URL 使用 `differentiated%20policy`）。连接使用 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`，真实凭证只保存在被忽略的 `backend/.env.local.properties`；新环境参考 `.env.example`。应用不自动建表、不初始化真实业务数据。修改后须重启后端，让新登录经过落库；已有旧进程内会话不代表已写入 user_info。
 

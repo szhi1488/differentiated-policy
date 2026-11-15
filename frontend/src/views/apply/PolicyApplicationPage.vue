@@ -1,32 +1,38 @@
 <script setup>
 import './policy-form.css'
-import { inject, ref, watch } from 'vue'
+import { computed, inject, nextTick, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import { POLICY_STATUS_LABELS } from '../../constants/policy'
+import { occupiedCommonConfigurations } from '../../utils/policy-form'
 import PolicyGoodsPicker from './components/PolicyGoodsPicker.vue'
 import PolicyModelCard from './components/PolicyModelCard.vue'
 import PolicyBasicSection from './components/PolicyBasicSection.vue'
 import PolicyTimeSection from './components/PolicyTimeSection.vue'
 import PolicyAttachmentsSection from './components/PolicyAttachmentsSection.vue'
+import PolicyRejectionNotice from './components/PolicyRejectionNotice.vue'
 const {
   form,
   files,
+  attachmentNotice,
+  retryFile,
   notice,
   noticeType,
   confirming,
   record,
   busy,
+  loading,
   writing,
   locked,
   loadError,
   conflict,
   readOnly,
   reloadDraft,
-  saveDraft,
+  saveDraft: persistDraft,
   platforms,
   selectedPlatforms,
-  models,
   switchChannel,
   togglePlatform,
   selectAll,
@@ -35,6 +41,7 @@ const {
   addFiles,
   removeFile,
   reset,
+  clear,
   submit,
   updateField,
   setModelPlatforms,
@@ -47,7 +54,32 @@ const {
 } = inject('policyForm')
 const route = useRoute()
 const router = useRouter()
-const goodsPicker = ref('')
+const goodsPicker = ref(null)
+const specifiedIds = computed(() =>
+  form.value.cards.flatMap(({ id }) => (id === undefined ? [] : [id])),
+)
+const commonGoodsCount = computed(() =>
+  form.value.cards.reduce(
+    (count, model) => count + (model.id === undefined ? model.goods.length : 0),
+    0,
+  ),
+)
+const editingCard = computed(() =>
+  form.value.cards.find(({ key }) => key === goodsPicker.value?.cardKey),
+)
+const blockedConfigurations = computed(() =>
+  occupiedCommonConfigurations(form.value.cards, editingCard.value?.key),
+)
+const addedGoodsKeys = computed(() => {
+  if (goodsPicker.value?.special) {
+    return specifiedIds.value
+  }
+  return editingCard.value?.goods.map(({ key }) => key) ?? []
+})
+const initialGoods = computed(
+  () =>
+    editingCard.value?.goods.filter(({ spuId }) => spuId === goodsPicker.value.initialSpuId) ?? [],
+)
 watch(
   () => [route.query.policyId, writing.value],
   ([id, writingAction]) => {
@@ -55,7 +87,7 @@ watch(
       route.name === 'apply' &&
       typeof id === 'string' &&
       !writingAction &&
-      id !== record.value?.id
+      (id !== record.value?.id || loadError.value)
     ) {
       void reloadDraft(id, false)
     }
@@ -65,7 +97,7 @@ watch(
 watch(
   () => record.value?.id,
   (id) => {
-    if (id && route.name === 'apply' && route.query.policyId !== id) {
+    if (id && route.name === 'apply' && !route.query.policyId) {
       void router.replace({ name: 'apply', query: { ...route.query, policyId: id } })
     }
   },
@@ -73,13 +105,59 @@ watch(
 )
 watch(locked, (value) => {
   if (value) {
-    goodsPicker.value = ''
+    goodsPicker.value = null
   }
 })
+
+watch(
+  [notice, noticeType],
+  ([message, type]) => {
+    if (message) {
+      ElMessage({ message, type, showClose: true })
+      notice.value = ''
+    }
+  },
+  { immediate: true, flush: 'post' },
+)
+watch(
+  attachmentNotice,
+  (message) => {
+    if (message) {
+      ElMessage({ message, type: 'warning', showClose: true })
+      attachmentNotice.value = ''
+    }
+  },
+  { immediate: true, flush: 'post' },
+)
+watch(
+  loadError,
+  (message) => {
+    if (message) {
+      ElMessage({ message, type: 'error', showClose: true })
+    }
+  },
+  { immediate: true },
+)
 
 async function resetForm() {
   if (await reset()) {
     await router.replace({ name: 'apply' })
+  }
+}
+
+async function saveDraft() {
+  if (await persistDraft()) {
+    ElMessage.success('草稿保存成功')
+  }
+}
+
+async function submitForm() {
+  if (await submit()) {
+    // 先移除原申请地址，再清理缓存，避免路由监听重新回填已提交申请。
+    await router.replace({ name: 'apply' })
+    clear()
+    await nextTick()
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
   }
 }
 
@@ -91,16 +169,26 @@ function reload() {
 }
 
 watch(form, () => {
-  goodsPicker.value = ''
+  goodsPicker.value = null
 })
 
-function confirmGoods(goods) {
-  if (goodsPicker.value === 'special') {
-    addSpecialGood(goods[0])
-  } else {
-    addGoods(goods)
+function editGoods(cardKey, initialSpuId) {
+  goodsPicker.value = { cardKey, initialSpuId }
+}
+
+async function confirmGoods(goods, removedKeys) {
+  const picker = goodsPicker.value
+  if (!picker) {
+    return
   }
-  goodsPicker.value = ''
+  if (picker.special) {
+    addSpecialGood(goods[0])
+  } else if (!(await addGoods(goods, picker.cardKey, removedKeys))) {
+    return
+  }
+  if (goodsPicker.value === picker) {
+    goodsPicker.value = null
+  }
 }
 
 function updateTime(value) {
@@ -115,20 +203,13 @@ function updateTime(value) {
     :model="form"
     :disabled="locked"
     label-position="top"
-    @submit.prevent="submit"
+    @submit.prevent="submitForm"
   >
-    <el-alert
-      v-if="record || (busy && !writing) || loadError"
-      :title="
-        loadError ||
-        (record
-          ? `申请单号 ${record.policyCode} · ${POLICY_STATUS_LABELS[record.status]}`
-          : '正在读取申请…')
-      "
-      :type="loadError ? 'error' : 'info'"
-      :closable="false"
-      show-icon
-    />
+    <p v-if="record" class="policy-record-summary">
+      申请单号 {{ record.policyCode }} · {{ POLICY_STATUS_LABELS[record.status] }}
+    </p>
+    <p v-else-if="loading" class="policy-record-summary" role="status">正在读取申请…</p>
+    <PolicyRejectionNotice v-if="record" :policy="record" />
     <PolicyBasicSection
       :form="form"
       :platforms="platforms"
@@ -145,13 +226,16 @@ function updateTime(value) {
           三、商品及补贴信息
         </h2>
         <div class="policy-goods-actions">
-          <el-button :disabled="!selectedPlatforms.length" @click="goodsPicker = 'special'">
+          <el-button
+            :disabled="confirming || !selectedPlatforms.length"
+            @click="goodsPicker = { special: true }"
+          >
             指定适用机型
           </el-button>
           <el-button
             type="primary"
-            :disabled="!selectedPlatforms.length"
-            @click="goodsPicker = 'standard'"
+            :disabled="confirming || !selectedPlatforms.length"
+            @click="goodsPicker = {}"
           >
             <AppIcon name="plus" :size="15" />
             选择手机型号
@@ -159,11 +243,11 @@ function updateTime(value) {
         </div>
       </div>
       <div class="policy-goods-summary">
-        <span>已选 {{ form.model?.goods.length ?? 0 }} 件普通商品</span>
-        <span v-if="form.specialGoods.length">{{ form.specialGoods.length }} 件指定商品</span>
+        <span>已选 {{ commonGoodsCount }} 件普通商品</span>
+        <span v-if="specifiedIds.length">{{ specifiedIds.length }} 件指定商品</span>
       </div>
       <el-empty
-        v-if="!models.length"
+        v-if="!form.cards.length"
         class="policy-model-empty"
         :image-size="52"
         :description="
@@ -172,51 +256,45 @@ function updateTime(value) {
       />
       <div v-else class="policy-model-list">
         <PolicyModelCard
-          v-for="model in models"
-          :key="model.id ?? 'standard'"
+          v-for="model in form.cards"
+          :key="model.key"
           :model="model"
           :platforms="selectedPlatforms"
           :confirming="confirming || locked"
-          @set-model-platforms="setModelPlatforms($event, model.id)"
+          @set-model-platforms="setModelPlatforms($event, model.key)"
           @update-model-platform="
-            (code, field, value) => updateModelPlatform(code, field, value, model.id)
+            (code, field, value) => updateModelPlatform(code, field, value, model.key)
           "
-          @remove-model="removeModel(model.id)"
-          @remove-goods="removeGoods"
-          @add-subsidy="addSubsidy(model.id)"
-          @update-subsidy="(key, field, value) => updateSubsidy(key, field, value, model.id)"
-          @remove-subsidy="removeSubsidy($event, model.id)"
+          @edit-goods="editGoods(model.key, $event)"
+          @remove-model="removeModel(model.key)"
+          @remove-goods="removeGoods($event, model.key)"
+          @add-subsidy="addSubsidy(model.key)"
+          @update-subsidy="(key, field, value) => updateSubsidy(key, field, value, model.key)"
+          @remove-subsidy="removeSubsidy($event, model.key)"
         />
       </div>
       <PolicyGoodsPicker
         v-if="goodsPicker"
-        :special="goodsPicker === 'special'"
-        :added-keys="
-          goodsPicker === 'special'
-            ? form.specialGoods.map(({ id }) => id)
-            : (form.model?.goods.map(({ key }) => key) ?? [])
-        "
-        @close="goodsPicker = ''"
+        :special="goodsPicker.special"
+        :editing="!!goodsPicker.cardKey"
+        :initial-goods="initialGoods"
+        :existing-goods="editingCard?.goods ?? []"
+        :added-keys="addedGoodsKeys"
+        :blocked-configurations="blockedConfigurations"
+        @close="goodsPicker = null"
         @confirm="confirmGoods"
       />
     </section>
     <PolicyAttachmentsSection
       :form="form"
       :files="files"
+      :read-only="readOnly"
       @update-field="updateField"
       @add-files="addFiles"
       @remove-file="removeFile"
-    />
-    <el-alert
-      v-if="notice"
-      :title="notice"
-      :type="noticeType"
-      show-icon
-      :closable="false"
-      role="status"
+      @retry-file="retryFile"
     />
     <footer class="form-actions">
-      <span>请确认政策信息填写准确后提交</span>
       <el-button v-if="!locked" :disabled="confirming" @click="resetForm">
         {{ record ? '新建申请' : '清空表单' }}
       </el-button>

@@ -9,6 +9,7 @@ import com.company.policy.common.config.AttachmentProperties;
 import com.company.policy.common.exception.GlobalExceptionHandler;
 import com.company.policy.common.interceptor.LoginInterceptor;
 import com.company.policy.entity.UserInfo;
+import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.JsSdkSignatureService;
 import com.company.policy.service.impl.AttachmentServiceImpl;
@@ -50,9 +51,12 @@ class AttachmentControllerTest {
         account.setId(1L);
         account.setIsDeleted(0);
         when(users.findIdentity(anyString(), anyString())).thenReturn(account);
+        when(users.lockAttachmentOwner(anyString(), anyLong())).thenReturn(1L);
         var properties = new AttachmentProperties();
         properties.setRoot(directory.toString());
-        storage = new AttachmentServiceImpl(properties, json, clock, users);
+        storage =
+                new AttachmentServiceImpl(
+                        properties, json, clock, users, mock(PolicyApplyMapper.class));
         mvc =
                 MockMvcBuilders.standaloneSetup(new AttachmentController(storage, sessions))
                         .addInterceptors(
@@ -67,7 +71,7 @@ class AttachmentControllerTest {
         sessions.establish(
                 request,
                 new AuthSessionResponse(
-                        new CurrentUserResponse("1", openId, tenant, "测试用户", "APPLICANT"),
+                        new CurrentUserResponse("1", openId, tenant, "测试用户", "APPLICANT", null),
                         Instant.now().plusSeconds(600)));
         return (MockHttpSession) request.getSession();
     }
@@ -117,10 +121,13 @@ class AttachmentControllerTest {
         // 使用同一目录创建新实例，验证重启后不依赖内存中的归属映射。
         var properties = new AttachmentProperties();
         properties.setRoot(directory.toString());
-        var reopened = new AttachmentServiceImpl(properties, json, clock, users);
+        var reopened =
+                new AttachmentServiceImpl(
+                        properties, json, clock, users, mock(PolicyApplyMapper.class));
         var download =
                 reopened.download(
-                        id, new CurrentUserResponse("1", "open", "tenant", "测试用户", "APPLICANT"));
+                        id,
+                        new CurrentUserResponse("1", "open", "tenant", "测试用户", "APPLICANT", null));
         try (var input = download.resource().getInputStream()) {
             assertThat(input.readAllBytes()).isEqualTo(file.getBytes());
         }
@@ -163,7 +170,7 @@ class AttachmentControllerTest {
         sessions.establish(
                 otherRequest,
                 new AuthSessionResponse(
-                        new CurrentUserResponse("2", "other", "tenant", "其他用户", "ADMIN"),
+                        new CurrentUserResponse("2", "other", "tenant", "其他用户", "ADMIN", null),
                         Instant.now().plusSeconds(600)));
         var other = (MockHttpSession) otherRequest.getSession();
         mvc.perform(get("/api/attachments/{id}/content", id).session(other))

@@ -1,64 +1,30 @@
-# 采购管理员审核接口设计
+# 采购管理员审核与有效政策接口
 
-商品导入、清洗及标准目录接入情况见 [商品同步与管理员后台方案](../architecture/catalog-admin-design.md)。本文件维护政策审核契约。
-
-更新日期：2026-11-14。**以下接口均未实现**。政策表结构和规格颜色范围已确认，不代表已有审核权限校验或接口。公共约定沿用 [申请人接口](policy-api.md)；商品维护接口见 [商品接口](catalog-api.md)。
-
-当前管理员工作台侧栏只有商品相关页面。建议增加「政策审核」入口 `#/admin/policies`，含待审列表、详情和历轮记录。列表默认筛选待审核，可切换已通过或已驳回。[管理员工作台](../architecture/admin-workspace.md)
-
-## 权限及接口
-
-每次操作由后端校验当前用户有效且具 ADMIN 角色，并检查政策租户范围；不能只信前端路由或登录时角色快照。跨人可见范围、自审和跨租户管理规则待确认，未确认前不扩展权限。
+更新日期：2026-11-15。以下七个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/admin/policies` | 分页筛选申请和政策 |
-| GET | `/api/admin/policies/{id}` | 当前提交快照、版本和最近审核 |
-| GET | `/api/admin/policies/{id}/audit-logs` | 分页审核历史 |
-| GET | `/api/admin/policies/{id}/audit-logs/{logId}` | 经父申请鉴权后读取该轮提交快照 |
-| POST | `/api/admin/policies/{id}/review` | 通过或拒绝当前提交版本 |
-| GET | `/api/admin/policies/{id}/override-preview` | 后续接入，读取待审版本的覆盖候选 |
+| GET | `/api/admin/policies` | 分页查看已提交的政策 |
+| GET | `/api/admin/policies/{id}` | 当前提交快照、审核结果和覆盖状态 |
+| GET | `/api/admin/policies/{id}/audit-logs` | 分页查看各轮审核 |
+| GET | `/api/admin/policies/{id}/audit-logs/{logId}` | 指定轮次的审核结果和提交快照 |
+| POST | `/api/admin/policies/{id}/review` | 通过或驳回当前待审轮次 |
+| GET | `/api/admin/policies/{id}/override-preview` | 查看待审轮次假设此刻通过后的覆盖情况 |
+| GET | `/api/admin/policies/effective` | 查询渠道、平台和商品在指定时点适用的政策 |
 
-成功默认 200。当前只设计查询/审核，不提供直接修改申请人内容、覆盖删除、批量通过或通过后修改接口。
+## 列表与详情
 
-## 分页筛选
+`page` 默认 1，`pageSize` 默认 20，范围 1 至 100。支持 `status`（PENDING、APPROVED、REJECTED）、`perspective`、`platformCode`（整单平台）、`verifyType`、`sceneType`、`applicant`、`submittedFrom`、`submittedTo`、`keyword`。提交日期为北京时间 `YYYY-MM-DD`，含所选的首尾日期。关键词匹配单号、申请人和快照机型名。列表按本轮提交时间、提交日志 ID 倒序。`counts` 返回其他筛选条件下各状态的数量，`total` 为当前状态筛选后的行数。
 
-建议参数：`page`（默认 1）、`pageSize`（默认 20，最大 100）、`perspective`、`platformCode`、`modelKeyword`、`status`、`applicantId`、`startTimeFrom`、`startTimeTo`、`endTimeFrom`、`endTimeTo`；零售可用 `verifyType`、`sceneType`、`estimated`。时间筛选暂定义为对应字段闭区间上下界，不把它混成未确认的“当前最终生效”条件。
+详情的 `policy` 提供记录版本、提交轮次、审核状态和 `reviewable`；`snapshot` 保存本轮提交内容；`audit` 保存当前审核结果。待审核和已通过详情包含 `coverage`。
 
-modelKeyword 匹配本轮提交快照中的机型名称。精确筛选采用当前轮次的 `policy_goods_detail`，按 spuId、ram、rom、goodsId 匹配。商品必须属于该配置。查询按 `policy_apply.tenant_key` 和服务端会话限定。百亿与零售专属条件同时出现须提示非法组合；枚举、排序及分页在后端验证。
+文件附件下载由 `PolicyAttachmentController` 提供 `GET /api/admin/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content`。详情页面使用 `audit.id` 和快照中的文件 ID 生成下载入口，服务端校验管理员身份、申请权限及该文件属于指定提交轮次。字段和删除保护见[附件接口](attachment-api.md)。
 
-返回 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`，列表项至少含 ID、单号、申请人、视角、平台集合、起止时间、审核状态、版本和最近审核时间。默认 `created_at DESC, id DESC`。明细筛选用 EXISTS 或先去重 ID，total 按申请数计算。不能用状态 APPROVED 显示“当前生效”。
+「差异化政策」页面默认传 `pageSize=10`。查看和审核共用详情接口，从响应的 `coverage` 展示预览或生效范围。普通机型的已选颜色、指定机型的平台及数量均从该轮快照读取。单独的覆盖预览、有效政策查询和历轮审核接口可独立调用。[管理员工作台](../architecture/admin-workspace.md#差异化政策)
 
-管理员按当前轮次的 `snapshot_data` 查看商品、补贴方案、各平台数量及提交时名称。每轮审核结果和提交快照支持独立查看。
+## 审核
 
-## 覆盖候选预览
-
-请求 query 必带 `recordVersion`、`submissionVersion`，只预览当前 PENDING 轮次；不匹配返回 409。未来草稿预览如有需要另行设计。未定口径期间只提供结构或带“候选”标记的结果，不能把空列表显示为已确认无覆盖。
-
-建议响应结构（示例，不代表已能计算）：
-
-```json
-{
-  "policyId": "1001",
-  "recordVersion": 4,
-  "submissionVersion": 1,
-  "determination": "UNCONFIRMED",
-  "message": "覆盖口径尚未确认，当前不能判定实际覆盖结果。",
-  "items": []
-}
-```
-
-`determination` 草案枚举：`UNCONFIRMED` 尚不能判定、`CANDIDATE` 仅候选、`CONFIRMED` 最终口径计算；最后一种须规则及实现均完成后启用。
-
-候选 item 应含新旧 policyId/policyCode/detailId、平台、spuId、ram、rom、goodsId、品牌系列型号配置颜色快照、补贴参数及时间范围。商品范围相交须为同一个平台和同一个实际选中的商品 ID，优先级与替换规则仍待确认。预览不改变数据库，不隐含二次确认要求。
-
-算法假设、SQL 及局限见 [覆盖查询草案](../business/override-engine.md)。最终通过时须重新检查候选与并发，不能把预览结果当锁或提交凭证。
-
-## 有效政策查询
-
-优先复用管理员列表筛选。业务确认生效时间和覆盖规则后，再定查询时点、平台、`goodsId` 与最终适用政策的响应契约。
-
-## 审核请求与响应
+请求体示例：
 
 ```json
 {
@@ -69,24 +35,27 @@ modelKeyword 匹配本轮提交快照中的机型名称。精确筛选采用当�
 }
 ```
 
-`decision` 仅 `APPROVE` / `REJECT`，不直接接受 status；`reviewRemark` 最长 512 字符，拒绝是否必填待确认。审核人、姓名、时间从服务端取得，禁止客户端伪造。
+`decision` 取 `APPROVE` 或 `REJECT`，意见选填，最多 512 字。服务端确定审核人及审核时间，并在同一事务更新主表和当前待审轮次。响应包含 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。审核记录保留，驳回后可原单重提。
 
-通过或拒绝仅允许当前 PENDING、指定提交版本、指定记录版本。在同一事务中条件更新申请、递增 recordVersion，并更新本轮待审记录的审核结果、审核人、意见和时间；返回 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。
+## 历轮审核
 
-```json
-{
-  "id": "1001",
-  "status": "REJECTED",
-  "recordVersion": 5,
-  "submissionVersion": 1,
-  "reviewTime": "2026-11-10T10:00:00+08:00"
-}
-```
+列表接口支持 `page` 和 `pageSize`，默认分别为 1 和 20，每页最多 100 条，按提交轮次倒序。条目中的 `id` 为审核日志 ID，用作单轮接口的 `logId`。单轮接口返回 `log` 和该轮的 `snapshot`，并核对审核日志属于路径中的申请。
 
-`APPROVE` 不能隐含“删除旧政策”“整单失效”或“已打款”。正式通过及替换逻辑在覆盖规则确认后实现；此前不得仅跳过覆盖校验就声称完成审核生效闭环。拒绝记录保留，申请人可原 ID 修改重提。
+## 覆盖预览与有效政策
 
-## 错误与验收
+预览请求携带 `recordVersion` 和 `submissionVersion`。返回比较时点 `at`、该申请最早满足生效条件的时点 `effectiveFrom`，以及每个商品和平台的结果 `items`。
 
-HTTP 400 非法筛选/decision/参数，401 未登录，403 非管理员或范围越界，404 申请不存在，409 记录/提交版本或状态冲突，503 存储不可用。稳定 code 在实现时与申请人接口统一；未确认覆盖规则的审核通过能力不得开放，可预留 `OVERRIDE_RULES_UNCONFIRMED` 明确返回未就绪，而不是伪报通过。
+| 场景 | 结果 |
+| --- | --- |
+| 待审核 | `NEW` 新增，`REPLACES` 覆盖现有政策，`RETAINED` 由较新的申请继续适用 |
+| 已通过 | `SCHEDULED` 等待本申请开始时间，`EFFECTIVE` 当前生效，`SUPERSEDED` 已被较新申请覆盖 |
 
-后续验证非管理员/跨租户拦截、重复并发审核、申请重提导致旧预览失效、历史保留、分页不因明细重复、有效时间端点、局部平台及无关机型不受影响。当前没有这些业务测试通过记录。
+条目包含 `platformCode`、`goodsId`、`outcome` 及对照政策 `winner`。确认审核使用实际通过时间。预览按当时已通过的记录计算。
+
+`GET /api/admin/policies/effective` 必须提供 `perspective`、`platformCode`、`goodsId`。可选 `at` 格式为 `YYYY-MM-DDTHH:mm:ss+08:00`，默认当前北京时间。手写查询字符串时，时区中的 `+` 编码为 `%2B`。
+
+响应包含查询时点 `at`、生效政策 `winner` 和该轮 `snapshot`。`winner` 包含 `id`、`policyCode`、`submissionVersion`、`submittedAt` 和 `effectiveFrom`。没有符合条件的政策时，`winner` 和 `snapshot` 均为 null。各申请按其独立开始时间、审核通过时间和本轮提交顺序解析，参考到期时间供展示。[覆盖规则](../business/override-engine.md)
+
+## 错误
+
+400 参数或审核决定无效，401 未登录，403 角色、租户或自审校验失败，404 申请或审核轮次不可见，409 记录版本、提交轮次或状态已经变化，503 存储不可用。

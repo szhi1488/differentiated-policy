@@ -1,5 +1,8 @@
 <script setup>
-import { inject, ref } from 'vue'
+import { inject, onScopeDispose, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
 import { useRouter } from 'vue-router'
 import { usePolicySubmissions } from '../../composables/usePolicySubmissions'
 import {
@@ -13,10 +16,20 @@ import { policyTime } from '../../utils/policy-adapter'
 import PolicySubmissionDrawer from './components/PolicySubmissionDrawer.vue'
 
 const router = useRouter()
-const { busy, confirming, preparePolicyEdit } = inject('policyForm')
+const { busy, confirming, writing, preparePolicyEdit, deleteDraft } = inject('policyForm')
 const { filters, data, error, loading, refresh, setFilter } = usePolicySubmissions()
 const selected = ref(null)
 const detailOpen = ref(false)
+const deleteTarget = ref(null)
+let active = true
+onScopeDispose(() => {
+  active = false
+})
+watch(writing, (value, previous) => {
+  if (previous === 'delete' && value !== 'delete') {
+    void refresh()
+  }
+})
 const filterOptions = [
   { key: 'status', label: '状态', options: POLICY_STATUS_LABELS },
   { key: 'perspective', label: '渠道', options: CHANNEL_LABELS },
@@ -31,6 +44,43 @@ function openDetail(row) {
 async function edit(row) {
   if (await preparePolicyEdit(row.id, row.recordVersion)) {
     await router.push({ name: 'apply', query: { policyId: row.id } })
+  }
+}
+
+async function removeDraft(row) {
+  if (busy.value || confirming.value || deleteTarget.value) {
+    return
+  }
+  deleteTarget.value = row.id
+  try {
+    const deleted = await deleteDraft(row, () =>
+      ElMessageBox.confirm(
+        `确定永久删除草稿「${row.policyCode}」吗？删除后无法恢复。`,
+        '删除草稿',
+        {
+          type: 'warning',
+          confirmButtonText: '删除草稿',
+          cancelButtonText: '取消',
+        },
+      ).then(
+        () => active,
+        () => false,
+      ),
+    )
+    if (active && deleted) {
+      if (selected.value?.id === row.id) {
+        detailOpen.value = false
+        selected.value = null
+      }
+      ElMessage.success('草稿已删除')
+    }
+  } catch (cause) {
+    if (active) {
+      const unknown = ['network', 'timeout', 'parse'].includes(cause.kind) || cause.status >= 500
+      ElMessage.error(unknown ? '删除结果待核对，请刷新列表确认。' : cause.message)
+    }
+  } finally {
+    deleteTarget.value = null
   }
 }
 </script>
@@ -61,7 +111,7 @@ async function edit(row) {
     <el-empty v-else-if="!data?.items.length" description="没有符合条件的申请" :image-size="90" />
     <template v-else>
       <el-table :data="data.items" row-key="id">
-        <el-table-column prop="policyCode" label="申请单号" min-width="260" />
+        <el-table-column prop="policyCode" label="申请单号" min-width="196" show-overflow-tooltip />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="POLICY_STATUS_TYPES[row.status]">
@@ -79,13 +129,10 @@ async function edit(row) {
             }}
           </template>
         </el-table-column>
-        <el-table-column label="提交轮次" width="95">
-          <template #default="{ row }">{{ row.submissionVersion || '—' }}</template>
-        </el-table-column>
         <el-table-column label="更新时间" width="174">
           <template #default="{ row }">{{ policyTime(row.updatedAt).replace('T', ' ') }}</template>
         </el-table-column>
-        <el-table-column label="操作" fixed="right" width="137">
+        <el-table-column label="操作" fixed="right" width="195">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
             <el-button
@@ -96,6 +143,17 @@ async function edit(row) {
               @click="edit(row)"
             >
               继续编辑
+            </el-button>
+            <el-button
+              v-if="row.status === 'DRAFT' && row.submissionVersion === 0"
+              link
+              type="danger"
+              :disabled="busy || confirming"
+              :loading="writing === 'delete' && deleteTarget === row.id"
+              :aria-label="`删除草稿 ${row.policyCode}`"
+              @click="removeDraft(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>

@@ -1,0 +1,72 @@
+/* 两种工作台共用侧栏菜单视觉，角色布局分别维护尺寸与手机交互。 */
+.workspace-sidebar {
+  background: linear-gradient(168deg, #fff 1%, #f9fbff 75%);
+  border-right: 1px solid #e6ecf6;
+}
+.workspace-sidebar .workspace-brand {
+  padding: 30px 22px 38px;
+}
+.workspace-sidebar-nav {
+  padding: 0 12px;
+}
+.workspace-sidebar-nav .workspace-nav-group {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: auto;
+  gap: 11px;
+  margin: 0;
+  padding: 12px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #347cff;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-sidebar-nav .el-button.workspace-nav-group > span {
+  width: 100%;
+  gap: 11px;
+}
+.workspace-sidebar-nav .workspace-nav-chevron {
+  margin-left: auto;
+  transition: transform 0.2s;
+}
+.workspace-sidebar-nav .workspace-nav-group[aria-expanded='true'] .workspace-nav-chevron {
+  transform: rotate(180deg);
+}
+.workspace-sidebar-nav .workspace-nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 4px 0;
+  padding: 12px 20px 12px 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5b6b84;
+  font-size: 12px;
+  line-height: normal;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.workspace-sidebar-nav .workspace-nav-item.is-active {
+  color: #2c76f5;
+  background: #eaf1ff;
+  font-weight: 600;
+}
+.workspace-sidebar-nav .workspace-nav-item:hover,
+.workspace-sidebar-nav .workspace-nav-group:hover {
+  background: #f0f5ff;
+}
+@media (max-width: 800px) and (min-width: 601px) {
+  .workspace-sidebar .workspace-brand {
+    padding: 26px 14px;
+  }
+  .workspace-sidebar .workspace-brand strong {
+    font-size: 12px;
+  }
+}

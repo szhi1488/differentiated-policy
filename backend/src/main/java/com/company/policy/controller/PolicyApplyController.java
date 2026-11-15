@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.TransactionException;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -76,6 +77,19 @@ public class PolicyApplyController {
             @RequestBody PolicyDraftRequest body,
             HttpServletRequest request) {
         return policies.save(sessions.requireLogin(request).user(), id, body);
+    }
+
+    @DeleteMapping("/{id}/draft")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(
+            summary = "物理删除本人未提交的草稿",
+            description =
+                    "recordVersion 必填且为正整数；仅允许 DRAFT、提交轮次为 0 且没有提交记录的本人申请。204 成功，404 不存在或非本人，409 状态或版本冲突。文件保留，由附件接口按引用校验后单独处理。")
+    public void deleteDraft(
+            @PathVariable long id,
+            @RequestParam Integer recordVersion,
+            HttpServletRequest request) {
+        policies.deleteDraft(sessions.requireLogin(request).user(), id, recordVersion);
     }
 
     @PostMapping(path = "/{id}/submit", consumes = MediaType.APPLICATION_JSON_VALUE)

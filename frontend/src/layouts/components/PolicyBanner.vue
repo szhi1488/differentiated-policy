@@ -1,5 +1,12 @@
 <script setup>
 import AppIcon from '../../components/AppIcon.vue'
+
+defineProps({
+  description: {
+    type: String,
+    default: '支持零售与百亿两种视角，规范提交政策信息，快速完成审核',
+  },
+})
 </script>
 
 <template>
@@ -10,7 +17,7 @@ import AppIcon from '../../components/AppIcon.vue'
     </div>
     <div class="banner-copy">
       <h1>差异化政策管理</h1>
-      <p>支持零售与百亿两种视角，规范提交政策信息，快速完成审核</p>
+      <p>{{ description }}</p>
     </div>
     <svg class="banner-art" viewBox="0 0 310 132" fill="none" aria-hidden="true">
       <ellipse

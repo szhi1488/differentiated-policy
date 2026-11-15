@@ -5,6 +5,8 @@ export function applicantGood(item) {
   return {
     id: stringId(item.goodsId),
     key: item.goodsId,
+    brandId: stringId(item.brandId),
+    seriesId: stringId(item.seriesId),
     spuId: stringId(item.spuId),
     ram: item.ram,
     rom: item.rom,
@@ -72,9 +74,15 @@ export function policyDraft(form, recordVersion) {
     startTime: policyApiTime(form.startTime),
     endTime: policyApiTime(form.endTime),
     specialRemark: form.remark || null,
-    attachmentInfo: link ? [{ type: 'LINK', url: link }] : [],
-    otherExplanation: form.explanation || null,
-    goodsForm: { cards: [form.model, ...form.specialGoods].filter(Boolean).map(writeCard) },
+    attachmentInfo: [
+      ...(link ? [{ type: 'LINK', url: link }] : []),
+      ...(form.attachments ?? []).map(({ id, originalName }) => ({
+        type: 'FILE',
+        id,
+        originalName,
+      })),
+    ],
+    goodsForm: { cards: form.cards.map(writeCard) },
   }
 }
 
@@ -91,8 +99,10 @@ export function restorePolicyForm(detail) {
     startTime: policyTime(source.startTime),
     endTime: policyTime(source.endTime),
     remark: source.specialRemark ?? '',
-    explanation: source.otherExplanation ?? '',
     links: source.attachmentInfo.find((item) => item.type === 'LINK')?.url ?? '',
+    attachments: source.attachmentInfo
+      .filter((item) => item.type === 'FILE')
+      .map(({ id, originalName }) => ({ type: 'FILE', id, originalName })),
   }
   for (const card of source.goodsForm.cards) {
     if (!card.targets?.length) {
@@ -145,10 +155,8 @@ export function restorePolicyForm(detail) {
     }
     if (special) {
       model.id = model.goods[0].id
-      form.specialGoods.push(model)
-    } else {
-      form.model = model
     }
+    form.cards.push(model)
   }
   return form
 }

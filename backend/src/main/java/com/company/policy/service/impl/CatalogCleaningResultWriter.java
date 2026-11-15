@@ -2,6 +2,7 @@ package com.company.policy.service.impl;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.entity.CatalogCleaningJob;
+import com.company.policy.entity.CatalogGoodsInsert;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.entity.Spu;
 import com.company.policy.entity.UserInfo;
@@ -13,7 +14,6 @@ import com.company.policy.vo.CatalogCleaningResponse.Status;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Objects;
-import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -50,13 +50,21 @@ class CatalogCleaningResultWriter {
         }
         var color = goods.lockColor(candidate.colorName());
         var existing =
-                model == null || color == null
-                        ? null
-                        : goods.lockGoods(model.id(), memory.ram(), memory.rom(), color.id());
-        if (protect && (existing == null || !Objects.equals(source.getGoodsId(), existing.id()))) {
+                source.getGoodsId() == null
+                        ? goods.lockGoodsBySku(source.getSkuId())
+                        : goods.lockMappedGoods(source.getGoodsId());
+        boolean sameTarget =
+                existing != null
+                        && model != null
+                        && color != null
+                        && existing.spuId() == model.id()
+                        && memory.ram().equals(existing.ram())
+                        && memory.rom().equals(existing.rom())
+                        && existing.colorId() == color.id();
+        if (!sameTarget && (protect || (existing != null && source.getGoodsId() == null))) {
             throw new MappingConflict("CATALOG_MAPPING_CHANGED", "候选规格或颜色与已生效映射不同，需要人工确认。");
         }
-        if (existing != null) {
+        if (sameTarget) {
             if (existing.status() == null) {
                 checkWrite(goods.defaultToOnSale(existing.id()));
             }
@@ -84,7 +92,6 @@ class CatalogCleaningResultWriter {
             checkWrite(goods.insertColor(candidate.colorName()));
             color = goods.lockColor(candidate.colorName());
         }
-        String sku = "G-" + UUID.randomUUID();
         String name =
                 String.join(
                                 " ",
@@ -93,9 +100,9 @@ class CatalogCleaningResultWriter {
                                 candidate.colorName())
                         + (edition.isEmpty() ? "" : "（" + edition + "）");
         String productNo = source.getGoodsNo();
-        checkWrite(
-                goods.insertGoods(
-                        sku,
+        var entry =
+                new CatalogGoodsInsert(
+                        null,
                         productNo == null || productNo.isBlank() ? null : productNo,
                         brandId,
                         model.seriesId(),
@@ -104,12 +111,9 @@ class CatalogCleaningResultWriter {
                         memory.ram(),
                         memory.rom(),
                         color.id(),
-                        1));
-        return new Mapping(
-                "MAPPED",
-                origin,
-                brandId,
-                goods.lockGoods(model.id(), memory.ram(), memory.rom(), color.id()).id());
+                        1);
+        checkWrite(goods.insertGoods(entry));
+        return new Mapping("MAPPED", origin, brandId, entry.getId());
     }
 
     void persist(
@@ -132,7 +136,29 @@ class CatalogCleaningResultWriter {
                         mapping == null ? null : mapping.origin(),
                         mapping == null ? null : mapping.brandId(),
                         mapping == null ? null : mapping.goodsId());
+        // 审核排除也按品牌串行，再锁商品，避免与清洗或商品编辑交错写入。
+        if (mapping != null) {
+            goods.lockBrand(source.getBrandName());
+        }
         checkWrite(mapper.save(job, source, change, operator));
+        if (mapping != null) {
+            // 来源可能转到另一商品：先释放旧商品的 SKU，再给新商品绑定该来源的原始 SKU。
+            if (source.getGoodsId() != null) {
+                refreshSku(source.getGoodsId());
+            }
+            if (mapping.goodsId() != null
+                    && !Objects.equals(mapping.goodsId(), source.getGoodsId())) {
+                refreshSku(mapping.goodsId());
+            }
+        }
+    }
+
+    private void refreshSku(long goodsId) {
+        var current = goods.lockSku(goodsId);
+        String sku = goods.boundSourceSku(goodsId);
+        if (!Objects.equals(current.skuId(), sku)) {
+            checkWrite(goods.updateSku(goodsId, sku));
+        }
     }
 
     Candidate readCandidate(SourceGoodsItem source) {

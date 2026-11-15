@@ -1,24 +1,29 @@
 <script setup>
-import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { reactive, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
+import WorkspaceTopbar from './components/WorkspaceTopbar.vue'
+import { ADMIN_NAV_GROUPS as navGroups } from '../constants/navigation'
+import { useWorkspaceSidebar } from './use-workspace-sidebar'
+import './workspace-navigation.css'
 import './admin-layout.css'
 
 defineProps({ user: { type: Object, required: true } })
-const catalogLinks = [
-  { name: 'catalog-sources', label: '源商品库' },
-  { name: 'catalog-cleaning', label: '商品清洗与识别' },
-  { name: 'catalog-center', label: '商品中心' },
-]
 const route = useRoute()
-const menuOpen = ref(false)
-const catalogMenuOpen = ref(false)
+const router = useRouter()
+const { collapsed, menuOpen, expanded, toggle } = useWorkspaceSidebar(600)
+const openGroups = reactive({})
+watch(
+  () => route.fullPath,
+  () => (menuOpen.value = false),
+)
 
 watch(
   () => route.name,
   (name) => {
-    if (catalogLinks.some((link) => link.name === name)) {
-      catalogMenuOpen.value = true
+    const group = navGroups.find(({ links }) => links.some((link) => link.name === name))
+    if (group) {
+      openGroups[group.id] = true
     }
   },
   { immediate: true },
@@ -26,8 +31,16 @@ watch(
 </script>
 
 <template>
-  <div class="admin-workspace" @keydown.esc="menuOpen = false">
-    <aside id="admin-sidebar" class="admin-sidebar" :class="{ 'is-open': menuOpen }">
+  <div
+    class="admin-workspace"
+    :class="{ 'is-sidebar-collapsed': collapsed }"
+    @keydown.esc="menuOpen = false"
+  >
+    <aside
+      id="admin-sidebar"
+      class="admin-sidebar workspace-sidebar"
+      :class="{ 'is-open': menuOpen }"
+    >
       <router-link
         :to="{ name: 'catalog-sources' }"
         class="workspace-brand"
@@ -42,27 +55,31 @@ watch(
         <strong>电商运营平台</strong>
       </router-link>
 
-      <nav class="admin-nav" aria-label="管理员导航">
-        <el-button
-          class="admin-nav-group"
-          text
-          :aria-expanded="catalogMenuOpen"
-          aria-controls="admin-catalog-links"
-          @click="catalogMenuOpen = !catalogMenuOpen"
-        >
-          <AppIcon name="box" :size="18" />
-          <span>商品</span>
-          <AppIcon class="admin-nav-chevron" name="chevron" :size="16" />
-        </el-button>
-        <div v-show="catalogMenuOpen" id="admin-catalog-links">
-          <router-link
-            v-for="link in catalogLinks"
-            :key="link.name"
-            :to="{ name: link.name }"
-            @click="menuOpen = false"
+      <nav class="admin-nav workspace-sidebar-nav" aria-label="管理员导航">
+        <div v-for="group in navGroups" :key="group.id" class="admin-nav-section">
+          <el-button
+            class="admin-nav-group workspace-nav-group"
+            text
+            :aria-expanded="Boolean(openGroups[group.id])"
+            :aria-controls="group.id"
+            @click="openGroups[group.id] = !openGroups[group.id]"
           >
-            {{ link.label }}
-          </router-link>
+            <AppIcon :name="group.icon" :size="19" />
+            <span>{{ group.label }}</span>
+            <AppIcon class="workspace-nav-chevron" name="chevron" :size="14" />
+          </el-button>
+          <div v-show="openGroups[group.id]" :id="group.id">
+            <router-link
+              v-for="link in group.links"
+              :key="link.name"
+              :to="{ name: link.name }"
+              class="workspace-nav-item"
+              :class="{ 'is-active': route.name === link.name }"
+              @click="menuOpen = false"
+            >
+              {{ link.label }}
+            </router-link>
+          </div>
         </div>
       </nav>
     </aside>
@@ -75,22 +92,15 @@ watch(
     ></button>
 
     <div class="admin-body">
-      <header class="admin-topbar">
-        <el-button
-          class="admin-menu-toggle"
-          text
-          :aria-label="menuOpen ? '收起导航' : '展开导航'"
-          :aria-expanded="menuOpen"
-          aria-controls="admin-sidebar"
-          @click="menuOpen = !menuOpen"
-        >
-          <AppIcon name="list" />
-        </el-button>
-        <div class="admin-identity">
-          <span class="admin-avatar" aria-hidden="true">{{ user.name?.slice(0, 1) || '管' }}</span>
-          <strong>{{ user.name || '管理员' }}</strong>
-        </div>
-      </header>
+      <WorkspaceTopbar
+        :user="user"
+        :groups="navGroups"
+        role-label="管理员"
+        sidebar-id="admin-sidebar"
+        :menu-expanded="expanded"
+        @toggle-menu="toggle"
+        @navigate="(name) => router.push({ name })"
+      />
       <main class="admin-content">
         <router-view />
       </main>

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS user_info (
   open_id VARCHAR(64) NOT NULL,
   union_id VARCHAR(64),
   name VARCHAR(64) NOT NULL,
+  avatar_url VARCHAR(2048),
   department VARCHAR(128),
   role_type VARCHAR(32) NOT NULL DEFAULT 'APPLICANT',
   is_deleted TINYINT NOT NULL DEFAULT 0,

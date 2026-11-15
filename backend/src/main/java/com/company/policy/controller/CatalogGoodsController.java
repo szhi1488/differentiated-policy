@@ -50,7 +50,7 @@ public class CatalogGoodsController {
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(
             summary = "新增标准商品",
-            description = "使用现有品牌、系列和颜色。RAM 用 GB，ROM 支持 GB、T 或 TB。版本可空，销售状态必填。")
+            description = "使用现有品牌、系列和颜色。RAM 用 GB，ROM 支持 GB、T 或 TB。版本可空，销售状态必填。手工商品无来源，原始 SKU 为空。")
     @ApiResponse(responseCode = "409", description = "标准商品重复、系列归属冲突或并发修改")
     public CatalogGoodsResponse create(
             @Valid @RequestBody CatalogGoodsWrite body, HttpServletRequest request) {
@@ -84,7 +84,8 @@ public class CatalogGoodsController {
             summary = "分页查看标准商品",
             description =
                     "品牌精确匹配，系列和机型按子串匹配。关键词最多 128 字符，空格分词后每词均须匹配。"
-                            + "支持按商品名、品牌、系列、机型、版本、颜色、货号及标准或来源 SKU 查子串，英文字母不区分大小写。"
+                            + "支持按商品名、品牌、系列、机型、版本、颜色、货号及原始 SKU 查子串，英文字母不区分大小写。"
+                            + "每条通过的源 SKU 独立对应一条商品，即使规格颜色相同也不归并，skuId 延续自身来源 SKU。"
                             + "可按系列 ID、机型版本 ID 或 RAM、ROM 精确筛选，两个容量须同时传入，如 16GB 和 512GB。"
                             + "销售状态取 1 在售、2 待上架、3 已下架、4 已停产。页码从 1 开始，每页最多 100 条。")
     public PageResponse<CatalogGoodsResponse> list(

@@ -47,7 +47,7 @@ CREATE TABLE `color_dict` (
 
 CREATE TABLE `goods` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
-  `sku_id` VARCHAR(64) NOT NULL,
+  `sku_id` VARCHAR(19) DEFAULT NULL,
   `product_no` VARCHAR(128) DEFAULT NULL,
   `brand_id` BIGINT NOT NULL,
   `series_id` BIGINT NOT NULL,
@@ -63,10 +63,11 @@ CREATE TABLE `goods` (
   UNIQUE KEY `uk_goods_brand_binding` (`id`, `brand_id`),
   UNIQUE KEY `uk_goods_policy_binding` (`id`, `spu_id`, `ram`, `rom`),
   UNIQUE KEY `uk_goods_sku` (`sku_id`),
-  UNIQUE KEY `uk_goods_spu_specs` (`spu_id`, `ram`, `rom`, `color_id`),
+  KEY `idx_goods_spu_specs` (`spu_id`, `ram`, `rom`, `color_id`),
   CONSTRAINT `fk_goods_spu` FOREIGN KEY (`spu_id`, `brand_id`, `series_id`) REFERENCES `spu` (`id`, `brand_id`, `series_id`),
   CONSTRAINT `fk_goods_color` FOREIGN KEY (`color_id`) REFERENCES `color_dict` (`id`),
-  CONSTRAINT `ck_goods_names` CHECK (CHAR_LENGTH(TRIM(`sku_id`)) > 0 AND CHAR_LENGTH(TRIM(`goods_name`)) > 0 AND (`product_no` IS NULL OR CHAR_LENGTH(TRIM(`product_no`)) > 0)),
+  CONSTRAINT `ck_goods_names` CHECK (CHAR_LENGTH(TRIM(`goods_name`)) > 0 AND (`product_no` IS NULL OR CHAR_LENGTH(TRIM(`product_no`)) > 0)),
+  CONSTRAINT `ck_goods_sku_id` CHECK (`sku_id` IS NULL OR REGEXP_LIKE(`sku_id`, '^[1-9][0-9]{0,18}$')),
   CONSTRAINT `ck_goods_memory` CHECK (
     REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
     AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
@@ -76,6 +77,7 @@ CREATE TABLE `goods` (
 
 CREATE ALIAS IF NOT EXISTS JSON_QUOTE FOR "com.company.policy.controller.PolicyJsonFunctions.quote";
 CREATE ALIAS IF NOT EXISTS JSON_CONTAINS FOR "com.company.policy.controller.PolicyJsonFunctions.contains";
+CREATE ALIAS IF NOT EXISTS JSON_SEARCH FOR "com.company.policy.controller.PolicyJsonFunctions.search";
 
 CREATE TABLE `policy_apply` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -91,7 +93,6 @@ CREATE TABLE `policy_apply` (
   `start_time` DATETIME DEFAULT NULL,
   `end_time` DATETIME DEFAULT NULL,
   `remark` TEXT,
-  `other_desc` TEXT,
   `goods_form_json` TEXT DEFAULT NULL,
   `attachment_urls` TEXT DEFAULT NULL,
   `status` VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
@@ -293,6 +294,7 @@ CREATE TABLE `source_goods_item` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_source_sku` (`sku_id`),
+  UNIQUE KEY `uk_source_goods` (`goods_id`),
   CONSTRAINT `fk_source_first_job` FOREIGN KEY (`first_seen_job_id`, `source_key`, `brand_name`) REFERENCES `goods_sync_job` (`id`, `source_key`, `brand_name`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `fk_source_last_job` FOREIGN KEY (`last_seen_job_id`, `source_key`, `brand_name`) REFERENCES `goods_sync_job` (`id`, `source_key`, `brand_name`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `fk_source_catalog_brand` FOREIGN KEY (`catalog_brand_id`, `brand_name`) REFERENCES `brand` (`id`, `name`),

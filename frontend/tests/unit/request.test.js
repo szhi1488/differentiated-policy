@@ -8,6 +8,40 @@ afterEach(() => {
 })
 
 describe('统一请求封装', () => {
+  it('文件读取携带当前会话并返回字节，错误响应继续解析实际状态和错误信息', async () => {
+    const content = new Blob(['%PDF-1.7 测试文件'], { type: 'application/octet-stream' })
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => content,
+      json: vi.fn(),
+    })
+    vi.stubGlobal('fetch', fetch)
+    const result = await request('/api/admin/policies/5/audit-logs/2/attachments/file/content', {
+      responseType: 'blob',
+    })
+    expect(result).toBe(content)
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/admin/policies/5/audit-logs/2/attachments/file/content',
+      expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }),
+    )
+    expect(fetch.mock.calls[0][1]).not.toHaveProperty('responseType')
+    const expired = vi.fn()
+    setUnauthorizedHandler(expired)
+    fetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ code: 'LOGIN_REQUIRED', message: '登录已过期，请重新登录。' }),
+      blob: vi.fn(),
+    })
+    await expect(request('/api/file/content', { responseType: 'blob' })).rejects.toMatchObject({
+      status: 401,
+      code: 'LOGIN_REQUIRED',
+      message: '登录已过期，请重新登录。',
+    })
+    expect(expired).toHaveBeenCalledOnce()
+  })
+
   it.each([401, 403, 409, 503])(
     '非 JSON 或空错误响应仍保留 HTTP %i，不重试写操作',
     async (status) => {

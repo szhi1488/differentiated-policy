@@ -40,20 +40,28 @@ class CatalogAccess {
     }
 
     UserInfo requireAdmin(CurrentUserResponse session) {
+        return requireAdministrator(session, "CATALOG", "商品管理");
+    }
+
+    UserInfo requirePolicyAdmin(CurrentUserResponse session) {
+        return requireAdministrator(session, "POLICY", "政策审核");
+    }
+
+    private UserInfo requireAdministrator(CurrentUserResponse session, String domain, String page) {
         var user = users.findIdentity(session.tenantKey(), session.openId());
         if (user == null
                 || !Objects.equals(session.id(), user.getId().toString())
                 || !"ADMIN".equals(user.getRoleType())
                 || !Integer.valueOf(0).equals(user.getIsDeleted())) {
             throw new ApiException(
-                    HttpStatus.FORBIDDEN, "CATALOG_ADMIN_REQUIRED", "只有有效管理员可以访问商品管理。");
+                    HttpStatus.FORBIDDEN, domain + "_ADMIN_REQUIRED", "只有有效管理员可以访问" + page + "。");
         }
         if (!config.hasCompanyTenant()) {
             throw new ApiException(
-                    HttpStatus.SERVICE_UNAVAILABLE, "CATALOG_SCOPE_MISSING", "请先配置公司飞书租户。");
+                    HttpStatus.SERVICE_UNAVAILABLE, domain + "_SCOPE_MISSING", "请先配置公司飞书租户。");
         }
         if (!config.getTenantKey().equals(user.getTenantKey())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "CATALOG_SCOPE_DENIED", "当前飞书账号不属于本公司。");
+            throw new ApiException(HttpStatus.FORBIDDEN, domain + "_SCOPE_DENIED", "当前飞书账号不属于本公司。");
         }
         return user;
     }

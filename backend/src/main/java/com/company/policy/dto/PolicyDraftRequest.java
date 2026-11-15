@@ -1,5 +1,6 @@
 package com.company.policy.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -9,6 +10,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.io.IOException;
 import java.util.List;
 
+@JsonIgnoreProperties("otherExplanation")
 public record PolicyDraftRequest(
         @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
         @Schema(
@@ -23,9 +25,16 @@ public record PolicyDraftRequest(
         @Schema(example = "2026-11-20T18:00:00+08:00") String endTime,
         String specialRemark,
         List<Link> attachmentInfo,
-        String otherExplanation,
         GoodsForm goodsForm) {
-    public record Link(@Schema(allowableValues = {"LINK"}) String type, String url) {}
+    public record Link(
+            @Schema(allowableValues = {"LINK", "FILE"}) String type,
+            String url,
+            String id,
+            String originalName) {
+        public Link(String type, String url) {
+            this(type, url, null, null);
+        }
+    }
 
     public record GoodsForm(List<Card> cards) {}
 

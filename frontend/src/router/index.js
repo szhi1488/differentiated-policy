@@ -37,6 +37,12 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         meta: { role: 'ADMIN' },
         component: () => import('../views/admin/catalog/CatalogCenterPage.vue'),
       },
+      {
+        path: '/admin/policies',
+        name: 'admin-policies',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/policies/AdminPoliciesPage.vue'),
+      },
       { path: '/:pathMatch(.*)*', component: EmptyRoute },
     ],
     scrollBehavior: () => ({ top: 0 }),

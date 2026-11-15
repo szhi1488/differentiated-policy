@@ -30,4 +30,34 @@ describe('safe Feishu error messages', () => {
     expect(error.message).toContain('333441')
     expect(error.message).not.toMatch(/private|https:/)
   })
+
+  it('shows SDK authentication inner codes without exposing the raw message', () => {
+    const error = feishuFailure('飞书 JS-SDK 鉴权', {
+      errno: 2601002,
+      errString:
+        'Authentication failed. private-signature (error code: 333448); https://private.example/',
+    })
+    expect(error.message).toContain('2601002，内层错误码 333448')
+    expect(error.message).toContain('当前页面不在 H5 可信域名内')
+    expect(error.message).not.toMatch(/private|https:/)
+  })
+
+  it('uses a numeric inner error field to distinguish application visibility failures', () => {
+    const error = feishuFailure('飞书 JS-SDK 鉴权', {
+      errno: 2601002,
+      errorCode: '333449',
+      errMsg: 'private-data',
+    })
+    expect(error.message).toContain('2601002，内层错误码 333449')
+    expect(error.message).toContain('当前账号不在应用可用范围内')
+    expect(error.message).not.toContain('private-data')
+  })
+
+  it('does not infer a specific cause when SDK authentication has no inner code', () => {
+    const error = feishuFailure('飞书 JS-SDK 鉴权', { errno: 2601002 })
+    expect(error.message).toContain('2601002')
+    expect(error.message).toContain('核对')
+    expect(error.message).not.toContain('内层错误码 333')
+    expect(error.message).not.toContain('当前账号不在应用可用范围内')
+  })
 })

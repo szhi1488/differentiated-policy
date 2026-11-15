@@ -2,17 +2,19 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { readApplicantCatalogOptions, readApplicantGoods } from '../api/catalog'
 import { applicantGood } from '../utils/policy-draft'
 import { catalogConfigLabel } from '../utils/catalog-dictionary'
+import { policyConfigurationKey } from '../utils/policy-form'
 
 const PAGE_SIZE = 20
 const CONFIG_PAGE_SIZE = 100
 const ALL_CONFIGS = 'ALL_CONFIGS'
-const configKey = ({ spuId, ram, rom }) => [spuId, ram, rom].join('/')
 
 export function usePolicyGoodsPicker(props) {
-  const brandId = ref('')
-  const seriesId = ref('')
-  const spuId = ref('')
-  const config = ref([])
+  const initial = props.initialGoods.find((item) => item.brandId) ?? props.initialGoods[0]
+  const brandId = ref(initial?.brandId ?? '')
+  const seriesId = ref(initial?.seriesId ?? '')
+  const spuId = ref(initial?.spuId ?? '')
+  const prefilledConfigs = new Set(props.initialGoods.map(policyConfigurationKey))
+  const config = ref([...prefilledConfigs])
   const keyword = ref('')
   const search = ref('')
   const page = ref(1)
@@ -26,8 +28,11 @@ export function usePolicyGoodsPicker(props) {
   const listBusy = ref(false)
   const selecting = ref(false)
   const selected = shallowRef(new Map())
+  const removed = shallowRef(new Set())
   const excluded = new Set()
   const added = computed(() => new Set(props.addedKeys))
+  const isBlocked = (item) =>
+    !props.special && props.blockedConfigurations.has(policyConfigurationKey(item))
   const brands = computed(() => options.value?.brands ?? [])
   const series = computed(() =>
     (options.value?.series ?? []).filter(
@@ -35,8 +40,10 @@ export function usePolicyGoodsPicker(props) {
     ),
   )
   const models = computed(() =>
-    (options.value?.models ?? []).filter((item) =>
-      series.value.some(({ id }) => id === item.seriesId),
+    (options.value?.models ?? []).filter(
+      (item) =>
+        (!seriesId.value || item.seriesId === seriesId.value) &&
+        series.value.some(({ id }) => id === item.seriesId),
     ),
   )
   const configs = computed(() =>
@@ -50,15 +57,17 @@ export function usePolicyGoodsPicker(props) {
         const capacity = catalogConfigLabel(
           `${item.ram.replace(/GB$/, '')}+${item.rom.replace(/GB$/, '')}`,
         )
+        const disabled = isBlocked(item)
+        const label = spuId.value ? capacity : `${name} · ${capacity}`
         return {
-          ...item,
-          key: configKey(item),
-          label: spuId.value ? capacity : `${name} · ${capacity}`,
+          key: policyConfigurationKey(item),
+          label: disabled ? `${label}（已在其他卡片）` : label,
+          disabled,
         }
       }),
   )
   const configOptions = computed(() => [
-    { key: ALL_CONFIGS, label: '全部配置', disabled: !configs.value.length },
+    { key: ALL_CONFIGS, label: '全部配置', disabled: configs.value.every((item) => item.disabled) },
     ...configs.value,
   ])
 
@@ -90,6 +99,15 @@ export function usePolicyGoodsPicker(props) {
       const data = await readApplicantCatalogOptions(controller.signal)
       if (!controller.signal.aborted) {
         options.value = data
+        if (prefilledConfigs.size) {
+          if (!brands.value.some(({ id }) => id === brandId.value)) {
+            brandId.value = ''
+          }
+          if (!series.value.some(({ id }) => id === seriesId.value)) {
+            seriesId.value = ''
+          }
+          reconcileModel()
+        }
       }
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -166,7 +184,14 @@ export function usePolicyGoodsPicker(props) {
 
   function reconcileConfig() {
     const available = new Set(configs.value.map(({ key }) => key))
-    config.value = config.value.filter((key) => available.has(key))
+    for (const key of prefilledConfigs) {
+      if (!available.has(key)) {
+        prefilledConfigs.delete(key)
+      }
+    }
+    if (config.value.some((key) => !available.has(key))) {
+      config.value = config.value.filter((key) => available.has(key))
+    }
     page.value = 1
     if (selectionError.value) {
       void selectConfigurations()
@@ -178,11 +203,17 @@ export function usePolicyGoodsPicker(props) {
       return
     }
     selectionError.value = ''
-    if (!config.value.length) {
+    const all = config.value.includes(ALL_CONFIGS)
+    // 回填的配置用于定位已选商品。主动新增或重选配置时才自动勾选该配置的商品。
+    const keys = new Set(
+      [...selectedConfigKeys()].filter(
+        (key) => !prefilledConfigs.has(key) && !props.blockedConfigurations.has(key),
+      ),
+    )
+    if (!keys.size) {
       return
     }
-    const filters = scope()
-    const keys = selectedConfigKeys()
+    const filters = { ...scope(), configuration: all ? [] : [...keys] }
     const controller = new AbortController()
     selectionRequest = controller
     selecting.value = true
@@ -216,17 +247,23 @@ export function usePolicyGoodsPicker(props) {
         throw new Error('在售商品已更新，请重试勾选此配置。')
       }
       const next = new Map(selected.value)
+      const nextRemoved = new Set(removed.value)
       for (const [id, item] of next) {
-        if (keys.has(configKey(item)) && !found.has(id)) {
+        if (keys.has(policyConfigurationKey(item)) && !found.has(id)) {
           next.delete(id)
         }
       }
       for (const [id, item] of found) {
-        if (!excluded.has(id) && !added.value.has(id)) {
-          next.set(id, item)
+        if (keys.has(policyConfigurationKey(item)) && !excluded.has(id)) {
+          if (added.value.has(id)) {
+            nextRemoved.delete(id)
+          } else {
+            next.set(id, item)
+          }
         }
       }
       selected.value = next
+      removed.value = nextRemoved
     } catch (error) {
       if (!controller.signal.aborted) {
         selectionError.value = error.message
@@ -246,9 +283,23 @@ export function usePolicyGoodsPicker(props) {
     page.value = 1
     if (!props.special) {
       const after = selectedConfigKeys()
+      // 回填商品不在本次新增集合中，按完整卡片清理才能覆盖列表其他页。
+      const nextRemoved = new Set(removed.value)
+      for (const item of props.existingGoods) {
+        const key = policyConfigurationKey(item)
+        if (before.has(key) && !after.has(key)) {
+          nextRemoved.add(item.id)
+        }
+      }
+      removed.value = nextRemoved
+      for (const key of prefilledConfigs) {
+        if (!after.has(key)) {
+          prefilledConfigs.delete(key)
+        }
+      }
       selected.value = new Map(
         [...selected.value].filter(([, item]) => {
-          const key = configKey(item)
+          const key = policyConfigurationKey(item)
           return !before.has(key) || after.has(key)
         }),
       )
@@ -262,7 +313,24 @@ export function usePolicyGoodsPicker(props) {
   }
 
   function toggle(item, checked) {
-    if (selecting.value || added.value.has(item.id)) {
+    if (selecting.value) {
+      return
+    }
+    if (added.value.has(item.id)) {
+      if (props.editing) {
+        const next = new Set(removed.value)
+        if (checked) {
+          next.delete(item.id)
+          excluded.delete(item.id)
+        } else {
+          next.add(item.id)
+          excluded.add(item.id)
+        }
+        removed.value = next
+      }
+      return
+    }
+    if (isBlocked(item)) {
       return
     }
     if (props.special) {
@@ -308,7 +376,9 @@ export function usePolicyGoodsPicker(props) {
     listError,
     selectionError,
     added,
+    isBlocked,
     selected,
+    removed,
     changeBrand,
     changeSeries,
     changeModel,

@@ -3,6 +3,7 @@ package com.company.policy.mapper;
 import com.company.policy.dto.CatalogGoodsQuery;
 import com.company.policy.entity.Brand;
 import com.company.policy.entity.CatalogGoods;
+import com.company.policy.entity.CatalogGoodsInsert;
 import com.company.policy.entity.ColorDict;
 import com.company.policy.entity.Series;
 import com.company.policy.entity.Spu;
@@ -10,6 +11,7 @@ import java.util.List;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -56,30 +58,31 @@ public interface CatalogGoodsMapper {
 
     @Select(
             """
-        SELECT id, status FROM goods
+        <script>
+        SELECT id, status, spu_id, ram, rom, color_id FROM goods
         WHERE spu_id = #{spu} AND ram = #{ram} AND rom = #{rom} AND color_id = #{color}
-        FOR UPDATE
+        <if test="excludedId != null">AND id != #{excludedId}</if>
+        ORDER BY id LIMIT 1 FOR UPDATE
+        </script>
         """)
-    Match lockGoods(long spu, String ram, String rom, long color);
+    Match lockDuplicateGoods(long spu, String ram, String rom, long color, Long excludedId);
+
+    @Select("SELECT id, status, spu_id, ram, rom, color_id FROM goods WHERE id = #{id} FOR UPDATE")
+    Match lockMappedGoods(long id);
+
+    @Select(
+            "SELECT id, status, spu_id, ram, rom, color_id FROM goods WHERE sku_id = #{sku} FOR UPDATE")
+    Match lockGoodsBySku(String sku);
 
     @Insert(
             """
         INSERT INTO goods (sku_id, product_no, brand_id, series_id, spu_id, goods_name,
                            ram, rom, color_id, status)
-        VALUES (#{sku}, #{productNo}, #{brand}, #{series}, #{spu}, #{name},
-                #{ram}, #{rom}, #{color}, #{status})
+        VALUES (#{skuId,jdbcType=VARCHAR}, #{productNo}, #{brandId}, #{seriesId}, #{spuId}, #{goodsName},
+                #{ram}, #{rom}, #{colorId}, #{status})
         """)
-    int insertGoods(
-            String sku,
-            String productNo,
-            long brand,
-            long series,
-            long spu,
-            String name,
-            String ram,
-            String rom,
-            long color,
-            int status);
+    @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
+    int insertGoods(CatalogGoodsInsert entry);
 
     @Update("UPDATE goods SET status = 1 WHERE id = #{id} AND status IS NULL")
     int defaultToOnSale(long id);
@@ -89,6 +92,20 @@ public interface CatalogGoodsMapper {
 
     @Select("SELECT id FROM goods WHERE id = #{id} FOR UPDATE")
     Long lockById(long id);
+
+    @Select("SELECT id, sku_id FROM goods WHERE id = #{id} FOR UPDATE")
+    Sku lockSku(long id);
+
+    @Select(
+            """
+        SELECT item.sku_id FROM source_goods_item item
+        JOIN goods g ON g.id = item.goods_id AND g.brand_id = item.catalog_brand_id
+        WHERE g.id = #{id}
+        """)
+    String boundSourceSku(long id);
+
+    @Update("UPDATE goods SET sku_id = #{sku,jdbcType=VARCHAR} WHERE id = #{id}")
+    int updateSku(long id, String sku);
 
     @Select("SELECT EXISTS(SELECT 1 FROM source_goods_item WHERE goods_id = #{id})")
     boolean hasSourceMapping(long id);
@@ -130,13 +147,10 @@ public interface CatalogGoodsMapper {
         JOIN spu p ON p.id = g.spu_id
         JOIN color_dict c ON c.id = g.color_id
         """;
-    String REPRESENTATIVE_SOURCE =
+    String BOUND_SOURCE =
             """
-        LEFT JOIN source_goods_item source ON source.id = (
-          SELECT item.id FROM source_goods_item item
-          WHERE item.goods_id = g.id AND item.catalog_brand_id = g.brand_id
-          ORDER BY item.id LIMIT 1
-        )
+        LEFT JOIN source_goods_item source ON source.goods_id = g.id
+          AND source.catalog_brand_id = g.brand_id
         """;
     String FILTER =
             """
@@ -185,7 +199,7 @@ public interface CatalogGoodsMapper {
                     + "</otherwise></choose>"
                     + JOINED
                     + "<if test='!applicant'>"
-                    + REPRESENTATIVE_SOURCE
+                    + BOUND_SOURCE
                     + "</if>"
                     + FILTER
                     + """
@@ -254,7 +268,7 @@ public interface CatalogGoodsMapper {
             String ram,
             String rom) {}
 
-    @Select(COLUMNS + JOINED + REPRESENTATIVE_SOURCE + " WHERE g.id = #{id}")
+    @Select(COLUMNS + JOINED + BOUND_SOURCE + " WHERE g.id = #{id}")
     CatalogGoods find(long id);
 
     @Select(
@@ -295,5 +309,7 @@ public interface CatalogGoodsMapper {
 
     record Model(long id, long seriesId, String seriesName) {}
 
-    record Match(long id, Integer status) {}
+    record Match(long id, Integer status, long spuId, String ram, String rom, long colorId) {}
+
+    record Sku(long id, String skuId) {}
 }

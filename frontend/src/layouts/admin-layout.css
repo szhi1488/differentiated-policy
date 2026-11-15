@@ -1,5 +1,5 @@
 .admin-workspace {
-  --admin-sidebar-width: 176px;
+  --admin-sidebar-width: 196px;
   --el-color-primary: #176ff2;
   --el-border-radius-base: 6px;
   --el-font-size-base: 13px;
@@ -12,93 +12,31 @@
   inset: 0 auto 0 0;
   z-index: 20;
   width: var(--admin-sidebar-width);
-  background: #f7faff;
-  border-right: 1px solid #e8eef8;
-}
-.admin-sidebar .workspace-brand {
-  padding: 16px 14px;
-  min-height: 54px;
-}
-.admin-sidebar .workspace-brand strong {
-  font-size: 14px;
-}
-.admin-nav {
-  padding: 15px 10px;
-}
-.admin-nav .admin-nav-group {
-  --el-button-text-color: #17263e;
-  width: 100%;
-  height: auto;
-  padding: 10px 12px;
-  font-weight: 600;
-}
-.admin-nav .admin-nav-group > span {
-  width: 100%;
-  gap: 10px;
-}
-.admin-nav-chevron {
-  margin-inline-start: auto;
-}
-.admin-nav-group[aria-expanded='false'] .admin-nav-chevron {
-  transform: rotate(-90deg);
-}
-.admin-nav a {
-  display: block;
-  margin-top: 4px;
-  padding: 12px 12px 12px 40px;
-  border-radius: 7px;
-  color: #52637e;
-  text-decoration: none;
-}
-.admin-nav a.router-link-exact-active {
-  color: #145cc7;
-  background: #e7effe;
-  font-weight: 600;
+  overflow-y: auto;
 }
 .admin-body {
   margin-left: var(--admin-sidebar-width);
-}
-.admin-topbar {
-  min-height: 54px;
-  padding: 8px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  background: #f9fbff;
-  border-bottom: 1px solid #e8eef8;
-}
-.admin-identity {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.admin-identity strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.admin-avatar {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  background: #e4eeff;
-  color: #145cc7;
-  border-radius: 50%;
-  font-weight: 600;
 }
 .admin-content {
   max-width: 1800px;
   padding: 16px 20px 28px;
   margin: auto;
 }
-.admin-topbar .admin-menu-toggle,
 .admin-menu-mask {
   display: none;
+}
+@media (min-width: 601px) {
+  .admin-workspace.is-sidebar-collapsed .admin-sidebar {
+    display: none;
+  }
+  .admin-workspace.is-sidebar-collapsed .admin-body {
+    margin-left: 0;
+  }
+}
+@media (max-width: 800px) {
+  .admin-workspace {
+    --admin-sidebar-width: 160px;
+  }
 }
 @media (max-width: 850px) {
   .admin-content {
@@ -106,6 +44,9 @@
   }
 }
 @media (max-width: 600px) {
+  .admin-workspace {
+    --admin-sidebar-width: 196px;
+  }
   .admin-sidebar {
     visibility: hidden;
     transform: translateX(-100%);
@@ -125,14 +66,6 @@
     border: 0;
     background: #17263e50;
     z-index: 19;
-  }
-  .admin-topbar .admin-menu-toggle {
-    display: inline-flex;
-    margin-right: auto;
-    padding: 5px;
-  }
-  .admin-topbar {
-    padding-inline: 12px;
   }
   .admin-content {
     padding-inline: 10px;

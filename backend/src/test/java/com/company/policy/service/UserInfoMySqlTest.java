@@ -50,12 +50,14 @@ class UserInfoMySqlTest {
                         "created_at",
                         "updated_at");
         String tenant = "verify_" + UUID.randomUUID();
-        var first = users.saveVerifiedIdentity(tenant, "temporary_open", "temporary_union", "临时验证");
+        var first =
+                users.saveVerifiedIdentity(
+                        tenant, "temporary_open", "temporary_union", "临时验证", null);
         assertThat(first.roleType()).isEqualTo("APPLICANT");
         jdbc.update(
                 "UPDATE user_info SET role_type='ADMIN', department='临时验证部门' WHERE id=?",
                 first.id());
-        var repeat = users.saveVerifiedIdentity(tenant, "temporary_open", null, "更新验证");
+        var repeat = users.saveVerifiedIdentity(tenant, "temporary_open", null, "更新验证", null);
         assertThat(repeat.id()).isEqualTo(first.id());
         assertThat(repeat.roleType()).isEqualTo("ADMIN");
         assertThat(mapper.findIdentity(tenant, "temporary_open").getUnionId())

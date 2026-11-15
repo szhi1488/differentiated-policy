@@ -14,13 +14,14 @@ const emit = defineEmits([
   'update-model-platform',
   'remove-model',
   'remove-goods',
+  'edit-goods',
   'add-subsidy',
   'update-subsidy',
   'remove-subsidy',
 ])
 const firstGoods = computed(() => props.model.goods[0])
 const special = computed(() => props.model.id !== undefined)
-const titleId = computed(() => `policy-model-title-${props.model.id ?? 'standard'}`)
+const titleId = computed(() => `policy-model-title-${props.model.key}`)
 const editingPlatforms = ref(false)
 const applicablePlatforms = computed(() =>
   props.platforms.filter(([code]) => props.model.platforms[code]),
@@ -36,12 +37,19 @@ const modelGroups = computed(() => {
     if (!groups.has(key)) {
       groups.set(key, {
         key,
+        spuId: item.spuId,
         path: [item.brand, item.series, item.model].join(' / '),
         version: item.version,
-        configurations: [],
+        configurations: new Map(),
       })
     }
-    groups.get(key).configurations.push(item)
+    const { configurations } = groups.get(key)
+    if (!configurations.has(item.config)) {
+      configurations.set(item.config, { config: item.config, goodsKeys: [], inactive: false })
+    }
+    const configuration = configurations.get(item.config)
+    configuration.goodsKeys.push(item.key)
+    configuration.inactive ||= item.status === 'inactive'
   }
   return [...groups.values()]
 })
@@ -64,37 +72,48 @@ const modelGroups = computed(() => {
       </el-button>
     </header>
     <div class="policy-model-fields">
-      <dl v-for="group in modelGroups" :key="group.key" class="policy-model-summary-row">
-        <div>
-          <dt>品牌 / 系列 / 型号</dt>
-          <dd>{{ group.path }}</dd>
-        </div>
-        <div>
-          <dt>适用配置</dt>
-          <dd class="policy-model-configs">
-            <el-tag
-              v-for="item in group.configurations"
-              :key="item.key"
-              :closable="model.goods.length > 1 && !confirming"
-              effect="plain"
-              :type="item.status === 'inactive' ? 'danger' : 'info'"
-              @close="$emit('remove-goods', item.key)"
-            >
-              {{ catalogConfigLabel(item.config)
-              }}{{ !special && item.color ? ` · ${item.color}` : '' }}
-              {{ item.status === 'inactive' ? '（不可用）' : '' }}
-            </el-tag>
-          </dd>
-        </div>
-        <div v-if="group.version">
-          <dt>版本</dt>
-          <dd>{{ group.version }}</dd>
-        </div>
-        <div v-if="special">
-          <dt>颜色</dt>
-          <dd>{{ firstGoods.color }}</dd>
-        </div>
-      </dl>
+      <div v-for="group in modelGroups" :key="group.key" class="policy-model-summary-row">
+        <dl class="policy-model-summary">
+          <div>
+            <dt>品牌 / 系列 / 型号</dt>
+            <dd>{{ group.path }}</dd>
+          </div>
+          <div>
+            <dt>适用配置</dt>
+            <dd class="policy-model-configs">
+              <el-tag
+                v-for="item in group.configurations.values()"
+                :key="item.config"
+                :closable="model.goods.length > item.goodsKeys.length && !confirming"
+                effect="plain"
+                :type="item.inactive ? 'danger' : 'info'"
+                @close="$emit('remove-goods', item.goodsKeys)"
+              >
+                {{ catalogConfigLabel(item.config) }}
+              </el-tag>
+            </dd>
+          </div>
+          <div v-if="group.version">
+            <dt>版本</dt>
+            <dd>{{ group.version }}</dd>
+          </div>
+          <div v-if="special">
+            <dt>颜色</dt>
+            <dd>{{ firstGoods.color }}</dd>
+          </div>
+        </dl>
+        <el-button
+          v-if="!special"
+          class="policy-model-edit"
+          link
+          type="primary"
+          :aria-label="`编辑 ${group.path} 的适用配置`"
+          :disabled="confirming || !platforms.length"
+          @click="$emit('edit-goods', group.spuId)"
+        >
+          编辑
+        </el-button>
+      </div>
     </div>
 
     <div class="policy-model-rules">
@@ -164,7 +183,7 @@ const modelGroups = computed(() => {
             :class="{ 'policy-platform-row--with-scheme': special && model.subsidies.length > 1 }"
           >
             <strong>{{ name }}</strong>
-            <el-form-item v-if="special" label="数量（选填）">
+            <el-form-item v-if="special" label="数量（选填，仅供参考）">
               <el-input
                 :model-value="model.platforms[code].quantity"
                 :aria-label="`${name} 数量`"

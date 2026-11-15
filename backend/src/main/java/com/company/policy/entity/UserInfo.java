@@ -15,6 +15,7 @@ public class UserInfo {
     private String openId;
     private String unionId;
     private String name;
+    private String avatarUrl;
     private String department;
     private String roleType;
     private Integer isDeleted;

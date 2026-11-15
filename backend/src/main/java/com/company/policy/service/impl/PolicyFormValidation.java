@@ -13,8 +13,10 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -39,9 +41,9 @@ final class PolicyFormValidation {
                     "DEWU",
                     "UNICOM",
                     "GOV_ENTERPRISE");
-    private static final Set<String> BILLION = Set.of("PDD", "TAOBAO", "UNICOM");
-    private static final Set<String> VERIFY_TYPES = Set.of("SALES", "ACTIVATION");
-    private static final Set<String> SCENES = Set.of("NATIONAL_SUB", "LOCAL_SUB", "SELF_SUB");
+    static final Set<String> BILLION = Set.of("PDD", "TAOBAO", "UNICOM");
+    static final Set<String> VERIFY_TYPES = Set.of("SALES", "ACTIVATION");
+    static final Set<String> SCENES = Set.of("NATIONAL_SUB", "LOCAL_SUB", "SELF_SUB");
     private static final Set<String> BASES =
             Set.of(
                     "RETAIL_PRICE",
@@ -87,26 +89,49 @@ final class PolicyFormValidation {
         var cards = entries(form.goodsForm() == null ? null : form.goodsForm().cards());
         require(!submitting || !cards.isEmpty(), "请至少选择一个适用商品。");
         var cardKeys = new HashSet<String>();
-        var assignedGoods = new HashSet<GoodsPlatform>();
+        var assignedGoods = new HashMap<GoodsPlatform, Boolean>();
         var specifiedGoods = new HashSet<Long>();
-        boolean hasCommon = false;
+        var commonConfigurations = new HashSet<Configuration>();
         for (Card card : cards) {
             key(card.key(), cardKeys, "商品卡片标识无效或重复。");
             boolean common = "COMMON".equals(card.cardType());
             require(common || "SPECIFIED".equals(card.cardType()), "商品卡片类型无效。");
-            require(!common || !hasCommon, "同一申请只允许一张普通商品卡。");
-            hasCommon |= common;
             validateCard(card, common, platformSet, assignedGoods, submitting);
-            if (!common) {
+            if (common) {
+                require(
+                        card.targets().stream()
+                                .map(
+                                        target ->
+                                                new Configuration(
+                                                        id(target.spuId()),
+                                                        target.ram(),
+                                                        target.rom()))
+                                .distinct()
+                                .allMatch(commonConfigurations::add),
+                        "同一机型配置只能加入一张普通商品卡，请编辑已有卡片。");
+            } else {
                 require(
                         specifiedGoods.add(id(card.targets().get(0).goodsId())),
                         "同一指定商品只能有一张指定商品卡片。");
             }
         }
         var links = entries(form.attachmentInfo());
-        require(links.size() <= 1, "当前申请表单支持一个外部附件链接。");
+        require(
+                links.stream().filter(link -> "LINK".equals(link.type())).count() <= 1,
+                "当前申请表单支持一个外部附件链接。");
+        require(
+                links.stream().filter(link -> "FILE".equals(link.type())).count() <= 10,
+                "每份申请最多添加 10 个文件。");
+        var fileIds = new HashSet<String>();
         for (var link : links) {
-            validateLink(link);
+            if ("FILE".equals(link.type())) {
+                require(
+                        link.id() != null && fileIds.add(link.id()) && link.url() == null,
+                        "附件文件标识无效或重复。");
+            } else {
+                validateLink(link);
+                require(link.id() == null && link.originalName() == null, "外部链接不能携带文件信息。");
+            }
         }
         return new PolicyDraftRequest(
                 null,
@@ -119,7 +144,6 @@ final class PolicyFormValidation {
                 form.endTime(),
                 text(form.specialRemark()),
                 links,
-                text(form.otherExplanation()),
                 new GoodsForm(cards));
     }
 
@@ -127,7 +151,7 @@ final class PolicyFormValidation {
             Card card,
             boolean common,
             Set<String> orderPlatforms,
-            Set<GoodsPlatform> assignedGoods,
+            Map<GoodsPlatform, Boolean> assignedGoods,
             boolean submitting) {
         require(card.followsOrderPlatforms() != null, "请选择商品卡片的平台联动方式。");
         var targets = entries(card.targets());
@@ -157,9 +181,14 @@ final class PolicyFormValidation {
             Integer quantity = assignment.quantity();
             require(quantity == null || (!common && quantity >= 0), "数量仅在指定商品中选填，须为非负整数。");
             for (long goodsId : goods) {
-                require(
-                        assignedGoods.add(new GoodsPlatform(platform, goodsId)),
-                        "同一平台重复选择了同一商品，请整理商品卡片。");
+                var previousCommon =
+                        assignedGoods.putIfAbsent(new GoodsPlatform(platform, goodsId), common);
+                if (previousCommon != null) {
+                    throw invalid(
+                            previousCommon == common
+                                    ? "同一平台重复选择了同一商品，请整理商品卡片。"
+                                    : "同一平台的该颜色已同时选入普通卡和指定卡，请先编辑普通卡并取消勾选该颜色。");
+                }
             }
         }
         require(
@@ -229,7 +258,7 @@ final class PolicyFormValidation {
         require(
                 value == null
                         || value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 65535,
-                "备注或其他说明超出可保存的长度。");
+                "特别备注超出可保存的长度。");
         return value == null || value.isBlank() ? null : value;
     }
 
@@ -273,4 +302,6 @@ final class PolicyFormValidation {
     }
 
     private record GoodsPlatform(String platform, long goodsId) {}
+
+    private record Configuration(long spuId, String ram, String rom) {}
 }

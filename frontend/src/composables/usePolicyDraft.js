@@ -1,5 +1,11 @@
 import { computed, ref } from 'vue'
-import { createPolicyDraft, readPolicy, savePolicyDraft, submitPolicy } from '../api/policies'
+import {
+  createPolicyDraft,
+  deletePolicyDraft,
+  readPolicy,
+  savePolicyDraft,
+  submitPolicy,
+} from '../api/policies'
 import { policyIsEditable } from '../constants/policy'
 import { createRequestId } from '../utils/request-id'
 import { policyDraft, restorePolicyForm } from '../utils/policy-draft'
@@ -7,7 +13,7 @@ import { policyDraft, restorePolicyForm } from '../utils/policy-draft'
 const uncertain = (error) =>
   ['timeout', 'network', 'parse'].includes(error.kind) || error.status >= 500
 
-export function usePolicyDraft(form, confirming) {
+export function usePolicyDraft(form, confirming, attachments) {
   const record = ref(null)
   const loading = ref(false)
   const writing = ref('')
@@ -15,7 +21,9 @@ export function usePolicyDraft(form, confirming) {
   const noticeType = ref('warning')
   const loadError = ref('')
   const conflict = ref(false)
-  const busy = computed(() => loading.value || Boolean(writing.value))
+  const busy = computed(
+    () => loading.value || Boolean(writing.value) || Boolean(attachments?.attachmentsBusy.value),
+  )
   const readOnly = computed(() => Boolean(record.value && !policyIsEditable(record.value.status)))
   const locked = computed(() => busy.value || readOnly.value || Boolean(loadError.value))
   let operation
@@ -56,6 +64,7 @@ export function usePolicyDraft(form, confirming) {
       const detail = await readPolicy(id, controller.signal)
       if (!controller.signal.aborted) {
         form.value = restorePolicyForm(detail)
+        attachments?.restore(form.value.attachments)
         record.value = detail
         conflict.value = false
         pendingCreate = undefined
@@ -76,6 +85,10 @@ export function usePolicyDraft(form, confirming) {
 
   async function persist(submit) {
     if (locked.value || confirming.value || conflict.value) {
+      return
+    }
+    if (attachments?.attachmentsFailed.value) {
+      show('有文件上传失败，请重试或移除后再保存或提交。')
       return
     }
     const controller = new AbortController()
@@ -116,9 +129,9 @@ export function usePolicyDraft(form, confirming) {
         return
       }
       markSaved()
+      attachments?.markBound()
       if (!submit) {
-        show('草稿已保存。', 'success')
-        return
+        return true
       }
       phase = 'submit'
       const submitted = await submitPolicy(
@@ -129,6 +142,7 @@ export function usePolicyDraft(form, confirming) {
       if (!controller.signal.aborted) {
         record.value = submitted
         show('申请已提交，等待审核。', 'success')
+        return true
       }
     } catch (error) {
       if (controller.signal.aborted) {
@@ -151,7 +165,7 @@ export function usePolicyDraft(form, confirming) {
           ) {
             record.value = detail
             show('已核对，申请提交成功。', 'success')
-            return
+            return true
           }
         } catch {
           if (controller.signal.aborted) {
@@ -175,7 +189,46 @@ export function usePolicyDraft(form, confirming) {
           : phase === 'submit'
             ? `草稿已保存。提交失败，${error.message}`
             : error.message,
+        'error',
       )
+    } finally {
+      if (!controller.signal.aborted) {
+        writing.value = ''
+      }
+    }
+  }
+
+  async function deleteDraft(id, recordVersion) {
+    if (busy.value || confirming.value) {
+      return false
+    }
+    const controller = new AbortController()
+    operation = controller
+    writing.value = 'delete'
+    try {
+      await deletePolicyDraft(id, recordVersion, controller.signal)
+      return !controller.signal.aborted
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return false
+      }
+      if (uncertain(error)) {
+        try {
+          await readPolicy(id, controller.signal)
+        } catch (verificationError) {
+          if (
+            !controller.signal.aborted &&
+            verificationError.status === 404 &&
+            verificationError.code === 'POLICY_NOT_FOUND'
+          ) {
+            return true
+          }
+        }
+      }
+      if (!controller.signal.aborted) {
+        throw error
+      }
+      return false
     } finally {
       if (!controller.signal.aborted) {
         writing.value = ''
@@ -185,6 +238,7 @@ export function usePolicyDraft(form, confirming) {
 
   return {
     record,
+    loading,
     busy,
     writing,
     readOnly,
@@ -198,6 +252,7 @@ export function usePolicyDraft(form, confirming) {
     markSaved,
     hasUnsavedChanges: () => JSON.stringify(form.value) !== savedForm || Boolean(pendingCreate),
     saveDraft: () => persist(false),
+    deleteDraft,
     submit: () => persist(true),
   }
 }

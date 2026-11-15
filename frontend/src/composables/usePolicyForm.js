@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { createRequestId } from '../utils/request-id'
+import { useAttachments } from './useAttachments'
 import { usePolicyDraft } from './usePolicyDraft'
 import { BILLION_PLATFORMS, PLATFORM_LABELS, RETAIL_PLATFORMS } from '../constants/policy'
 import {
@@ -8,17 +8,25 @@ import {
   createForm,
   createPolicyModel,
   createSubsidy,
+  occupiedCommonConfigurations,
+  policyConfigurationKey,
   policyGoodsKey,
 } from '../utils/policy-form'
 
 /** 维护当前页面的表单状态，不承担服务端提交、权限判断或政策生效计算。 */
 export function usePolicyForm(confirm = (message) => window.confirm(message)) {
   const form = ref(createForm())
-  const files = ref([])
   const confirming = ref(false)
-  const persistence = usePolicyDraft(form, confirming)
+  const attachments = useAttachments({
+    onChange: (values) => {
+      form.value.attachments = values
+    },
+    canEdit: () => !confirming.value && !persistence.locked.value,
+  })
+  const { files, attachmentNotice, attachmentsFailed } = attachments
+  const persistence = usePolicyDraft(form, confirming, attachments)
   const blocked = () => confirming.value || persistence.locked.value
-  const { notice } = persistence
+  const { notice, noticeType } = persistence
   let revision = 0
   async function confirmed(action) {
     if (confirming.value || persistence.busy.value) {
@@ -38,7 +46,6 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
   const selectedPlatforms = computed(() =>
     platforms.value.filter(([code]) => form.value.platforms.includes(code)),
   )
-  const models = computed(() => [form.value.model, ...form.value.specialGoods].filter(Boolean))
 
   async function switchChannel(channel) {
     if (blocked() || !['RETAIL', 'BILLION'].includes(channel)) {
@@ -48,7 +55,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       return true
     }
     if (
-      (form.value.platforms.length || models.value.length) &&
+      (form.value.platforms.length || form.value.cards.length) &&
       !(await confirmed(() => confirm('切换渠道会清除已选平台及对应机型明细，是否继续？')))
     ) {
       return false
@@ -66,7 +73,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       return
     }
     form.value.platforms.push(code)
-    for (const model of models.value) {
+    for (const model of form.value.cards) {
       if (model.followsOrderPlatforms) {
         model.platforms[code] = createPlatformEntry(model)
       }
@@ -79,7 +86,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     }
     if (form.value.platforms.includes(code)) {
       if (
-        models.value.some((model) => model.platforms[code]) &&
+        form.value.cards.some((model) => model.platforms[code]) &&
         !(await confirmed(() =>
           confirm(`取消${PLATFORM_LABELS[code]}会移除该平台的数量和补贴方案分配，是否继续？`),
         ))
@@ -87,7 +94,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
         return
       }
       form.value.platforms = form.value.platforms.filter((value) => value !== code)
-      for (const model of models.value) {
+      for (const model of form.value.cards) {
         delete model.platforms[code]
       }
     } else {
@@ -102,25 +109,41 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     platforms.value.forEach(([code]) => addPlatform(code))
   }
 
-  function addGoods(goodsList) {
+  function addGoods(goodsList, cardKey, removedKeys = []) {
     if (blocked() || !form.value.platforms.length) {
-      return
+      return false
     }
-    const model = form.value.model ?? createPolicyModel()
-    const existing = new Set(model.goods.map(({ key }) => key))
+    const model = cardKey === undefined ? createPolicyModel() : editModel(cardKey)
+    if (!model || model.id !== undefined) {
+      return false
+    }
+    const occupied = occupiedCommonConfigurations(form.value.cards, cardKey)
+    if (goodsList.some((item) => occupied.has(policyConfigurationKey(item)))) {
+      notice.value = '同一机型配置只能加入一张普通商品卡，请编辑已有卡片。'
+      noticeType.value = 'warning'
+      return false
+    }
+    const removed = new Set(removedKeys)
+    const next = model.goods.filter(({ key }) => !removed.has(key))
+    const existing = new Set(next.map(({ key }) => key))
     for (const goods of goodsList) {
       const key = policyGoodsKey(goods)
       if (goods.status !== 'active' || existing.has(key)) {
         continue
       }
-      model.goods.push({ ...goods, key })
+      next.push({ ...goods, key })
       existing.add(key)
     }
-    if (!form.value.model && model.goods.length) {
+    if (!next.length) {
+      return cardKey === undefined ? false : removeModel(cardKey)
+    }
+    model.goods = next
+    if (cardKey === undefined) {
       applyModelPlatforms(model, form.value.platforms)
-      form.value.model = model
+      form.value.cards.push(model)
     }
     notice.value = ''
+    return true
   }
 
   function applyModelPlatforms(model, codes) {
@@ -150,7 +173,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       !form.value.platforms.length ||
       goods?.status !== 'active' ||
       !goods.color ||
-      form.value.specialGoods.some(({ id }) => id === goods.id)
+      form.value.cards.some(({ id }) => id === goods.id)
     ) {
       return
     }
@@ -158,7 +181,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     model.id = goods.id
     model.goods.push({ ...goods, key: policyGoodsKey(goods) })
     applyModelPlatforms(model, form.value.platforms)
-    form.value.specialGoods.push(model)
+    form.value.cards.push(model)
     notice.value = ''
   }
 
@@ -166,7 +189,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     if (blocked()) {
       return
     }
-    files.value.push(...Array.from(list || []).map((file) => ({ id: createRequestId(), file })))
+    return attachments.addFiles(list)
   }
 
   async function reset() {
@@ -185,7 +208,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     persistence.clear()
     form.value = createForm()
     persistence.markSaved()
-    files.value = []
+    attachments.restore()
     notice.value = ''
   }
 
@@ -194,30 +217,21 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       return
     }
     if (
-      [
-        'verifyType',
-        'scene',
-        'estimated',
-        'startTime',
-        'endTime',
-        'remark',
-        'explanation',
-        'links',
-      ].includes(field)
+      ['verifyType', 'scene', 'estimated', 'startTime', 'endTime', 'remark', 'links'].includes(
+        field,
+      )
     ) {
       form.value[field] = value
     }
   }
-  function editModel(id) {
+  function editModel(cardKey) {
     if (!blocked()) {
-      return id === undefined
-        ? form.value.model
-        : form.value.specialGoods.find((item) => item.id === id)
+      return form.value.cards.find((item) => item.key === cardKey)
     }
   }
 
-  async function setModelPlatforms(codes, id) {
-    const model = editModel(id)
+  async function setModelPlatforms(codes, cardKey) {
+    const model = editModel(cardKey)
     if (!model) {
       return
     }
@@ -227,7 +241,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       removed.some((code) => hasPlatformDetails(model, code)) &&
       !(await confirmed(() =>
         confirm(
-          id === undefined
+          model.id === undefined
             ? '移除平台会清除对应的补贴方案分配，是否继续？'
             : '移除平台会清除对应的数量和补贴方案分配，是否继续？',
         ),
@@ -239,26 +253,26 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     applyModelPlatforms(model, selected)
   }
 
-  function updateModelPlatform(code, field, value, id) {
-    const model = editModel(id)
+  function updateModelPlatform(code, field, value, cardKey) {
+    const model = editModel(cardKey)
     const entry = model?.platforms[code]
     if (!entry) {
       return
     }
     if (
-      (field === 'quantity' && id !== undefined) ||
+      (field === 'quantity' && model.id !== undefined) ||
       (field === 'subsidyKey' && model.subsidies.some((item) => item.key === value))
     ) {
       entry[field] = value
     }
   }
 
-  function addSubsidy(id) {
-    editModel(id)?.subsidies.push(createSubsidy())
+  function addSubsidy(cardKey) {
+    editModel(cardKey)?.subsidies.push(createSubsidy())
   }
 
-  function updateSubsidy(subsidyKey, field, value, id) {
-    const subsidy = editModel(id)?.subsidies.find((item) => item.key === subsidyKey)
+  function updateSubsidy(subsidyKey, field, value, cardKey) {
+    const subsidy = editModel(cardKey)?.subsidies.find((item) => item.key === subsidyKey)
     if (!subsidy || subsidy[field] === value) {
       return
     }
@@ -273,8 +287,8 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     }
   }
 
-  async function removeSubsidy(subsidyKey, id) {
-    const model = editModel(id)
+  async function removeSubsidy(subsidyKey, cardKey) {
+    const model = editModel(cardKey)
     const [defaultSubsidy] = model?.subsidies ?? []
     if (!defaultSubsidy || subsidyKey === defaultSubsidy.key) {
       return
@@ -299,35 +313,42 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     model.subsidies = model.subsidies.filter((item) => item.key !== subsidyKey)
   }
 
-  async function removeModel(id) {
+  async function removeModel(cardKey) {
+    const model = editModel(cardKey)
+    if (!model) {
+      return false
+    }
     const message =
-      id === undefined
+      model.id === undefined
         ? '确定移除所选配置及其补贴方案吗？'
         : '确定移除该特殊商品及其平台数量和补贴方案吗？'
-    if (editModel(id) && (await confirmed(() => confirm(message)))) {
-      if (id === undefined) {
-        form.value.model = null
-      } else {
-        form.value.specialGoods = form.value.specialGoods.filter((item) => item.id !== id)
-      }
+    if (await confirmed(() => confirm(message))) {
+      form.value.cards = form.value.cards.filter((item) => item.key !== cardKey)
+      return true
     }
+    return false
   }
 
-  function removeGoods(key) {
-    const model = editModel()
-    if (!model?.goods.some((item) => item.key === key)) {
+  function removeGoods(keys, cardKey) {
+    const model = editModel(cardKey)
+    if (!model) {
       return
     }
-    if (model.goods.length === 1) {
-      return removeModel()
+    const removed = new Set(keys)
+    const remaining = model.goods.filter((item) => !removed.has(item.key))
+    if (!remaining.length) {
+      return removeModel(cardKey)
     }
-    model.goods = model.goods.filter((item) => item.key !== key)
+    model.goods = remaining
   }
   function removeFile(uid) {
     if (blocked()) {
       return
     }
-    files.value = files.value.filter((entry) => entry.file.uid !== uid)
+    const entry = files.value.find((item) => item.id === uid)
+    if (entry) {
+      return attachments.removeFile(entry)
+    }
   }
 
   async function reloadDraft(id, force = true) {
@@ -337,10 +358,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     ) {
       return
     }
-    const previousId = persistence.record.value?.id
-    if ((await persistence.load(id, force)) && id !== previousId) {
-      files.value = []
-    }
+    await persistence.load(id, force)
   }
 
   async function preparePolicyEdit(id, recordVersion) {
@@ -356,25 +374,54 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     ) {
       return true
     }
-    if (
-      (persistence.hasUnsavedChanges() || files.value.length) &&
-      !(await confirmed(() => confirm('打开该申请会替换当前未保存的内容，是否继续？')))
-    ) {
+    if (!(await confirmPolicyReplacement())) {
       return false
     }
     clear()
     return true
   }
 
+  async function confirmPolicyReplacement() {
+    if (persistence.busy.value || confirming.value) {
+      return false
+    }
+    if (
+      (persistence.hasUnsavedChanges() || attachmentsFailed.value) &&
+      !(await confirmed(() => confirm('打开该申请会替换当前未保存的内容，是否继续？')))
+    ) {
+      return false
+    }
+    return true
+  }
+
+  async function deleteDraft(row, confirmDeletion) {
+    if (persistence.busy.value || !(await confirmed(confirmDeletion))) {
+      return false
+    }
+    const deleted = await persistence.deleteDraft(row.id, row.recordVersion)
+    if (deleted && persistence.record.value?.id === row.id) {
+      clear()
+    }
+    return deleted
+  }
+
   return {
     ...persistence,
     reloadDraft,
     preparePolicyEdit,
+    confirmPolicyReplacement,
+    deleteDraft,
     form,
     files,
+    attachmentNotice,
+    retryFile: (id) => {
+      const entry = files.value.find((item) => item.id === id)
+      if (entry) {
+        return attachments.retryFile(entry)
+      }
+    },
     platforms,
     selectedPlatforms,
-    models,
     switchChannel,
     togglePlatform,
     selectAll,

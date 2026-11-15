@@ -21,6 +21,11 @@ export function savePolicyDraft(id, body, signal) {
   return write(`${itemPath(id)}/draft`, 'PUT', body, {}, signal)
 }
 
+export function deletePolicyDraft(id, recordVersion, signal) {
+  const params = new URLSearchParams({ recordVersion })
+  return request(`${itemPath(id)}/draft?${params}`, { method: 'DELETE', signal })
+}
+
 export function submitPolicy(id, recordVersion, signal) {
   return write(`${itemPath(id)}/submit`, 'POST', { recordVersion }, {}, signal)
 }
@@ -42,8 +47,4 @@ export function listMyPolicies({ page, pageSize, status, perspective, platformCo
 export function listPolicyAuditLogs(id, { page, pageSize }, signal) {
   const params = new URLSearchParams({ page, pageSize })
   return request(`${logsPath(id)}?${params}`, { signal })
-}
-
-export function readPolicyAuditLog(id, logId, signal) {
-  return request(`${logsPath(id)}/${encodeURIComponent(logId)}`, { signal })
 }

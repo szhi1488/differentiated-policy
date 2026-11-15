@@ -87,7 +87,7 @@ public class AuthController {
     @Operation(
             summary = "读取当前登录身份",
             description =
-                    "返回本地 user_info.id、roleType 及经飞书核验的身份。无会话或会话到期返回 401。会话角色为登录时快照，商品管理接口会重新校验管理员权限。")
+                    "返回本地 user_info.id、roleType、可空的 avatarUrl 及经飞书核验的身份。头像在登录时同步，恢复会话读取登录快照。无会话或会话到期返回 401。会话角色为登录时快照，商品管理接口会重新校验管理员权限。")
     public ResponseEntity<AuthSessionResponse> current(HttpServletRequest request) {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())

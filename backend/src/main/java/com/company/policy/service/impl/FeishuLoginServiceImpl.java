@@ -96,7 +96,10 @@ public class FeishuLoginServiceImpl implements FeishuLoginService {
                         tenant,
                         data.path("open_id").asText(),
                         unionId,
-                        data.path("name").asText("飞书用户"));
+                        data.path("name").asText("飞书用户"),
+                        data.path("avatar_url").isTextual()
+                                ? data.path("avatar_url").asText()
+                                : null);
         return new AuthSessionResponse(user, expiresAt);
     }
 }

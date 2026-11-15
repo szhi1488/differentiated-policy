@@ -4,6 +4,7 @@ import com.company.policy.dto.PolicyListQuery;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
 import java.util.List;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -13,10 +14,18 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface PolicyApplyMapper {
+    // 已删除申请和历轮快照仍保留附件引用，物理删除必须同时排除两类引用。
+    @Select(
+            """
+        SELECT EXISTS(SELECT 1 FROM policy_apply WHERE JSON_CONTAINS(attachment_urls, #{file}))
+            OR EXISTS(SELECT 1 FROM policy_audit_log WHERE JSON_CONTAINS(snapshot_data, #{snapshot}))
+        """)
+    boolean attachmentReferenced(String file, String snapshot);
+
     String COLUMNS =
             """
         id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,
-        scene, is_estimated, start_time, end_time, remark, other_desc, goods_form_json, attachment_urls,
+        scene, is_estimated, start_time, end_time, remark, goods_form_json, attachment_urls,
         status, current_version, record_version
         """;
     String OWNED =
@@ -57,13 +66,13 @@ public interface PolicyApplyMapper {
             """
         INSERT INTO policy_apply (
             policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms,
-            write_off_type, scene, is_estimated, start_time, end_time, remark, other_desc,
+            write_off_type, scene, is_estimated, start_time, end_time, remark,
             goods_form_json, attachment_urls, created_at, updated_at
         ) VALUES (
             #{entry.policyNo}, #{entry.tenantKey}, #{entry.applicantId}, #{entry.applicantName},
             #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.scene},
             #{entry.isEstimated}, #{entry.startTime}, #{entry.endTime}, #{entry.remark},
-            #{entry.otherDesc}, #{entry.goodsFormJson}, #{entry.attachmentUrls}, #{now}, #{now}
+            #{entry.goodsFormJson}, #{entry.attachmentUrls}, #{now}, #{now}
         )
         """)
     @Options(useGeneratedKeys = true, keyProperty = "entry.id", keyColumn = "id")
@@ -74,12 +83,24 @@ public interface PolicyApplyMapper {
         UPDATE policy_apply SET channel_type = #{entry.channelType}, platforms = #{entry.platforms},
             write_off_type = #{entry.writeOffType}, scene = #{entry.scene}, is_estimated = #{entry.isEstimated},
             start_time = #{entry.startTime}, end_time = #{entry.endTime}, remark = #{entry.remark},
-            other_desc = #{entry.otherDesc}, goods_form_json = #{entry.goodsFormJson},
+            goods_form_json = #{entry.goodsFormJson},
             attachment_urls = #{entry.attachmentUrls}, record_version = record_version + 1, updated_at = #{now}
         WHERE id = #{entry.id} AND tenant_key = #{entry.tenantKey} AND applicant_id = #{entry.applicantId}
             AND is_deleted = 0 AND record_version = #{entry.recordVersion} AND status IN ('DRAFT', 'REJECTED')
         """)
     int updateDraft(@Param("entry") PolicyApply entry, java.time.LocalDateTime now);
+
+    // 条件删除与提交、保存争用同一申请行，已产生提交记录的申请不能物理删除。
+    @Delete(
+            """
+        DELETE FROM policy_apply
+        WHERE id = #{entry.id} AND tenant_key = #{entry.tenantKey} AND applicant_id = #{entry.applicantId}
+            AND is_deleted = 0 AND status = 'DRAFT' AND current_version = 0
+            AND record_version = #{entry.recordVersion}
+            AND NOT EXISTS (SELECT 1 FROM policy_audit_log WHERE policy_id = #{entry.id})
+            AND NOT EXISTS (SELECT 1 FROM policy_goods_detail WHERE policy_id = #{entry.id})
+        """)
+    int deleteDraft(@Param("entry") PolicyApply entry);
 
     @Update(
             """

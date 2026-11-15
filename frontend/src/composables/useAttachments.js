@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { createRequestId } from '../utils/request-id'
 import { deleteAttachment, uploadAttachment } from '../api/attachments'
 import {
   ATTACHMENT_ACCEPT,
@@ -7,27 +8,73 @@ import {
 } from '../constants/attachments'
 
 /** 上传成功后保留服务端标识；失败保留原文件供用户手动重试。 */
-export function useAttachments() {
+export function useAttachments({ onChange = () => {}, canEdit = () => true } = {}) {
   const files = ref([])
   const attachmentNotice = ref('')
   const attachmentsBusy = computed(() =>
     files.value.some((entry) => ['uploading', 'deleting'].includes(entry.status)),
   )
+  const attachmentsFailed = computed(() => files.value.some((entry) => entry.status === 'failed'))
+  let revision = 0
+  let operation
+
+  function changed() {
+    onChange(
+      files.value
+        .filter((entry) => entry.attachment)
+        .map(({ attachment }) => ({
+          type: 'FILE',
+          id: attachment.id,
+          originalName: attachment.originalName,
+        })),
+    )
+  }
+
+  function restore(attachments = []) {
+    revision++
+    operation?.abort()
+    files.value = attachments.map((attachment) => ({
+      id: attachment.id,
+      file: null,
+      attachment: { ...attachment },
+      status: 'uploaded',
+      bound: true,
+      error: '',
+    }))
+    attachmentNotice.value = ''
+  }
+
+  function markBound() {
+    files.value.forEach((entry) => {
+      entry.bound = Boolean(entry.attachment)
+    })
+  }
 
   async function upload(entry) {
+    const current = revision
+    const controller = new AbortController()
+    operation = controller
     entry.status = 'uploading'
     entry.error = ''
     try {
-      entry.attachment = await uploadAttachment(entry.file)
+      const attachment = await uploadAttachment(entry.file, controller.signal)
+      if (current !== revision) {
+        return
+      }
+      entry.attachment = attachment
       entry.status = 'uploaded'
+      changed()
     } catch (error) {
+      if (current !== revision) {
+        return
+      }
       entry.status = 'failed'
       entry.error = error.message
     }
   }
 
   async function addFiles(list) {
-    if (attachmentsBusy.value) {
+    if (!canEdit() || attachmentsBusy.value) {
       return
     }
     attachmentNotice.value = ''
@@ -47,41 +94,53 @@ export function useAttachments() {
         attachmentNotice.value = '单个附件不能超过 20MB。'
         continue
       }
-      const id = crypto.randomUUID()
+      const id = createRequestId()
       ids.push(id)
       files.value.push({ id, file, attachment: null, status: 'uploading', error: '' })
     }
     // 逐个上传，避免多个大文件同时占用连接和内存。
+    const current = revision
     for (const id of ids) {
+      if (current !== revision) {
+        return
+      }
       await upload(files.value.find((entry) => entry.id === id))
     }
   }
 
   async function retryFile(entry) {
-    if (attachmentsBusy.value || entry.status !== 'failed') {
+    if (!canEdit() || attachmentsBusy.value || entry.status !== 'failed') {
       return
     }
     await upload(entry)
   }
 
   async function removeFile(entry) {
-    if (attachmentsBusy.value) {
+    if (!canEdit() || attachmentsBusy.value) {
       return false
     }
-    if (entry.attachment) {
+    const current = revision
+    if (entry.attachment && !entry.bound) {
       entry.status = 'deleting'
       entry.error = ''
       try {
         await deleteAttachment(entry.attachment.id)
       } catch (error) {
-        if (error.status !== 404) {
+        if (current !== revision) {
+          return false
+        }
+        if (error.status !== 404 && error.code !== 'ATTACHMENT_REFERENCED') {
           entry.status = 'uploaded'
           entry.error = error.message
           return false
         }
       }
     }
+    if (current !== revision) {
+      return false
+    }
     files.value = files.value.filter((item) => item.id !== entry.id)
+    changed()
     return true
   }
 
@@ -100,6 +159,9 @@ export function useAttachments() {
 
   return {
     files,
+    attachmentsFailed,
+    restore,
+    markBound,
     attachmentNotice,
     attachmentsBusy,
     addFiles,

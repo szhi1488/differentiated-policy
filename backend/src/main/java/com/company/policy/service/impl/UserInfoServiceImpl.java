@@ -5,6 +5,7 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.UserInfoService;
 import com.company.policy.vo.CurrentUserResponse;
+import java.net.URI;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -21,7 +22,7 @@ public class UserInfoServiceImpl implements UserInfoService {
     @Transactional
     @Override
     public CurrentUserResponse saveVerifiedIdentity(
-            String tenantKey, String openId, String unionId, String name) {
+            String tenantKey, String openId, String unionId, String name, String avatarUrl) {
         validate(tenantKey, 64);
         validate(openId, 64);
         validate(name, 64);
@@ -33,6 +34,7 @@ public class UserInfoServiceImpl implements UserInfoService {
         identity.setOpenId(openId);
         identity.setUnionId(unionId);
         identity.setName(name);
+        identity.setAvatarUrl(normalizeAvatarUrl(avatarUrl));
         try {
             mapper.upsertVerifiedIdentity(identity);
             var saved = mapper.findIdentity(tenantKey, openId);
@@ -47,9 +49,27 @@ public class UserInfoServiceImpl implements UserInfoService {
                     saved.getOpenId(),
                     saved.getTenantKey(),
                     saved.getName(),
-                    saved.getRoleType());
+                    saved.getRoleType(),
+                    saved.getAvatarUrl());
         } catch (DataAccessException ignored) {
             throw databaseUnavailable();
+        }
+    }
+
+    // 头像为可选展示资料，异常地址不阻断身份核验，也不保存为可执行或非 HTTPS 地址。
+    private static String normalizeAvatarUrl(String value) {
+        if (value == null || value.isBlank() || value.length() > 2048) {
+            return null;
+        }
+        try {
+            var uri = URI.create(value);
+            return "https".equalsIgnoreCase(uri.getScheme())
+                            && uri.getHost() != null
+                            && uri.getUserInfo() == null
+                    ? value
+                    : null;
+        } catch (IllegalArgumentException ignored) {
+            return null;
         }
     }
 

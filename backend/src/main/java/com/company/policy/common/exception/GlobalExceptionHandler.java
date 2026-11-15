@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -52,6 +53,13 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest()
                 .header("Cache-Control", "no-store")
                 .body(new ApiError("ATTACHMENT_INVALID", "请选择需要上传的文件。"));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleUploadTooLarge(MaxUploadSizeExceededException ignored) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .header("Cache-Control", "no-store")
+                .body(new ApiError("ATTACHMENT_TOO_LARGE", "单个附件不能超过 20MB。"));
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

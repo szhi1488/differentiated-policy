@@ -6,6 +6,7 @@ import com.company.policy.dto.CatalogGoodsQuery;
 import com.company.policy.dto.CatalogGoodsUpdate;
 import com.company.policy.dto.CatalogGoodsWrite;
 import com.company.policy.entity.CatalogGoods;
+import com.company.policy.entity.CatalogGoodsInsert;
 import com.company.policy.entity.Spu;
 import com.company.policy.mapper.CatalogDictionaryMapper;
 import com.company.policy.mapper.CatalogGoodsMapper;
@@ -23,7 +24,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
@@ -58,9 +58,9 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         try {
             var target = resolveTarget(request);
             checkDuplicate(target, null);
-            checkWrite(
-                    mapper.insertGoods(
-                            "G-" + UUID.randomUUID(),
+            var entry =
+                    new CatalogGoodsInsert(
+                            null,
                             null,
                             target.brand(),
                             target.series(),
@@ -69,9 +69,9 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                             target.ram(),
                             target.rom(),
                             target.color(),
-                            request.status()));
-            var saved = mapper.lockGoods(target.spu(), target.ram(), target.rom(), target.color());
-            return CatalogGoodsResponse.from(mapper.find(saved.id()));
+                            request.status());
+            checkWrite(mapper.insertGoods(entry));
+            return CatalogGoodsResponse.from(mapper.find(entry.getId()));
         } catch (DuplicateKeyException error) {
             throw duplicate();
         }
@@ -101,7 +101,9 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                 throw invalidGoods("请选择商品状态。");
             }
             checkReferences(current, target);
-            checkDuplicate(target, id);
+            if (!target.matches(current) && current.sourceSkuId() == null) {
+                checkDuplicate(target, id);
+            }
             String name = product.name().strip();
             if (target.matches(current)
                     && name.equals(current.goodsName())
@@ -157,8 +159,10 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     }
 
     private void checkDuplicate(Target target, Long currentId) {
-        var existing = mapper.lockGoods(target.spu(), target.ram(), target.rom(), target.color());
-        if (existing == null || Objects.equals(existing.id(), currentId)) {
+        var existing =
+                mapper.lockDuplicateGoods(
+                        target.spu(), target.ram(), target.rom(), target.color(), currentId);
+        if (existing == null) {
             return;
         }
         throw duplicate();

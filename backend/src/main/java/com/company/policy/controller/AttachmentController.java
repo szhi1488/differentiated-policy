@@ -18,7 +18,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/attachments")
-@Tag(name = "政策附件", description = "需登录；写请求需可信 Origin 和 X-Policy-Request: 1。仅上传者可操作，尚未绑定政策。")
+@Tag(
+        name = "政策附件",
+        description = "需登录；写请求需可信 Origin 和 X-Policy-Request: 1。独立接口仅上传者可操作，已引用文件禁止物理删除。")
 public class AttachmentController {
     private final AttachmentService attachments;
     private final LoginSessionService sessions;
@@ -45,6 +47,10 @@ public class AttachmentController {
             description = "强制下载，不公开映射 data 目录。401 未登录，403 账号停用，404 不存在或非本人/跨租户，503 存储异常。")
     public ResponseEntity<Resource> download(@PathVariable String id, HttpServletRequest request) {
         var download = attachments.download(id, sessions.requireLogin(request).user());
+        return content(download);
+    }
+
+    static ResponseEntity<Resource> content(AttachmentService.Download download) {
         return ResponseEntity.ok()
                 .header(
                         HttpHeaders.CONTENT_DISPOSITION,
@@ -64,7 +70,7 @@ public class AttachmentController {
     @Operation(
             summary = "移除本人独立附件",
             description =
-                    "物理删除当前尚未绑定政策的附件；204 成功，401 未登录，403 账号停用，404 不存在或非本人/跨租户，503 存储异常。未来绑定政策后不可直接沿用删除规则。")
+                    "物理删除没有当前表单或历史快照引用的本人附件；204 成功，401 未登录，403 账号停用，404 不存在或非本人/跨租户，409 已被政策引用，503 存储异常。")
     public ResponseEntity<Void> delete(@PathVariable String id, HttpServletRequest request) {
         attachments.delete(id, sessions.requireLogin(request).user());
         return ResponseEntity.noContent().build();

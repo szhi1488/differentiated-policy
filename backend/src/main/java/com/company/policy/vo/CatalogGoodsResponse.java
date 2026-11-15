@@ -62,6 +62,7 @@ public record CatalogGoodsResponse(
         for (String value :
                 List.of(
                         Long.toString(goods.id()),
+                        Objects.toString(goods.skuId(), ""),
                         goods.goodsName(),
                         Long.toString(goods.spuId()),
                         goods.ram(),

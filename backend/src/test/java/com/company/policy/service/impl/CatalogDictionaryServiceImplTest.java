@@ -22,7 +22,7 @@ class CatalogDictionaryServiceImplTest {
         var service =
                 new CatalogDictionaryServiceImpl(
                         mock(CatalogAccess.class), dictionary, mock(CatalogGoodsMapper.class));
-        var admin = new CurrentUserResponse("1", "admin", "tenant", "管理员", "ADMIN");
+        var admin = new CurrentUserResponse("1", "admin", "tenant", "管理员", "ADMIN", null);
         when(dictionary.lockName(Type.brand, 1)).thenReturn("旧品牌");
         when(dictionary.linkedSeries(1)).thenReturn(null);
         when(dictionary.linkedSource(1)).thenReturn(null);

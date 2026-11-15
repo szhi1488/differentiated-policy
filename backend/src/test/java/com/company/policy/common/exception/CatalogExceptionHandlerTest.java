@@ -24,7 +24,7 @@ class CatalogExceptionHandlerTest {
     void distinguishesLockConflictFromQueryTimeout() throws Exception {
         var dictionary = mock(CatalogDictionaryService.class);
         var sessions = mock(LoginSessionService.class);
-        var admin = new CurrentUserResponse("1", "admin", "tenant", "管理员", "ADMIN");
+        var admin = new CurrentUserResponse("1", "admin", "tenant", "管理员", "ADMIN", null);
         when(sessions.requireLogin(any())).thenReturn(new AuthSessionResponse(admin, Instant.MAX));
         when(dictionary.list(admin))
                 .thenThrow(new CannotAcquireLockException("lock conflict"))

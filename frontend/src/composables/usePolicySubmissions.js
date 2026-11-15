@@ -1,10 +1,5 @@
-import { reactive, watch } from 'vue'
-import {
-  listMyPolicies,
-  listPolicyAuditLogs,
-  readPolicy,
-  readPolicyAuditLog,
-} from '../api/policies'
+import { reactive, toValue, watch } from 'vue'
+import { listMyPolicies, listPolicyAuditLogs, readPolicy } from '../api/policies'
 import { useLatestQuery } from './useLatestQuery'
 
 const pageSize = 20
@@ -33,20 +28,41 @@ export function usePolicySubmissions() {
 
 export function usePolicySubmissionDetail(id) {
   const detail = useLatestQuery()
-  const history = useLatestQuery()
-  const snapshot = useLatestQuery()
 
   function readDetail() {
     return detail.run((signal) => readPolicy(id, signal))
   }
 
-  function readHistory(page) {
-    return history.run((signal) => listPolicyAuditLogs(id, { page, pageSize }, signal))
+  return { detail, readDetail }
+}
+
+export function usePolicyRejection(policy) {
+  const query = useLatestQuery()
+
+  function refresh() {
+    const current = toValue(policy)
+    return query.run(async (signal) => {
+      if (current?.status !== 'REJECTED') {
+        return null
+      }
+      const result = await listPolicyAuditLogs(current.id, { page: 1, pageSize: 1 }, signal)
+      // 只显示当前轮次的驳回意见，不能把上一轮意见当成本轮结果。
+      return (
+        result.items.find(
+          (log) =>
+            log.submissionVersion === current.submissionVersion && log.auditStatus === 'REJECTED',
+        ) ?? null
+      )
+    })
   }
 
-  function readSnapshot(logId) {
-    return snapshot.run((signal) => readPolicyAuditLog(id, logId, signal))
-  }
-
-  return { detail, history, snapshot, readDetail, readHistory, readSnapshot }
+  watch(
+    () => {
+      const current = toValue(policy)
+      return [current?.id, current?.status, current?.submissionVersion]
+    },
+    refresh,
+    { immediate: true },
+  )
+  return { ...query, refresh }
 }

@@ -13,7 +13,13 @@ export function getFeishuErrorCode(error) {
   return null
 }
 
-function getInnerErrorCode(error) {
+function getInnerErrorCode(error, outerCode) {
+  for (const field of ['errorCode', 'errCode']) {
+    const code = getFeishuErrorCode({ errorCode: error?.[field] })
+    if (code && code !== outerCode) {
+      return code
+    }
+  }
   for (const field of ['errString', 'errMsg', 'errorMessage', 'message']) {
     const value = error?.[field]
     if (typeof value !== 'string') {
@@ -31,7 +37,7 @@ function getInnerErrorCode(error) {
 
 export function feishuFailure(stage, error) {
   const code = getFeishuErrorCode(error)
-  const innerCode = code === '2700002' ? getInnerErrorCode(error) : null
+  const innerCode = ['2601002', '2700002'].includes(code) ? getInnerErrorCode(error, code) : null
   const suggestions = {
     103: '当前客户端不支持此授权接口，请升级飞书后重试。',
     333441: '页面签名校验失败，请重新打开应用后重试。',
@@ -39,10 +45,15 @@ export function feishuFailure(stage, error) {
     333447: '尚未配置 H5 可信域名，请在飞书开发者后台添加当前页面域名。',
     333448: '当前页面不在 H5 可信域名内，请核对域名及端口。',
     333449: '当前账号不在应用可用范围内，请检查当前飞书企业及应用版本。',
+    2601002:
+      '请根据内层错误码核对当前页面的 H5 可信域名、签名和应用可用范围；修改后台配置后关闭页面并重新打开应用。',
     2700002:
       '请先核对飞书后台的重定向 URL 是否包含当前页面完整地址（含协议、端口和路径），再检查应用可用范围及是否取消授权。',
   }
-  const hint = suggestions[code] || '请检查当前飞书账号的应用可用范围及应用配置后重试。'
+  const hint =
+    suggestions[innerCode] ||
+    suggestions[code] ||
+    '请检查当前飞书账号的应用可用范围及应用配置后重试。'
   return new Error(
     `${stage}失败${code ? `（飞书错误码 ${code}${innerCode ? `，内层错误码 ${innerCode}` : ''}）` : '（未返回错误码）'}。${hint}`,
   )

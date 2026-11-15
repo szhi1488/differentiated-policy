@@ -15,6 +15,7 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyApplyMapper.DetailLine;
+import com.company.policy.service.AttachmentService;
 import com.company.policy.service.PolicyApplyService;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.CurrentUserResponse;
@@ -54,16 +55,19 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private final PolicyApplyMapper policies;
     private final CatalogGoodsMapper catalog;
     private final ObjectMapper json;
+    private final AttachmentService attachments;
 
     PolicyApplyServiceImpl(
             CatalogAccess access,
             PolicyApplyMapper policies,
             CatalogGoodsMapper catalog,
-            ObjectMapper json) {
+            ObjectMapper json,
+            AttachmentService attachments) {
         this.access = access;
         this.policies = policies;
         this.catalog = catalog;
         this.json = json;
+        this.attachments = attachments;
     }
 
     @Override
@@ -76,13 +80,14 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         }
         var form = PolicyFormValidation.validate(request, false);
         var entry = new PolicyApply();
-        entry.setPolicyNo(policyCode(owner, requestKey));
+        entry.setPolicyNo(creationCode(owner, requestKey));
         entry.setTenantKey(owner.getTenantKey());
         entry.setApplicantId(owner.getId());
         entry.setApplicantName(owner.getName());
         entry.setStatus("DRAFT");
         entry.setRecordVersion(1);
         writeForm(entry, form);
+        entry.setAttachmentUrls(encode(attachments.bind(form.attachmentInfo(), session)));
         try {
             checkUpdated(policies.insert(entry, now()));
             return response(entry);
@@ -93,7 +98,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                     && saved != null
                     && "DRAFT".equals(saved.getStatus())
                     && saved.getRecordVersion() == 1
-                    && form.equals(readForm(saved))) {
+                    && readForm(entry).equals(readForm(saved))) {
                 return response(saved);
             }
             throw conflict("POLICY_CREATE_CONFLICT", "创建标识已使用，请核对原申请后继续。");
@@ -105,10 +110,25 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     public PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request) {
         var entry = owned(access.requireApplicant(session), id);
         checkEditable(entry, request.recordVersion());
-        writeForm(entry, PolicyFormValidation.validate(request, false));
+        var form = PolicyFormValidation.validate(request, false);
+        writeForm(entry, form);
+        entry.setAttachmentUrls(encode(attachments.bind(form.attachmentInfo(), session)));
         checkUpdated(policies.updateDraft(entry, now()));
         entry.setRecordVersion(entry.getRecordVersion() + 1);
         return response(entry);
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void deleteDraft(CurrentUserResponse session, long id, Integer recordVersion) {
+        var entry = owned(access.requireApplicant(session), id);
+        if (!"DRAFT".equals(entry.getStatus()) || entry.getCurrentVersion() != 0) {
+            throw conflict("POLICY_STATE_CONFLICT", "只能删除本人尚未提交的草稿。");
+        }
+        checkEditable(entry, recordVersion);
+        if (policies.deleteDraft(entry) != 1) {
+            throw conflict("POLICY_VERSION_CONFLICT", "草稿已变更或已提交，请刷新列表后重试。");
+        }
     }
 
     @Override
@@ -152,7 +172,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         var snapshot =
                 new Snapshot(
                         Long.toString(id),
-                        entry.getPolicyNo(),
+                        policyNumber(entry.getId()),
                         entry.getApplicantId().toString(),
                         entry.getApplicantName(),
                         version,
@@ -199,7 +219,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         }
         return new Detail(
                 Long.toString(id),
-                entry.getPolicyNo(),
+                policyNumber(entry.getId()),
                 entry.getStatus(),
                 entry.getRecordVersion(),
                 entry.getCurrentVersion(),
@@ -255,13 +275,14 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");
         }
         return new AuditDetail(
-                auditSummary(log), decode(log.getSnapshotData(), new TypeReference<Snapshot>() {}));
+                auditSummary(log),
+                displaySnapshot(decode(log.getSnapshotData(), new TypeReference<Snapshot>() {})));
     }
 
     private Summary summary(PolicyApply entry) {
         return new Summary(
                 entry.getId().toString(),
-                entry.getPolicyNo(),
+                policyNumber(entry.getId()),
                 entry.getStatus(),
                 entry.getRecordVersion(),
                 entry.getCurrentVersion(),
@@ -271,7 +292,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 formatTime(entry.getUpdatedAt()));
     }
 
-    private static AuditSummary auditSummary(PolicyAuditLog log) {
+    static AuditSummary auditSummary(PolicyAuditLog log) {
         return new AuditSummary(
                 log.getId().toString(),
                 log.getVersion(),
@@ -282,14 +303,14 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 formatTime(log.getCreatedAt()));
     }
 
-    private static long offset(int page, int pageSize) {
+    static long offset(int page, int pageSize) {
         if (page < 1 || pageSize < 1 || pageSize > 100) {
             throw invalid("页码须大于等于 1，每页条数须在 1 至 100 之间。");
         }
         return (page - 1L) * pageSize;
     }
 
-    private static void validateFilter(String value, Set<String> allowed, String field) {
+    static void validateFilter(String value, Set<String> allowed, String field) {
         if (value != null && !allowed.contains(value)) {
             throw invalid(field + "筛选值无效。");
         }
@@ -354,7 +375,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         entry.setStartTime(PolicyFormValidation.time(form.startTime()));
         entry.setEndTime(PolicyFormValidation.time(form.endTime()));
         entry.setRemark(form.specialRemark());
-        entry.setOtherDesc(form.otherExplanation());
         entry.setAttachmentUrls(encode(form.attachmentInfo()));
         entry.setGoodsFormJson(encode(form.goodsForm()));
     }
@@ -372,7 +392,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 formatTime(entry.getEndTime()),
                 entry.getRemark(),
                 entries(decode(entry.getAttachmentUrls(), new TypeReference<List<Link>>() {})),
-                entry.getOtherDesc(),
                 goods == null ? new GoodsForm(List.of()) : goods);
     }
 
@@ -395,7 +414,23 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         }
     }
 
-    private static String policyCode(UserInfo owner, String key) {
+    // 对外单号使用已有申请 ID，最少六位；不截断大 ID，也不改变内部创建幂等标识。
+    static String policyNumber(long id) {
+        return String.format(Locale.ROOT, "ZC-%06d", id);
+    }
+
+    static Snapshot displaySnapshot(Snapshot snapshot) {
+        return new Snapshot(
+                snapshot.id(),
+                policyNumber(Long.parseLong(snapshot.id())),
+                snapshot.applicantId(),
+                snapshot.applicantName(),
+                snapshot.submissionVersion(),
+                snapshot.form(),
+                snapshot.goods());
+    }
+
+    private static String creationCode(UserInfo owner, String key) {
         UUID token = UUID.randomUUID();
         if (key != null) {
             try {
@@ -413,18 +448,18 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return token.toString().replace("-", "").toUpperCase(Locale.ROOT);
     }
 
-    private static String formatTime(LocalDateTime value) {
+    static String formatTime(LocalDateTime value) {
         return value == null ? null : value.format(PolicyFormValidation.TIME);
     }
 
-    private static LocalDateTime now() {
+    static LocalDateTime now() {
         return LocalDateTime.now(SHANGHAI).truncatedTo(ChronoUnit.SECONDS);
     }
 
     private static PolicyResponse response(PolicyApply entry) {
         return new PolicyResponse(
                 entry.getId().toString(),
-                entry.getPolicyNo(),
+                policyNumber(entry.getId()),
                 entry.getStatus(),
                 entry.getRecordVersion(),
                 entry.getCurrentVersion());

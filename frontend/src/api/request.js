@@ -14,7 +14,13 @@ export class RequestError extends Error {
 }
 /** 保留 HTTP 状态，取消覆盖响应体读取；请求层不弹窗、不自动重试写操作。 */
 export async function request(path, options = {}) {
-  const { signal, timeoutMs = REQUEST_TIMEOUT_MS, sessionProbe = false, ...init } = options
+  const {
+    signal,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    sessionProbe = false,
+    responseType = 'json',
+    ...init
+  } = options
   const controller = new AbortController()
   let timedOut = false
   let response
@@ -51,7 +57,8 @@ export async function request(path, options = {}) {
     let parseError = false
     if (response.status !== 204) {
       try {
-        data = await response.json()
+        data =
+          response.ok && responseType === 'blob' ? await response.blob() : await response.json()
       } catch (error) {
         if (controller.signal.aborted || error.name === 'AbortError') {
           throw error

@@ -44,10 +44,10 @@ class AuthControllerTest {
     @BeforeEach
     void setup() throws Exception {
         when(clock.instant()).thenReturn(now);
-        when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户"))
+        when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", null))
                 .thenReturn(
                         new CurrentUserResponse(
-                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT"));
+                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT", null));
         when(transport.post(eq("/oauth/v3/token"), anyMap(), isNull()))
                 .thenReturn(
                         mapper.readTree(
@@ -56,6 +56,37 @@ class AuthControllerTest {
                 .thenReturn(
                         mapper.readTree(
                                 "{\"code\":0,\"data\":{\"open_id\":\"ou_verified\",\"tenant_key\":\"tenant-test\",\"name\":\"测试用户\"}}"));
+    }
+
+    @Test
+    void bothLoginEntrypointsReturnAvatarAndSessionRestoresIt() throws Exception {
+        String avatar = "https://example.test/avatar.png";
+        when(transport.getUserInfo("private-token"))
+                .thenReturn(
+                        mapper.readTree(
+                                """
+            {"code":0,"data":{"open_id":"ou_verified","tenant_key":"tenant-test","name":"测试用户","avatar_url":"https://example.test/avatar.png"}}
+            """));
+        when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", avatar))
+                .thenReturn(
+                        new CurrentUserResponse(
+                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT", avatar));
+        var client = new MockHttpSession();
+        mvc.perform(login(client, challenge(client)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.avatarUrl").value(avatar));
+        mvc.perform(get("/api/auth/session").session(client))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.avatarUrl").value(avatar));
+        var browser = new MockHttpSession();
+        mvc.perform(browserLogin(browser, browserState(browser)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.avatarUrl").value(avatar));
+        mvc.perform(get("/api/auth/session").session(browser))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.avatarUrl").value(avatar));
+        verify(users, times(2))
+                .saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", avatar);
     }
 
     @Test
@@ -175,7 +206,7 @@ class AuthControllerTest {
                                     .header("X-Policy-Request", "1"))
                     .andExpect(status().isForbidden());
         }
-        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString()))
+        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString(), isNull()))
                 .thenThrow(
                         new com.company.policy.common.exception.ApiException(
                                 org.springframework.http.HttpStatus.FORBIDDEN,
@@ -227,7 +258,7 @@ class AuthControllerTest {
                                                 org.hamcrest.Matchers.containsString(
                                                         "private-token"))));
         assertThat(session.getId()).isNotEqualTo(originalId);
-        verify(users).saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户");
+        verify(users).saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", null);
         verify(transport)
                 .post(
                         "/oauth/v3/token",
@@ -319,7 +350,7 @@ class AuthControllerTest {
 
     @Test
     void storageFailureDoesNotEstablishSession() throws Exception {
-        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString()))
+        when(users.saveVerifiedIdentity(anyString(), anyString(), isNull(), anyString(), isNull()))
                 .thenThrow(
                         new com.company.policy.common.exception.ApiException(
                                 org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,

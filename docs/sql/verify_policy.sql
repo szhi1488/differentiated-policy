@@ -7,6 +7,13 @@ WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN ('policy_apply', 'policy_audit_log', 'policy_goods_detail')
 ORDER BY TABLE_NAME;
 
+-- 备注字段仅保留 remark，预期只返回一行 remark。
+SELECT COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'policy_apply'
+  AND COLUMN_NAME IN ('remark', 'other_desc');
+
 SELECT k.TABLE_NAME, k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME,
        k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE
 FROM information_schema.KEY_COLUMN_USAGE k

@@ -1,4 +1,4 @@
--- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-14。
+-- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-15。
 -- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
 -- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
 -- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
@@ -13,6 +13,7 @@ CREATE TABLE `user_info` (
   `open_id` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '飞书应用内用户标识',
   `union_id` VARCHAR(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '飞书同一应用开发商下的用户标识',
   `name` VARCHAR(64) NOT NULL COMMENT '用户姓名',
+  `avatar_url` VARCHAR(2048) DEFAULT NULL COMMENT '飞书头像 HTTPS 地址，登录时同步',
   `department` VARCHAR(128) DEFAULT NULL COMMENT '所属部门',
   `role_type` VARCHAR(32) NOT NULL DEFAULT 'APPLICANT' COMMENT 'APPLICANT-申请人，ADMIN-管理员',
   `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '0-未删除，1-已删除',
@@ -85,7 +86,7 @@ CREATE TABLE `color_dict` (
 
 CREATE TABLE `goods` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '标准商品主键',
-  `sku_id` VARCHAR(64) NOT NULL COMMENT '公司内稳定的本地标准 SKU 编号',
+  `sku_id` VARCHAR(19) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '对应源商品的原始 SKU ID，无来源时为空',
   `product_no` VARCHAR(128) DEFAULT NULL COMMENT '货品编号，对应来源 goodsNo，可重复',
   `brand_id` BIGINT NOT NULL COMMENT '与机型一致的品牌',
   `series_id` BIGINT NOT NULL COMMENT '与机型一致的系列',
@@ -101,14 +102,15 @@ CREATE TABLE `goods` (
   UNIQUE KEY `uk_goods_brand_binding` (`id`, `brand_id`),
   UNIQUE KEY `uk_goods_policy_binding` (`id`, `spu_id`, `ram`, `rom`),
   UNIQUE KEY `uk_goods_sku` (`sku_id`),
-  UNIQUE KEY `uk_goods_spu_specs` (`spu_id`, `ram`, `rom`, `color_id`),
+  KEY `idx_goods_spu_specs` (`spu_id`, `ram`, `rom`, `color_id`),
   KEY `idx_goods_spu` (`spu_id`, `brand_id`, `series_id`),
   KEY `idx_goods_color` (`color_id`),
   KEY `idx_goods_catalog` (`brand_id`, `series_id`, `id`),
   KEY `idx_goods_product_no` (`product_no`),
   CONSTRAINT `fk_goods_spu` FOREIGN KEY (`spu_id`, `brand_id`, `series_id`) REFERENCES `spu` (`id`, `brand_id`, `series_id`),
   CONSTRAINT `fk_goods_color` FOREIGN KEY (`color_id`) REFERENCES `color_dict` (`id`),
-  CONSTRAINT `ck_goods_names` CHECK (CHAR_LENGTH(TRIM(`sku_id`)) > 0 AND CHAR_LENGTH(TRIM(`goods_name`)) > 0 AND (`product_no` IS NULL OR CHAR_LENGTH(TRIM(`product_no`)) > 0)),
+  CONSTRAINT `ck_goods_names` CHECK (CHAR_LENGTH(TRIM(`goods_name`)) > 0 AND (`product_no` IS NULL OR CHAR_LENGTH(TRIM(`product_no`)) > 0)),
+  CONSTRAINT `ck_goods_sku_id` CHECK (`sku_id` IS NULL OR REGEXP_LIKE(`sku_id`, '^[1-9][0-9]{0,18}$', 'c')),
   CONSTRAINT `ck_goods_memory` CHECK (
     REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
     AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
@@ -232,6 +234,7 @@ CREATE TABLE `source_goods_item` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '来源或清洗结果的更新时间，由应用在实际变更时写入',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_source_sku` (`sku_id`),
+  UNIQUE KEY `uk_source_goods` (`goods_id`),
   KEY `idx_source_brand_binding` (`catalog_brand_id`, `brand_name`),
   KEY `idx_source_goods` (`goods_id`, `catalog_brand_id`),
   KEY `idx_source_first_job` (`first_seen_job_id`, `source_key`, `brand_name`),
@@ -321,7 +324,6 @@ CREATE TABLE `policy_apply` (
   `start_time` DATETIME DEFAULT NULL COMMENT '政策开始时间，北京时间',
   `end_time` DATETIME DEFAULT NULL COMMENT '政策结束时间，北京时间',
   `remark` TEXT COMMENT '特别备注',
-  `other_desc` TEXT COMMENT '其他说明',
   `goods_form_json` JSON DEFAULT NULL COMMENT '供草稿回填的商品卡、选品、平台联动和补贴方案',
   `attachment_urls` JSON DEFAULT NULL COMMENT '附件文件 ID 和外部链接的结构化列表',
   `status` VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT-草稿，PENDING-待审核，APPROVED-已通过，REJECTED-已驳回',

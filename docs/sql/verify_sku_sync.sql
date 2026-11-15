@@ -13,7 +13,7 @@ WHERE TABLE_SCHEMA = DATABASE()
   )
 ORDER BY TABLE_NAME;
 
--- 旧目录应无结果。新商品唯一键预期为 spu_id、ram、rom、color_id。
+-- 旧目录应无结果。规格组合只建普通索引，允许不同原始 SKU 有相同配置和颜色。
 SELECT TABLE_NAME
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('catalog_variant', 'catalog_variant_color');
@@ -21,7 +21,7 @@ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('catalog_variant', 'catalog_v
 SELECT SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE
 FROM information_schema.STATISTICS
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'goods' AND INDEX_NAME = 'uk_goods_spu_specs'
+  AND TABLE_NAME = 'goods' AND INDEX_NAME = 'idx_goods_spu_specs'
 ORDER BY SEQ_IN_INDEX;
 
 -- 公司商品相关表和政策明细的租户列检查预期无结果。
@@ -126,3 +126,44 @@ SELECT id, brand_name, sync_mode, sync_date, sync_phase, status, read_count, con
 FROM goods_sync_job
 ORDER BY id DESC
 LIMIT 20;
+
+-- 原始 SKU 契约：sku_id 是可空 VARCHAR(19) ASCII，非空值唯一，来源 goods_id 也唯一。
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, CHARACTER_SET_NAME, COLLATION_NAME
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'goods' AND COLUMN_NAME = 'sku_id';
+
+SELECT TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND ((TABLE_NAME = 'goods' AND INDEX_NAME IN ('uk_goods_sku', 'uk_goods_spu_specs'))
+    OR (TABLE_NAME = 'source_goods_item' AND INDEX_NAME = 'uk_source_goods'))
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
+-- uk_goods_sku / uk_source_goods 各一行、NON_UNIQUE=0；旧 uk_goods_spu_specs 不应存在。
+
+-- 下列四项预期无结果。检查一对一、原始 SKU 相同、格式及无来源商品不伪造 SKU。
+SELECT goods_id, COUNT(*) AS sources FROM source_goods_item
+WHERE goods_id IS NOT NULL GROUP BY goods_id HAVING COUNT(*) > 1;
+
+SELECT s.id, s.sku_id AS source_sku, g.id AS goods_id, g.sku_id AS goods_sku
+FROM source_goods_item s JOIN goods g ON g.id = s.goods_id
+WHERE NOT (s.sku_id <=> g.sku_id);
+
+SELECT id, sku_id FROM goods
+WHERE sku_id IS NOT NULL AND sku_id NOT REGEXP '^[1-9][0-9]{0,18}$';
+
+SELECT g.id, g.sku_id FROM goods g
+WHERE g.sku_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM source_goods_item s WHERE s.goods_id = g.id AND s.sku_id = g.sku_id
+);
+
+EXPLAIN SELECT id FROM goods WHERE sku_id = '123' FOR UPDATE;
+EXPLAIN SELECT sku_id FROM source_goods_item WHERE goods_id = 1;
+-- 预期分别使用 uk_goods_sku、uk_source_goods（空库可能被优化为常量或空结果）。
+
+-- 并发验证由用户在隔离测试库的两个 Navicat 连接分段执行；替换为实际已映射来源 ID。
+-- 连接 A：START TRANSACTION;
+-- SELECT id, goods_id FROM source_goods_item WHERE id = <实际来源ID> FOR UPDATE;
+-- 连接 B：START TRANSACTION;
+-- SELECT id, goods_id FROM source_goods_item WHERE id = <同一来源ID> FOR UPDATE;
+-- 预期 B 等待 A。A 执行 ROLLBACK 后 B 才取得行锁，随后 B 也执行 ROLLBACK。
+-- API 另核对两次处理同一 SKU 后 goods 仍只有一条；不同 SKU 同规格处理后分别生成商品。

@@ -2,6 +2,8 @@ package com.company.policy.service.impl;
 
 import com.company.policy.common.config.AttachmentProperties;
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.PolicyDraftRequest.Link;
+import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.AttachmentService;
 import com.company.policy.vo.AttachmentResponse;
@@ -13,7 +15,9 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -22,6 +26,8 @@ import org.springframework.core.io.InputStreamResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -49,13 +55,19 @@ public class AttachmentServiceImpl implements AttachmentService {
     private final ObjectMapper json;
     private final Clock clock;
     private final UserInfoMapper users;
+    private final PolicyApplyMapper policies;
 
     public AttachmentServiceImpl(
-            AttachmentProperties properties, ObjectMapper json, Clock clock, UserInfoMapper users) {
+            AttachmentProperties properties,
+            ObjectMapper json,
+            Clock clock,
+            UserInfoMapper users,
+            PolicyApplyMapper policies) {
         this.root = properties.rootPath().resolve("attachments");
         this.json = json;
         this.clock = clock;
         this.users = users;
+        this.policies = policies;
     }
 
     @Override
@@ -122,6 +134,42 @@ public class AttachmentServiceImpl implements AttachmentService {
     @Override
     public Download download(String id, CurrentUserResponse user) {
         var saved = authorized(id, user);
+        return content(id, saved);
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public List<Link> bind(List<Link> attachments, CurrentUserResponse user) {
+        var result = new ArrayList<Link>();
+        if (attachments.stream().anyMatch(item -> "FILE".equals(item.type()))) {
+            lockOwner(user);
+        }
+        for (var item : attachments) {
+            if ("FILE".equals(item.type())) {
+                var saved = authorized(item.id(), user);
+                if (!Files.isRegularFile(
+                        root.resolve(item.id()).resolve("content"), LinkOption.NOFOLLOW_LINKS)) {
+                    throw notFound();
+                }
+                result.add(new Link("FILE", null, item.id(), saved.attachment().originalName()));
+            } else {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public Download downloadForPolicy(String id, CurrentUserResponse user) {
+        verifyUser(user);
+        var saved = stored(id);
+        if (!user.tenantKey().equals(saved.tenantKey())) {
+            throw notFound();
+        }
+        return content(id, saved);
+    }
+
+    private Download content(String id, StoredAttachment saved) {
         try {
             Path content = root.resolve(id).resolve("content");
             if (!Files.isRegularFile(content, LinkOption.NOFOLLOW_LINKS)) {
@@ -135,20 +183,51 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     @Override
-    public synchronized void delete(String id, CurrentUserResponse user) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void delete(String id, CurrentUserResponse user) {
+        lockOwner(user);
         authorized(id, user);
         Path directory = root.resolve(id);
         try {
+            var file = Map.of("type", "FILE", "id", id);
+            if (policies.attachmentReferenced(
+                    json.writeValueAsString(file),
+                    json.writeValueAsString(
+                            Map.of("form", Map.of("attachmentInfo", List.of(file)))))) {
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        "ATTACHMENT_REFERENCED",
+                        "该文件已被政策引用，请从草稿移除后保存；历史附件将继续保留。");
+            }
             Files.deleteIfExists(directory.resolve("content"));
             Files.delete(directory.resolve("metadata.json"));
             Files.delete(directory);
-        } catch (IOException error) {
+        } catch (IOException | DataAccessException error) {
+            throw storageError();
+        }
+    }
+
+    private void lockOwner(CurrentUserResponse user) {
+        verifyUser(user);
+        try {
+            if (users.lockAttachmentOwner(user.tenantKey(), Long.parseLong(user.id())) == null) {
+                throw notFound();
+            }
+        } catch (DataAccessException error) {
             throw storageError();
         }
     }
 
     private StoredAttachment authorized(String id, CurrentUserResponse user) {
         verifyUser(user);
+        var saved = stored(id);
+        if (!user.id().equals(saved.ownerId()) || !user.tenantKey().equals(saved.tenantKey())) {
+            throw notFound();
+        }
+        return saved;
+    }
+
+    private StoredAttachment stored(String id) {
         if (id == null
                 || !id.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) {
             throw notFound();
@@ -164,9 +243,6 @@ public class AttachmentServiceImpl implements AttachmentService {
                 throw storageError();
             }
             var saved = json.readValue(metadata.toFile(), StoredAttachment.class);
-            if (!user.id().equals(saved.ownerId()) || !user.tenantKey().equals(saved.tenantKey())) {
-                throw notFound();
-            }
             if (saved.attachment() == null || !id.equals(saved.attachment().id())) {
                 throw storageError();
             }

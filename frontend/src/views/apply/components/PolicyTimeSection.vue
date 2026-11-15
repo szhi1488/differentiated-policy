@@ -13,7 +13,7 @@ const policyTime = computed(() =>
       二、政策时间与详情
     </h2>
     <div class="two-columns">
-      <el-form-item label="开始结束时间（北京时间）" required>
+      <el-form-item label="开始时间与到期时间（北京时间）" required>
         <el-date-picker
           :model-value="policyTime"
           @update:model-value="$emit('update-time', $event)"
@@ -22,9 +22,9 @@ const policyTime = computed(() =>
           value-format="YYYY-MM-DDTHH:mm:ss"
           range-separator="至"
           start-placeholder="开始时间"
-          end-placeholder="结束时间"
+          end-placeholder="到期时间"
           start-label="政策开始时间"
-          end-label="政策结束时间"
+          end-label="政策到期时间"
           popper-class="policy-date-popper"
         />
       </el-form-item>

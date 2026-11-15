@@ -16,6 +16,8 @@ public interface PolicyApplyService {
 
     PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request);
 
+    void deleteDraft(CurrentUserResponse session, long id, Integer recordVersion);
+
     PolicyResponse submit(CurrentUserResponse session, long id, Integer recordVersion);
 
     Detail detail(CurrentUserResponse session, long id);

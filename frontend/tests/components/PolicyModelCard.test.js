@@ -49,11 +49,12 @@ it('同型号的配置显示在同一行，多个型号和品牌分别显示', a
   const samples = catalogCenterSamples.filter(({ model }) =>
     ['Find X8', 'Reno12', 'Ace 3 Pro'].includes(model),
   )
+  const differentColor = { ...samples.at(-1), id: 'another-color', color: '另一种颜色' }
   const wrapper = mount(PolicyModelCard, {
     props: {
       model: {
         ...createPolicyModel(),
-        goods: samples.map((item) => ({ ...item, key: policyGoodsKey(item) })),
+        goods: [...samples, differentColor].map((item) => ({ ...item, key: policyGoodsKey(item) })),
       },
       platforms: [],
     },
@@ -66,8 +67,12 @@ it('同型号的配置显示在同一行，多个型号和品牌分别显示', a
     'OPPO / Find 系列 / Find X8',
   ])
   expect(rows[2].findAll('.policy-model-configs .el-tag').map((tag) => tag.text())).toEqual([
-    '16GB+512GB · 浮光白',
-    `12GB+256GB · ${samples.at(-1).color}`,
+    '16GB+512GB',
+    '12GB+256GB',
   ])
+  const configurations = rows[2].get('.policy-model-configs')
+  expect(rows[2].element.lastElementChild).toBe(rows[2].get('.policy-model-edit').element)
+  await configurations.findAll('.el-tag__close')[1].trigger('click')
+  expect(wrapper.emitted('remove-goods')).toEqual([[[samples.at(-1).id, differentColor.id]]])
   wrapper.unmount()
 })

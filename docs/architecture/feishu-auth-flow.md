@@ -65,7 +65,9 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 1. `POST /api/auth/feishu/login` 提交 `{ "code": "授权码", "state": "本次随机值" }`。
 2. 服务端一次性消费 state，经 `https://accounts.feishu.cn/oauth/v3/token` 交换用户 token，再请求 `https://open.feishu.cn/open-apis/authen/v1/user_info`。
-3. 各登录入口先校验飞书返回的租户与 `FEISHU_TENANT_KEY` 一致，再保存用户并建立会话。旧环境的 `JACKYUN_TENANT_KEY` 仍可作为回退配置。现有身份记录以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id`，保留角色、部门、停用标记，不从姓名推断部门。
+3. 各登录入口先校验飞书返回的租户与 `FEISHU_TENANT_KEY` 一致，再保存用户并建立会话。旧环境的 `JACKYUN_TENANT_KEY` 仍可作为回退配置。现有身份记录以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id` 和有效 HTTPS `avatar_url`，保留角色、部门、停用标记，不从姓名推断部门。
+
+头像取自[飞书获取登录用户信息接口](https://open.feishu.cn/document/server-docs/authentication-management/login-state-management/get)，仅保存不超过 2048 字符的 HTTPS 地址，不代理下载图片，不保存用户 token。缺失、空值或无效地址保留原头像，新用户为空；停用用户保持原资料并拒绝登录。登录及 `GET /api/auth/session` 返回 `user.avatarUrl`，恢复会话沿用登录时快照，重新登录才同步最新头像。两端共用顶部栏展示，地址为空或图片加载失败时显示姓名首字。空库重建使用已包含头像字段的最新基线；保留旧库数据时，先由用户按 [avatar_url 增量 SQL](../sql/add_user_avatar_url.sql) 核对和补齐字段。真实飞书头像及目标 MySQL 留待联调。
 4. 停用账号拒绝登录，存储失败不建会话。前端姓名、open_id 或角色不能作为身份依据。
 5. 落库后轮换 Session ID，保存本地用户 ID、角色及核验身份；响应 `{ "user": { ... }, "expiresAt": "..." }`，ID 为字符串，不返回用户 token。
 
@@ -83,6 +85,8 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 | 写请求 | 可信 `Origin` 与 `X-Policy-Request: 1` |
 | 默认保护 | `/api/**` 需登录；公开配置、签名、challenge、客户端登录、浏览器授权链接/登录交换、退出按精确路径放行 |
 
+附件下载由当前页面使用同源会话读取字节后触发保存。飞书内点击文件名使用 `AttachmentDownload.vue`，防止下载跳转到缺少该客户端会话的外部浏览器。读取返回 401 时沿用登录失效流程。实现与验证范围见[附件接口](../api/attachment-api.md)。
+
 响应禁止缓存；HTTPS 设置 `SESSION_COOKIE_SECURE=true` 并同源代理 `/api`。重启清空会话，多实例需共享；当前未订阅飞书撤销授权事件，已有应用会话不会即时同步失效。页面无退出按钮，API 保留。
 
 ## 飞书后台与配置
@@ -96,13 +100,17 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 ## 常见错误
 
-`2700002` 是授权过程失败的通用外层码，结合内层数字码定位，不能直接判断用户拒绝。`333447/333448` 检查 H5 可信域名；授权失败先核对重定向 URL、可用范围及企业身份。只展示数值码，不输出 SDK 原始消息、票据或签名。
+`2601002` 是 JS-SDK 鉴权失败的通用外层码，`2700002` 是授权过程失败的通用外层码，均须结合内层数字码定位，不能直接判断具体原因或用户拒绝。页面从数字错误字段或限定格式的错误消息中提取内层码，优先给出该内层码对应的提示。`333447/333448` 检查 H5 可信域名；授权失败先核对重定向 URL、可用范围及企业身份。只展示数值码，不输出 SDK 原始消息、票据或签名。
 
 若飞书扫码框返回 `4401`，核对是否使用上文的 Passport 扫码入口，以及飞书后台登记的重定向 URL 是否与当前首页地址完全一致。
+
+局域网使用 HTTP 地址时，`SESSION_COOKIE_SECURE` 应设为 `false`；HTTPS 地址设为 `true`。若 HTTP 局域网响应仍给会话 Cookie 加 `Secure`，客户端无法正常带回 Cookie，`challenge` 与登录交换不能保持同一会话，可能出现「登录请求已失效」。修改后重启后端，再关闭旧页面并重新发起登录；不要删除 state 或 Cookie 绑定校验来绕过错误。
 
 本地错误 `{ "code": "稳定错误码", "message": "中文提示" }`。HTTP：400 参数/签名来源错误，401 state/code/会话失效，403 请求来源或停用账号，502 上游异常，503 缺配置或用户存储不可用。
 
 ## 验证记录
+
+2026-11-15 局域网鉴权排查：本机和局域网 Origin 的签名接口均返回 HTTP 200，仅代表服务端成功生成签名，不代表客户端已通过鉴权。补充 `2601002` 内层数字码提取与对应提示，保留错误原文脱敏。前端 `npm.cmd run check` 通过 ESLint、Prettier、20 个文件的 88 项测试和生产构建。本轮未完成真实飞书客户端重新鉴权，截图中的实际失败原因仍须结合重试后的内层码、当前页面地址及飞书后台配置核对。
 
 | 场景 | 已有结果 | 待联调 |
 | --- | --- | --- |

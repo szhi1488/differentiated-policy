@@ -1,10 +1,17 @@
 <script setup>
+import { watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
 import { usePolicyGoodsPicker } from '../../../composables/usePolicyGoodsPicker'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 
 const props = defineProps({
   special: { type: Boolean, default: false },
+  editing: { type: Boolean, default: false },
+  initialGoods: { type: Array, default: () => [] },
+  existingGoods: { type: Array, default: () => [] },
   addedKeys: { type: Array, default: () => [] },
+  blockedConfigurations: { type: Set, default: () => new Set() },
 })
 const emit = defineEmits(['close', 'confirm'])
 const {
@@ -27,7 +34,9 @@ const {
   listError,
   selectionError,
   added,
+  isBlocked,
   selected,
+  removed,
   changeBrand,
   changeSeries,
   changeModel,
@@ -39,15 +48,30 @@ const {
   selectConfigurations,
   pageSize,
 } = usePolicyGoodsPicker(props)
+
+watch([optionsError, listError, selectionError], (errors, previous) => {
+  errors.forEach((message, index) => {
+    if (message && message !== previous[index]) {
+      ElMessage({ message, type: 'error', showClose: true })
+    }
+  })
+})
+
+function checked(item) {
+  return (
+    selected.value.has(item.id) ||
+    (props.editing && added.value.has(item.id) && !removed.value.has(item.id))
+  )
+}
 </script>
 
 <template>
   <el-drawer
     :model-value="true"
     append-to-body
-    size="min(790px, 100vw)"
+    size="min(790px, 100%)"
     class="policy-goods-picker"
-    :title="special ? '指定适用机型' : '选择手机型号'"
+    :title="editing ? '编辑适用配置' : special ? '指定适用机型' : '选择手机型号'"
     @close="$emit('close')"
   >
     <div class="policy-picker-filters">
@@ -111,8 +135,7 @@ const {
       </el-select>
     </div>
 
-    <div v-if="optionsError" class="policy-picker-error" role="alert">
-      {{ optionsError }}
+    <div v-if="optionsError" class="policy-picker-retry">
       <el-button link type="primary" @click="loadOptions">重试筛选项</el-button>
     </div>
     <div class="policy-picker-summary">
@@ -133,8 +156,7 @@ const {
       </el-input>
     </div>
 
-    <div v-if="listError" class="policy-picker-error" role="alert">
-      {{ listError }}
+    <div v-if="listError" class="policy-picker-retry">
       <el-button link type="primary" @click="loadPage">重试查询</el-button>
     </div>
     <div v-else-if="rows.length" class="policy-picker-list" role="group" aria-label="在售商品列表">
@@ -142,7 +164,7 @@ const {
         v-for="item in rows"
         :key="item.id"
         class="policy-picker-row"
-        :class="{ 'is-selected': selected.has(item.id) }"
+        :class="{ 'is-selected': checked(item) }"
       >
         <el-radio
           v-if="special"
@@ -155,8 +177,8 @@ const {
         </el-radio>
         <el-checkbox
           v-else
-          :model-value="selected.has(item.id)"
-          :disabled="selecting || added.has(item.id)"
+          :model-value="checked(item)"
+          :disabled="selecting || (!added.has(item.id) && isBlocked(item))"
           @update:model-value="toggle(item, $event)"
         >
           <strong>{{ item.brand }} / {{ item.series }} / {{ item.model }}</strong>
@@ -166,7 +188,10 @@ const {
             [item.version, catalogConfigLabel(item.config), item.color].filter(Boolean).join(' · ')
           }}
         </span>
-        <el-tag v-if="added.has(item.id)" size="small" type="info">已加入</el-tag>
+        <el-tag v-if="added.has(item.id)" size="small" type="info">
+          {{ removed.has(item.id) ? '待移除' : '已加入' }}
+        </el-tag>
+        <el-tag v-else-if="isBlocked(item)" size="small" type="info">已在其他卡片</el-tag>
       </div>
     </div>
     <el-empty v-else-if="!listBusy" :image-size="60" description="没有符合条件的在售商品" />
@@ -183,21 +208,26 @@ const {
     />
 
     <template #footer>
-      <div v-if="selectionError" class="policy-picker-error" role="alert">
-        {{ selectionError }}
+      <div v-if="selectionError" class="policy-picker-retry">
         <el-button link type="primary" @click="selectConfigurations">重试勾选配置</el-button>
       </div>
       <div class="policy-picker-footer">
         <span aria-live="polite">
-          {{ selecting ? '正在勾选配置内的在售商品…' : `已选 ${selected.size} 件` }}
+          {{
+            selecting
+              ? '正在勾选配置内的在售商品…'
+              : editing
+                ? `新增 ${selected.size} 件，移除 ${removed.size} 件`
+                : `已选 ${selected.size} 件`
+          }}
         </span>
         <el-button @click="$emit('close')">取消</el-button>
         <el-button
           type="primary"
-          :disabled="selecting || !!selectionError || !selected.size"
-          @click="emit('confirm', [...selected.values()])"
+          :disabled="selecting || !!selectionError || (!selected.size && !removed.size)"
+          @click="emit('confirm', [...selected.values()], [...removed])"
         >
-          加入政策
+          {{ editing ? '保存配置' : '加入政策' }}
         </el-button>
       </div>
     </template>
