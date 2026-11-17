@@ -178,6 +178,8 @@ Vue 文件用 PascalCase，composable 用 `useXxx`，动作以业务动词命名
 | 页面标题横幅 | `assets/workspace-page-banner.png` | `assets/styles/brand.css` 的 `.workspace-page-banner` 共用波浪背景；当前定位 `center 51%`、尺寸 `108% 280%`，裁去原图透明留白、圆角及阴影，边框与圆角由容器绘制，避免左右出现第二层内缩边缘 |
 | 主内容区 | `assets/workspace-content-background.png` | 两角色布局在顶部导航下共用 `.workspace-content-background`；使用 `center bottom / cover no-repeat` 按比例铺满，纵向弹性布局让短页填满剩余屏幕、长页随内容延伸；白色内容卡片保留自身背景 |
 
+申请人的「提交政策」和「我的提交」不显示工作台页脚；「我的提交」保留列表总条数和分页。2026-11-17 已在模拟申请人会话下，以 1440×1000、768×1000、390×844 验证两个页面直达及菜单往返。
+
 页面标题统一由 `components/WorkspacePageHeading.vue` 输出图标和 `h1`，不再显示标题下的说明小字。`layouts/components/PolicyBanner.vue` 复用该组件，供两角色政策页面使用。图标统一选用现有 `AppIcon.vue` 的 SVG 线性风格：26px 白色图形、1.65 线宽，放在 48px 蓝色渐变底座中，底座圆角 12px。源商品库和政策使用 `document`，清洗使用 `sync`，商品中心使用 `box`，机型补贴查询使用 `history`。页面操作按钮和静态预览标识按各页实际功能保留。
 
 | 项目 | 当前尺寸与响应式规则 |

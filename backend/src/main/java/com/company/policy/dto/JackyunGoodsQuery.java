@@ -1,6 +1,7 @@
 package com.company.policy.dto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /** 查询一个品牌的一页货品，游标从 0 开始。 */
 public record JackyunGoodsQuery(
@@ -10,6 +11,8 @@ public record JackyunGoodsQuery(
         boolean includeBlockup,
         Phase phase,
         LocalDate date) {
+
+    public static final List<String> SUPPORTED_BRANDS = List.of("OPPO手机", "一加手机");
 
     public JackyunGoodsQuery(
             String brandName, int pageSize, String lastMaxId, boolean includeBlockup) {
@@ -35,7 +38,7 @@ public record JackyunGoodsQuery(
         if (phase == null || (phase == Phase.FULL) != (date == null)) {
             throw new IllegalArgumentException("查询阶段与导入日期不匹配");
         }
-        if (!"一加手机".equals(brandName) && !"OPPO手机".equals(brandName)) {
+        if (brandName == null || !SUPPORTED_BRANDS.contains(brandName)) {
             throw new IllegalArgumentException("只支持查询一加手机和OPPO手机");
         }
         if (pageSize < 1 || pageSize > 50) {

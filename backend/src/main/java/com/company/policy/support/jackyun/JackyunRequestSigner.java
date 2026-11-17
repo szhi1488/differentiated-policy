@@ -1,7 +1,7 @@
 /*
  * Copyright(C) 2017 Hangzhou Differsoft Co., Ltd. All rights reserved.
  */
-package com.company.policy.service.impl;
+package com.company.policy.support.jackyun;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -11,10 +11,10 @@ import java.util.Locale;
 import java.util.SortedMap;
 
 /** 吉客云开放平台签名，依据官方 Java 示例。 */
-final class JackyunRequestSigner {
+public final class JackyunRequestSigner {
     private JackyunRequestSigner() {}
 
-    static String sign(SortedMap<String, String> parameters, String secret) {
+    public static String sign(SortedMap<String, String> parameters, String secret) {
         // 原始 bizcontent 参与签名，签名完成后再做表单编码。
         StringBuilder material = new StringBuilder(secret);
         parameters.forEach((key, value) -> material.append(key).append(value));

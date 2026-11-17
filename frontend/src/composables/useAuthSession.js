@@ -1,4 +1,6 @@
 import { computed, readonly, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
 import { getFeishuConfig, getLoginSession, logout as logoutApi } from '../api/feishu'
 import { setUnauthorizedHandler } from '../api/request'
 import { completeBrowserLogin, startBrowserLogin } from '../utils/feishu-browser-auth'
@@ -35,11 +37,14 @@ export function createAuthSession() {
       return pending
     }
     const current = ++generation
-    status.value = 'loading'
-    message.value = '正在通过飞书验证身份…'
+    if (!login.value) {
+      status.value = 'loading'
+      message.value = '正在通过飞书验证身份…'
+    }
     const task = (async () => {
       try {
-        const restored = (await completeBrowserLogin()) || (await getLoginSession())
+        const restored =
+          (!login.value && (await completeBrowserLogin())) || (await getLoginSession())
         if (current !== generation) {
           return
         }
@@ -47,6 +52,9 @@ export function createAuthSession() {
           setLogin(restored)
           return
         }
+        // 会话探测已确认过期，立即卸载旧工作台，再进入原有授权流程。
+        setLogin(null)
+        status.value = 'loading'
         const config = await getFeishuConfig()
         if (current !== generation) {
           return
@@ -71,6 +79,11 @@ export function createAuthSession() {
         }
       } catch (error) {
         if (current !== generation) {
+          return
+        }
+        if (login.value && error.status !== 403 && error.status !== 401) {
+          // 返回前台遇到临时故障时保留正在编辑的表单；业务请求仍由服务端逐次授权。
+          ElMessage.warning(error.message || '暂时无法核对账号角色，请稍后重试。')
           return
         }
         setLogin(null)

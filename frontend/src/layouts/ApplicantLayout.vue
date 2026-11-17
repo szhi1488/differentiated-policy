@@ -99,7 +99,6 @@ onScopeDispose(state.clear)
         <main class="workspace-main">
           <PolicyBanner />
           <router-view />
-          <p class="workspace-caption">差异化政策管理 · 申请人工作台</p>
         </main>
       </div>
     </div>

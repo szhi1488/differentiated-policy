@@ -14,14 +14,6 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface PolicyApplyMapper {
-    // 已删除申请和历轮快照仍保留附件引用，物理删除必须同时排除两类引用。
-    @Select(
-            """
-        SELECT EXISTS(SELECT 1 FROM policy_apply WHERE JSON_CONTAINS(attachment_urls, #{file}))
-            OR EXISTS(SELECT 1 FROM policy_audit_log WHERE JSON_CONTAINS(snapshot_data, #{snapshot}))
-        """)
-    boolean attachmentReferenced(String file, String snapshot);
-
     String COLUMNS =
             """
         id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,

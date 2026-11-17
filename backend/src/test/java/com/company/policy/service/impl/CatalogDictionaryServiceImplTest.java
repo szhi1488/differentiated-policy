@@ -11,6 +11,7 @@ import com.company.policy.dto.CatalogDictionaryRequest.Rename;
 import com.company.policy.dto.CatalogDictionaryRequest.Type;
 import com.company.policy.mapper.CatalogDictionaryMapper;
 import com.company.policy.mapper.CatalogGoodsMapper;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.vo.CurrentUserResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;

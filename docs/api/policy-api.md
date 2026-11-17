@@ -4,7 +4,7 @@
 
 申请页已接入在售目录。「选择手机型号」每次确认新建一张普通卡，普通卡可通过「编辑」追加配置。「指定适用机型」每次选一个具体商品并单独成卡，数量按平台选填。政策接口按已确认三表设计。[动态表单与实单](../business/perspective-rules.md)
 
-更新日期：2026-11-15。已实现草稿创建、继续保存、提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
+更新日期：2026-11-17。已实现草稿创建、继续保存、提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
 
 ## 公共约定
 
@@ -148,6 +148,14 @@
 申请详情及继续编辑页在状态为 `REJECTED` 时，通过 `audit-logs?page=1&pageSize=1` 读取最新审核记录，核对 `submissionVersion` 与当前申请一致且日志为 `REJECTED`，在页面顶部显示驳回原因、审核人及时间。`auditComment` 为空或只有空白时显示「审核人未填写驳回原因」；请求失败和轮次不一致分别提示并允许重试，不显示旧轮次原因。接口及数据结构不变，继续沿用本人归属和有效会话校验。
 
 单轮详情按列表返回的日志 `id` 查询，响应为 `{ "log": { ... }, "snapshot": { ... } }`。`snapshot` 包含原提交轮次的申请 ID、单号、申请人、完整表单与商品名称快照。每次读取先校验父申请的租户、申请人和删除状态，再按该申请匹配日志。草稿及驳回的编辑入口读取当前表单，历轮快照始终取自提交时保存的内容。
+
+### 提交快照的存储与兼容
+
+一次快照记录某份政策某一轮正式提交时的完整内容。`PolicySnapshotData` 是 Java 的 `record`（记录类），每次提交都有各自的字段值。固定金额、比例这样的有限选项才适合用枚举（`enum`）表达。快照使用现有审核日志的一个 JSON 字段，无需单独建表。[快照模型](../../backend/src/main/java/com/company/policy/entity/PolicySnapshotData.java)
+
+1. **提交。** 服务端校验已保存的表单和在售商品，取得该时点的商品名称、规格和颜色。`PolicySnapshotCodec` 将表单、补贴、附件引用和商品显式转换为快照模型，再序列化为 JSON。提交事务将 JSON 写入 MySQL 的 `policy_audit_log.snapshot_data`，同时更新申请状态并写入本轮商品明细。[快照编解码](../../backend/src/main/java/com/company/policy/support/policy/PolicySnapshotCodec.java)
+2. **回读。** 本人已提交详情、管理员审核详情、历轮记录和补贴对照读取所需轮次的快照。旧单号在展示时格式化，已移除的 `otherExplanation` 在响应中省略，数据库中的原文保留。新旧记录使用相同的 `form.goodsForm`、`form.attachmentInfo` 和 `goods` 路径，金额与比例保留十进制字符串，数量区分 0 和未填写。[旧格式回归样本](../../backend/src/test/java/com/company/policy/support/policy/PolicySnapshotCodecTest.java)
+3. **重启和迁移。** 后端重启或更换 JAR 后，连接原 MySQL 数据库即可继续读取历轮政策。快照中的文件 ID 和文件名用于定位附件，原文件及元数据保存在附件目录，迁移时须一并保留。[附件存储和配置](attachment-api.md#存储和配置)
 
 ## 错误与实现要求
 

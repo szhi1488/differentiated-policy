@@ -1,6 +1,6 @@
-package com.company.policy.service.impl;
+package com.company.policy.support.catalog;
 
-import static com.company.policy.service.impl.CatalogText.normalize;
+import static com.company.policy.support.catalog.CatalogText.normalize;
 
 import com.company.policy.dto.CatalogCleaningRequest.Target;
 import com.company.policy.entity.SourceGoodsItem;
@@ -14,8 +14,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-final class CatalogCleaningRule {
-    static final String EXCLUSION = "RULE_EXCLUSION";
+public final class CatalogCleaningRule {
+    public static final String EXCLUSION = "RULE_EXCLUSION";
     private static final Pattern SKU =
             Pattern.compile(
                     "([1-9][0-9]?)\\s*(?:GB?)?\\s*\\+\\s*([1-9][0-9]{0,7})\\s*(TB?|GB?)?",
@@ -45,7 +45,7 @@ final class CatalogCleaningRule {
 
     private CatalogCleaningRule() {}
 
-    static Candidate parse(SourceGoodsItem source) {
+    public static Candidate parse(SourceGoodsItem source) {
         String brand = source.getBrandName();
         String rawName = normalize(source.getGoodsName());
         String rawSku = normalize(source.getSkuName());
@@ -303,7 +303,7 @@ final class CatalogCleaningRule {
         return SPECIAL.matcher(text).replaceAll("").strip();
     }
 
-    static Candidate manual(Target target, Candidate original) {
+    public static Candidate manual(Target target, Candidate original) {
         String spec = normalize(target.spec());
         String edition = original.edition();
         if (edition != null && spec.endsWith(edition)) {
@@ -326,7 +326,8 @@ final class CatalogCleaningRule {
                 original.evidence());
     }
 
-    static Candidate issue(Candidate candidate, String code, String explanation, String action) {
+    public static Candidate issue(
+            Candidate candidate, String code, String explanation, String action) {
         return new Candidate(
                 candidate.seriesName(),
                 candidate.modelName(),
@@ -432,7 +433,7 @@ final class CatalogCleaningRule {
                 : text.replaceFirst("(?i)^ONEPLUS\\s*", "一加 ");
     }
 
-    static Memory memory(String value) {
+    public static Memory memory(String value) {
         Matcher match = SKU.matcher(value);
         if (!match.matches()) {
             return null;
@@ -445,7 +446,7 @@ final class CatalogCleaningRule {
         return storage > 99_999_999 ? null : new Memory(match.group(1) + "GB", storage + "GB");
     }
 
-    record Memory(String ram, String rom) {}
+    public record Memory(String ram, String rom) {}
 
     private static boolean sameMemory(String left, String right) {
         Memory memory = memory(left);

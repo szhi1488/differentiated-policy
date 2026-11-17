@@ -1,5 +1,6 @@
 package com.company.policy.service.impl;
 
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserInfoMapper;
@@ -14,9 +15,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class UserInfoServiceImpl implements UserInfoService {
     private final UserInfoMapper mapper;
+    private final FeishuProperties config;
 
-    public UserInfoServiceImpl(UserInfoMapper mapper) {
+    public UserInfoServiceImpl(UserInfoMapper mapper, FeishuProperties config) {
         this.mapper = mapper;
+        this.config = config;
     }
 
     @Transactional
@@ -41,9 +44,7 @@ public class UserInfoServiceImpl implements UserInfoService {
             if (saved == null) {
                 throw databaseUnavailable();
             }
-            if (!Integer.valueOf(0).equals(saved.getIsDeleted())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "USER_DISABLED", "当前账号已停用，请联系管理员。");
-            }
+            requireEnabled(saved);
             return new CurrentUserResponse(
                     saved.getId().toString(),
                     saved.getOpenId(),
@@ -53,6 +54,43 @@ public class UserInfoServiceImpl implements UserInfoService {
                     saved.getAvatarUrl());
         } catch (DataAccessException ignored) {
             throw databaseUnavailable();
+        }
+    }
+
+    @Override
+    public CurrentUserResponse restoreSessionUser(CurrentUserResponse identity) {
+        if (!config.hasCompanyTenant()) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "FEISHU_TENANT_NOT_CONFIGURED", "请先配置公司飞书租户。");
+        }
+        if (!config.getTenantKey().equals(identity.tenantKey())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "FEISHU_TENANT_DENIED", "当前飞书账号不属于本公司。");
+        }
+        UserInfo saved;
+        try {
+            saved = mapper.findIdentity(identity.tenantKey(), identity.openId());
+        } catch (DataAccessException ignored) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "USER_STORAGE_UNAVAILABLE",
+                    "暂时无法核对账号角色，请稍后重试。");
+        }
+        if (saved == null || !identity.id().equals(saved.getId().toString())) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "LOGIN_REQUIRED", "登录身份已变化，请重新通过飞书授权。");
+        }
+        requireEnabled(saved);
+        return new CurrentUserResponse(
+                identity.id(),
+                identity.openId(),
+                identity.tenantKey(),
+                identity.name(),
+                saved.getRoleType(),
+                identity.avatarUrl());
+    }
+
+    private static void requireEnabled(UserInfo saved) {
+        if (!Integer.valueOf(0).equals(saved.getIsDeleted())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "USER_DISABLED", "当前账号已停用，请联系管理员。");
         }
     }
 

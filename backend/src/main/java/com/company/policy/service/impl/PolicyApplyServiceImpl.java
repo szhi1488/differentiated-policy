@@ -1,7 +1,7 @@
 package com.company.policy.service.impl;
 
-import static com.company.policy.service.impl.PolicyFormValidation.entries;
-import static com.company.policy.service.impl.PolicyFormValidation.invalid;
+import static com.company.policy.support.policy.PolicyFormValidation.entries;
+import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
@@ -16,7 +16,10 @@ import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyApplyMapper.DetailLine;
 import com.company.policy.service.AttachmentService;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyApplyService;
+import com.company.policy.support.policy.PolicyFormValidation;
+import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse;
@@ -55,6 +58,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private final PolicyApplyMapper policies;
     private final CatalogGoodsMapper catalog;
     private final ObjectMapper json;
+    private final PolicySnapshotCodec snapshots;
     private final AttachmentService attachments;
 
     PolicyApplyServiceImpl(
@@ -62,11 +66,13 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             PolicyApplyMapper policies,
             CatalogGoodsMapper catalog,
             ObjectMapper json,
+            PolicySnapshotCodec snapshots,
             AttachmentService attachments) {
         this.access = access;
         this.policies = policies;
         this.catalog = catalog;
         this.json = json;
+        this.snapshots = snapshots;
         this.attachments = attachments;
     }
 
@@ -180,7 +186,8 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                         ids.stream().map(goods::get).toList());
         checkUpdated(policies.markSubmitted(entry, now));
         checkUpdated(
-                policies.insertAudit(id, entry.getTenantKey(), version, encode(snapshot), now));
+                policies.insertAudit(
+                        id, entry.getTenantKey(), version, snapshots.write(snapshot), now));
         // 分批写入同一事务，避免单条 SQL 的参数数随商品数和平台数相乘。
         for (int offset = 0; offset < lines.size(); offset += 500) {
             var batch = lines.subList(offset, Math.min(offset + 500, lines.size()));
@@ -207,13 +214,9 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             goods = ids.stream().filter(current::containsKey).map(current::get).toList();
         } else {
             var snapshot =
-                    decode(
+                    snapshots.read(
                             policies.findSnapshot(
-                                    id, entry.getTenantKey(), entry.getCurrentVersion()),
-                            new TypeReference<Snapshot>() {});
-            if (snapshot == null) {
-                throw new IllegalStateException("政策提交快照缺失");
-            }
+                                    id, entry.getTenantKey(), entry.getCurrentVersion()));
             form = snapshot.form();
             goods = snapshot.goods();
         }
@@ -275,8 +278,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");
         }
         return new AuditDetail(
-                auditSummary(log),
-                displaySnapshot(decode(log.getSnapshotData(), new TypeReference<Snapshot>() {})));
+                auditSummary(log), displaySnapshot(snapshots.read(log.getSnapshotData())));
     }
 
     private Summary summary(PolicyApply entry) {

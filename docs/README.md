@@ -6,7 +6,11 @@
 
 ## 当前实现
 
-- 管理员「系统管理 → 用户管理」已接入后端五个接口。查询按姓名／部门、角色和状态分页，全公司统计独立读取。调整角色和启停使用最新详情并校验旧值，成功后同步刷新列表、统计和已打开的详情。页面从当前会话识别本人，业务历史归属保留。[页面规则](architecture/admin-workspace.md#用户管理) · [接口契约](api/user-api.md) · [验证记录](architecture/frontend-development.md#2026-11-17-用户管理页面接入)
+- 2026-11-17 后端结构检查记录了八项问题。第 1、3、4 项已修复，涉及参数格式错误、政策附件下载授权及新旧提交快照读写。该轮 Maven 验证共 189 项，187 项通过、2 项外部环境测试跳过。[检查清单与验证范围](architecture/system-overview.md#2026-11-17-后端结构检查) · [快照存储与兼容](api/policy-api.md#提交快照的存储与兼容) · [附件备份与迁移](api/attachment-api.md#存储和配置)
+
+- 管理员「系统管理 → 用户管理」已接入后端五个接口。查询按姓名／部门、角色和状态分页，全公司统计独立读取。调整角色和启停使用最新详情并校验旧值，成功后同步刷新列表、统计和已打开的详情。页面从当前会话识别本人，业务历史归属保留。[页面规则](architecture/admin-workspace.md#用户管理) · [接口契约](api/user-api.md) · [页面验证记录](architecture/frontend-development.md#2026-11-17-用户管理页面接入)
+
+- 2026-11-17 已修复账号升为管理员后关闭应用再打开仍进入申请人页面的问题。刷新、重开或切回应用时，旧申请地址按最新角色进入源商品库，降为申请人的账号从旧管理地址进入提交政策页。双向切换已在隔离环境验证，真实飞书账号待复测。[复测步骤](architecture/feishu-auth-flow.md#角色调整后重新进入工作台) · [验证记录](architecture/feishu-auth-flow.md#验证记录)
 
 - 2026-11-16 商品中心风格与差异化政策、机型补贴查询对齐，统一蓝色按钮、页签、分类选中态及开关，使用白色卡片、浅色筛选背景和轻边框。按用户要求保留现有排版、区块位置、尺寸、表格列及操作逻辑，销售状态继续使用语义色。该轮前端检查通过 36 个文件的 194 项测试及生产构建，模拟管理员／商品接口下三个尺寸的主要区块位置及尺寸与修改前一致。[页面规则](architecture/admin-workspace.md#商品中心) · [实现与验证](architecture/frontend-development.md#2026-11-16-商品中心风格对齐)
 
@@ -66,8 +70,8 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、Vue/Java 代码写法、API 兼容、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
-| [整体架构](architecture/system-overview.md) | 技术栈、源码进度、十四表设计边界 | 实现与设计分别标注 |
+| [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、[服务接口与注释](architecture/ai-development.md#服务接口与注释)、Vue/Java 代码写法、API 兼容、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
+| [整体架构](architecture/system-overview.md) | 技术栈、[服务层整理记录](architecture/system-overview.md#2026-11-17-服务层整理)、源码进度、十四表设计边界 | 实现与设计分别标注 |
 | [前端架构与开发规范](architecture/frontend-development.md) | 目录职责、数据流、接口适配、会话路由、样式、AI 开发验收与整改清单 | 已接入商品、申请、当前详情及管理员审核，含菜单和筛选排版验证 |
 | [两角色工作台视觉](architecture/frontend-development.md#两角色工作台视觉) | 侧栏、标题横幅、主内容区三套背景，统一尺寸、标题及 SVG 图标 | 两角色共用；标题说明小字、旧清洗图及右侧插画已移除 |
 | [前端工程检查与验收](architecture/frontend-harness.md) | CSS 归属、静态检查、构建产物与本地多角色预览验收 | 本地检查和预览入口已接入 |

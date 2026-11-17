@@ -4,25 +4,24 @@ import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserInfoMapper;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.vo.CurrentUserResponse;
-import java.util.List;
 import java.util.Objects;
 import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-@Component
-class CatalogAccess {
-    static final List<String> BRANDS = List.of("OPPO手机", "一加手机");
-
+@Service
+public class CatalogAccessImpl implements CatalogAccess {
     private final UserInfoMapper users;
     private final FeishuProperties config;
 
-    CatalogAccess(UserInfoMapper users, FeishuProperties config) {
+    public CatalogAccessImpl(UserInfoMapper users, FeishuProperties config) {
         this.users = users;
         this.config = config;
     }
 
-    UserInfo requireApplicant(CurrentUserResponse session) {
+    @Override
+    public UserInfo requireApplicant(CurrentUserResponse session) {
         var user = users.findIdentity(session.tenantKey(), session.openId());
         if (!config.hasCompanyTenant()) {
             throw new ApiException(
@@ -39,15 +38,18 @@ class CatalogAccess {
         return user;
     }
 
-    UserInfo requireAdmin(CurrentUserResponse session) {
+    @Override
+    public UserInfo requireAdmin(CurrentUserResponse session) {
         return requireAdministrator(session, "CATALOG", "商品管理");
     }
 
-    UserInfo requirePolicyAdmin(CurrentUserResponse session) {
+    @Override
+    public UserInfo requirePolicyAdmin(CurrentUserResponse session) {
         return requireAdministrator(session, "POLICY", "政策审核");
     }
 
-    UserInfo requireUserAdmin(CurrentUserResponse session) {
+    @Override
+    public UserInfo requireUserAdmin(CurrentUserResponse session) {
         return requireAdministrator(session, "USER", "用户管理");
     }
 

@@ -15,11 +15,12 @@
 | 任务 | 必读文档 |
 | --- | --- |
 | 系统架构、目录与实现进度 | [整体架构](docs/architecture/system-overview.md) |
+| 后端结构检查、提交快照兼容与附件迁移 | [八项检查与修复记录](docs/architecture/system-overview.md#2026-11-17-后端结构检查)、[快照存储与兼容](docs/api/policy-api.md#提交快照的存储与兼容)、[附件存储和配置](docs/api/attachment-api.md#存储和配置) |
 | 前端开发、代码审核、组件拆分与架构整理 | [前端架构与开发规范](docs/architecture/frontend-development.md)、[前端工程检查与验收](docs/architecture/frontend-harness.md)、[前端开发入口](frontend/README.md) |
 | 两角色顶部栏、统一侧栏与飞书头像 | [顶部栏及头像实现与验证](docs/architecture/frontend-development.md#2026-11-15-共用顶部导航与飞书头像)、[飞书鉴权流程](docs/architecture/feishu-auth-flow.md) |
 | 两角色侧栏、页面横幅、主内容区背景及标题图标 | [工作台统一视觉规则](docs/architecture/frontend-development.md#两角色工作台视觉)、[背景替换验证](docs/architecture/frontend-development.md#2026-11-16-两角色主内容区背景) |
 | 管理员工作台、角色分流、政策审核及详情展示 | [管理员工作台](docs/architecture/admin-workspace.md) |
-| 管理员用户管理接口、顶部菜单与页面规则 | [用户管理接口](docs/api/user-api.md)、[用户管理页面](docs/architecture/admin-workspace.md#用户管理)、[页面接入及验证](docs/architecture/frontend-development.md#2026-11-17-用户管理页面接入) |
+| 管理员用户管理、角色调整与旧会话分流 | [用户管理接口](docs/api/user-api.md)、[用户管理页面](docs/architecture/admin-workspace.md#用户管理)、[角色调整后重新进入工作台](docs/architecture/feishu-auth-flow.md#角色调整后重新进入工作台)、[页面接入及验证](docs/architecture/frontend-development.md#2026-11-17-用户管理页面接入) |
 | 管理员机型补贴查询、双图时间轴、当前时间定位与静态预览范围 | [页面规则](docs/architecture/admin-workspace.md#机型补贴查询静态预览)、[当前时间定位与验证](docs/architecture/frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)、[前端验收](docs/architecture/frontend-harness.md) |
 | 管理员批准前复核、整单确认与覆盖对照 | [审核流程](docs/architecture/admin-workspace.md#差异化政策)、[审核接口](docs/api/admin-api.md#审核)、[覆盖与对照规则](docs/business/override-engine.md#4-管理员覆盖预览与补贴对照) |
 | 吉客云商品读取、清洗、标准机型与商品管理后台 | [商品同步与管理员后台方案](docs/architecture/catalog-admin-design.md) |
@@ -88,14 +89,19 @@
    - 政策业务采用三表。
      - `policy_apply` 保存申请、整单平台、状态、最近提交轮次和并发版本。`goods_form_json` 保存可回填的商品卡、普通卡和指定卡各自选中的 `goods_id`、平台联动、方案参数与平台分配、指定卡各平台数量。
      - `policy_audit_log` 每轮一行，首次提交从 1 开始。`snapshot_data` 保存完整的提交内容及服务端生成的商品名称快照，审核只更新本轮结果、审核人、意见及时间。驳回后编辑主表，重提沿用原单号并新增一轮。
+       提交快照使用独立的 Java `record PolicySnapshotData` 定义 JSON 格式，由 `support.policy.PolicySnapshotCodec` 显式转换读写，落在现有 `policy_audit_log.snapshot_data` 字段。修改表单 DTO 时须保留历史快照读取、管理员筛选和附件查询使用的 JSON 路径及类型，并用旧格式样本验证。读取旧单号和已移除字段时只适配响应，保留库中原文。
      - `policy_goods_detail` 从同一次提交生成，每条为一个提交轮次、一个实际适用平台和一个选中的 `goods_id`。两种卡的 `goods_id` 均必填，并以 `spu_id + ram + rom` 核对商品配置；提交时校验商品在售。同轮次同平台同商品只能出现一次。明细用于查询与引用保护，卡片类型、补贴及数量从本轮快照读取。百亿零售专属值为 NULL。详见 [数据库设计与字段字典](docs/sql/database-design.md#政策三表)。
    - 商品中心的商品、机型和系列引用检查使用 `policy_goods_detail`。正式提交与目录编辑和删除使用同一组商品行锁；目标库并发验证仍待联调。
    - 每个补贴方案填写固定或比例方式对应的字段。指定卡数量按平台选填，仅作参考，留空与填 0 都不改变适用范围。同一平台的同一商品同时出现在普通卡和指定卡时，申请人须先从普通卡取消勾选该颜色。[动态表单规约](docs/business/perspective-rules.md)
 8. **时间**：统一面向 `Asia/Shanghai`（GMT+8），精确到秒。每份申请有独立开始时间，取该时间与本轮审核通过时间中较晚的时点作为生效条件满足的时间。同渠道、同平台、同一具体商品在符合条件的记录中按本轮提交时间取最新，同秒按提交日志 ID 倒序。页面统一标为「到期时间」，该值供参考，业务改回原补贴时以新提交的申请为准。[覆盖规则](docs/business/override-engine.md)
 9. **历史与并发**：提交同事务更新 `policy_apply`、插入本轮 `policy_audit_log` 和 `policy_goods_detail`。审核同事务更新主表和本轮结果，保留快照与明细。按归属、状态、并发版本及适用的提交轮次条件更新并检查影响行数。不自行开放待审撤回或通过后修改，不删除旧政策实施覆盖。
-10. **后端分层**：`Controller → Service → Mapper`；请求放 `dto`，响应放 `vo`，实体放 `entity`。接口放 `service`，实现放 `service.impl` 并命名为 `接口名Impl`；通过接口注入，实现类承担组件与事务注解。`common.config` 注册配置，`common.interceptor` 校验登录和来源。
+10. **后端分层**：沿用 `Controller → Service → Mapper`。请求放 `dto`，响应放 `vo`，实体放 `entity`。`common.config` 注册配置，`common.interceptor` 校验登录和来源。
+    服务接口放在 `service`，调用方通过构造器注入接口。`service.impl` 只放与接口一一对应的 `接口名Impl` 实现类，由实现类承担组件与事务注解。辅助类按职责放入 `support.catalog`、`support.policy` 或 `support.jackyun` 等业务包。
+    每个 Service 接口及其声明的每个方法（含重载）上方各写一句中文 Javadoc，分别说明接口职责和方法用途。实现类省略类级职责备注，保留解释业务规则、事务和兼容处理的代码注释。[开发规范](docs/architecture/ai-development.md#服务接口与注释) · [当前结构与核对记录](docs/architecture/system-overview.md#2026-11-17-服务层整理)
+    HTTP 参数类型转换失败由全局处理器兜底返回 400 `INVALID_REQUEST`，已有接口保留约定的业务错误码。
 11. **前端分层**：请求统一经过 `api/request.js`；选项放 `constants`，状态交互放 `composables`，纯函数放 `utils`。通用组件放 `components`，申请组件放 `views/apply/components`；不直接修改 props，列表用稳定 key，页面不承担最终权限或生效判断。通用表单、表格、按钮、提示、确认框及空状态优先复用 Element Plus，避免另写重复控件与样式；CSS 主要维护业务布局、品牌和响应式适配，按需覆盖须限定业务类名，避免全局原生控件样式干扰组件库。保持组件和样式按需导入、中文语言包及工作台延迟加载。清除渠道/平台/表单内容须等待确认结果，取消时保留原值；日期用精确到秒的北京时间字符串，金额保持十进制字符串，不因替换组件隐式转成浮点数。申请页 Upload 由 useAttachments 逐个上传并显示实际状态，失败须重试或移除后再保存和提交。已绑定文件从草稿移除引用并保存，历史引用保护由服务端校验。实现与验证记录见整体架构和动态表单文档。
 12. **凭证与附件**：真实配置只通过环境变量或被忽略的本地文件注入，不写源码、日志、测试样例或文档。用户 token 不下发前端、不持久化。附件沿用本地 data 存储，当前最多 10 个文件、单文件 20MiB，保存核验本人文件，按申请和轮次授权下载并保护历史引用。管理员详情、申请详情及提交页附件复用 `AttachmentDownload.vue`，经统一请求层带当前网页会话取得字节，再用 Blob 临时地址保存。飞书与外部浏览器 Cookie 独立。下载错误保留 HTTP 状态和实际信息，401 沿用会话失效流程。[附件下载及验证](docs/api/attachment-api.md#已实现接口)
+    政策附件归属由服务层核对。本人当前下载在草稿及已驳回状态读取当前引用，在待审及已通过状态读取最近提交快照；历史下载按指定轮次核对。备份或迁移时一起保留 MySQL 数据和附件存储目录中的原文件及元数据。[存储和配置](docs/api/attachment-api.md#存储和配置)
 13. **数据库重设计与 SQL 交付**。
     - 第一开发阶段允许重新评估项目内所有表的职责、数量、拆分合并、字段、键、约束和索引。每次涉及结构重设计时，先向用户说明拟调整范围、原因、对现有数据和代码的影响，并再次询问是否开始。收到本次明确确认后再开展设计、编写 DDL 或修改依赖该结构的代码。
     - 数据库连接、只读查询、结构和数据变更、查库验证均由用户在 Navicat 操作。Agent 的数据库操作交付限于 `docs/sql/` 下的 `.sql` 文件。交付时给出文件路径、用途、前置条件、执行顺序和预期结果。需要核对库状态或验证结果时，依据用户提供的执行结果继续。
@@ -104,7 +110,7 @@
 14. **任务授权**：本文不独立授权建表、连接生产库、发布应用或向他人发消息；按用户当前具体任务推进。
 15. **清洗任务与结果**：导入和清洗独立，管理员确认后冻结本轮来源 SKU 和内部来源版本。该版本只用于阻止清洗或审核覆盖已更新的来源，不参与判断上游是否有变化。后台使用执行租约处理，已更新来源跳过，异常审核不阻塞其他明确商品。目录、来源映射、来源当前结果和任务明细结果同事务写入。清洗不写逐条操作日志。商品导入记录继续用于建档日证据、来源变更和导入操作。重识别不自动覆盖人工映射或排除结果，不改写政策标准 ID 和名称快照。
 16. **客户端与浏览器登录**：客户端使用 `requestAccess` 自动免登，失败后提供手动重试。普通浏览器先处理 OAuth 回调或恢复会话，无会话时由用户点击扫码或网页授权。扫码按需加载官方二维码 SDK，通过 Passport 入口生成二维码，同时验证消息来自当前 iframe 和确切的飞书 Passport Origin。扫码失败或过期可刷新二维码，也可切换到网页授权。普通浏览器不调用客户端免登 JS-SDK。
-    - 两种登录入口从飞书用户信息的 `avatar_url` 同步头像，保存至已确认新增的可空 `user_info.avatar_url VARCHAR(2048)`，登录及会话接口返回 `user.avatarUrl`。仅接受有效 HTTPS 地址，缺失、空值或无效值保留原头像；新用户为空，停用用户不更新资料并拒绝登录。恢复会话沿用登录快照，重新登录同步最新地址。顶部头像为空或图片加载失败时显示姓名首字，不代理下载图片，不保存用户 token。[头像契约](docs/architecture/feishu-auth-flow.md#飞书客户端第三步核验身份落库与会话)
+    - 两种登录入口从飞书用户信息的 `avatar_url` 同步头像，保存至已确认新增的可空 `user_info.avatar_url VARCHAR(2048)`，登录及会话接口返回 `user.avatarUrl`。仅接受有效 HTTPS 地址，缺失、空值或无效值保留原头像；新用户为空，停用用户不更新资料并拒绝登录。恢复会话沿用登录时的头像，重新登录同步最新地址。顶部头像为空或图片加载失败时显示姓名首字，不代理下载图片，不保存用户 token。[头像契约](docs/architecture/feishu-auth-flow.md#飞书客户端第三步核验身份落库与会话)
     - 服务端将随机 `state` 与当前 Cookie 和白名单 Origin 的首页回调绑定，3 分钟内一次有效。刷新二维码生成新 `state`，迟到的旧回调不得消费新值。回调固定为当前 Origin 的 `/`，与飞书后台重定向 URL、`FEISHU_ALLOWED_ORIGINS` 和同源 `/api` 代理一致。
     - 前端在提交授权码前清除地址栏授权参数。服务端校验并消费 `state`，交换时使用会话保存的同一 `redirect_uri`，失败后发起新授权。所有登录方式共用身份核验、停用检查、用户落库和 Session ID 轮换。用户落库和建立会话前校验配置的公司飞书租户，商品管理入口重新校验有效管理员。后续政策入口按有效身份及本人归属校验。客户端与浏览器 Cookie 独立。[飞书鉴权流程](docs/architecture/feishu-auth-flow.md)
 17. **前端开发约束**：前端修改先读[前端架构与开发规范](docs/architecture/frontend-development.md)，沿用现有分层和依赖方向，公共逻辑不得导入 `views`；子组件通过事件表达业务修改意图，不深层改写父级对象。业务编码与显示文案分离，表单/DTO/详情经白名单适配，会话只维护一份；路由整理保持双入口登录及切菜单保留表单。请求保留 HTTP 状态，区分取消/超时/解析/业务错误，防旧响应覆盖和重复写入；409 不静默覆盖。正式组件不生成演示历史，接口失败不回退演示成功。金额/ID/空值/时间遵循业务契约，不自行确定未定规则。样式就近维护，Element Plus 覆盖限定业务范围；新增依赖说明必要性并同步 lockfile。规范中的目标目录和整改清单不代表已实现，不机械拆文件或创建空壳。
@@ -115,7 +121,9 @@
     - 后端已实现 `GET /api/admin/users`、`GET /api/admin/users/stats`、`GET /api/admin/users/{id}`、`PATCH /api/admin/users/{id}/role` 和 `PATCH /api/admin/users/{id}/status`。接口重新读取本公司当前有效管理员身份，不以登录时角色或前端参数授权。用户管理专门允许读取本公司 `is_deleted=0/1` 的账号，不改变其他业务和登录的停用检查。
     - 列表按姓名／部门关键词、角色、状态组合分页；统计独立计算用户总数、启用申请人、启用管理员及停用人数，不受列表筛选影响。详情返回基础资料及应用内 openId，不存在与跨公司目标统一 404。ID 使用字符串、时间为北京时间到秒，不返回公司标识、unionId 或 token。
     - 角色请求必须携带 roleType、expectedRoleType、expectedStatus，并通过来源校验。事务按本地 ID 升序锁定操作人和目标，再核验当前权限及目标旧值；禁止调整自己的角色、保护最后一位有效管理员。旧值或锁冲突返回 409，重新读取核对后再操作。停用目标可调整角色但保持停用；无变化不写更新时间，实际变化只更新 `role_type` 和 `updated_at`，保留身份、资料及政策历史。不新增角色历史表，旧值校验不等于独立记录版本。
-    - 沿用现有 `user_info`，启停请求携带 status、expectedRoleType 和 expectedStatus，与角色接口共用锁顺序及旧值校验。禁止停用本人并保护最后一位有效管理员，实际变化只更新 `is_deleted` 和 `updated_at`，保留角色及业务历史。五个接口无需改表或执行迁移。商品、政策及用户管理业务按当前数据库角色授权；`GET /api/auth/session` 仍返回登录快照，工作台菜单和角色入口需重新登录刷新。本轮未改会话机制，也未执行真实账号变更。隔离 H2 验证不代表目标 MySQL 行锁和真实飞书会话已联调；目标库仍由用户在 Navicat 操作。
+    - 沿用现有 `user_info`，启停请求携带 status、expectedRoleType 和 expectedStatus，与角色接口共用锁顺序及旧值校验。禁止停用本人并保护最后一位有效管理员，实际变化只更新 `is_deleted` 和 `updated_at`，保留角色及业务历史。五个接口无需改表或执行迁移。商品、政策及用户管理业务按当前数据库角色授权，目标 MySQL 行锁仍待联调。
+    - 目标账号重新打开、刷新、从页面缓存恢复或切回前台时，由 `GET /api/auth/session` 核对本公司当前有效账号，返回最新角色和原会话到期时间。升为管理员后，旧申请地址进入「商品 → 源商品库」`#/admin/catalog/sources`；降为申请人后，旧管理地址进入「政策提交 → 提交政策」`#/apply`。同一账号角色未变时，切回前台保留原表单。
+    - 2026-11-17 旧会话角色修复已在 Chrome、Spring Boot 和隔离 H2 中验证，前端 204 项测试通过，后端 189 项通过、2 项外部环境测试跳过。真实飞书账号仍待复测。本地加载新版前端、重启后端后，用已调整角色的账号从飞书重开即可，无需再次调整角色或执行 SQL。[复测步骤](docs/architecture/feishu-auth-flow.md#角色调整后重新进入工作台) · [验证记录](docs/architecture/feishu-auth-flow.md#验证记录)
     - 角色与启停确认弹窗每次打开都读取最新详情，用其中的角色和状态构造写请求。取消只关闭弹窗，写入期间禁用重复确认。遇到 409 或写入结果未知时保留最初选择的目标并重新读取账号，供管理员核对。若当前值已符合目标，禁用再次确认。
     - 用户管理接口的参数、错误码、后端回归及目标环境联调事项见[接口契约](docs/api/user-api.md)。页面交互见[管理员工作台](docs/architecture/admin-workspace.md#用户管理)，前端检查及生产构建连接 Spring Boot、隔离 H2 的三种尺寸浏览器验收见[页面接入验证](docs/architecture/frontend-development.md#2026-11-17-用户管理页面接入)。
 

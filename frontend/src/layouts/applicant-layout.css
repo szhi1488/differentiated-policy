@@ -36,12 +36,6 @@
     width: 100%;
   }
 }
-.workspace .workspace-caption {
-  color: #a0acbd;
-  text-align: center;
-  font-size: 12px;
-  padding: 22px;
-}
 @media (max-width: 800px) {
   .workspace .sidebar {
     width: 160px;

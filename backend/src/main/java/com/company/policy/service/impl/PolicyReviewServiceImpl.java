@@ -6,7 +6,7 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.now;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.offset;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.policyNumber;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.validateFilter;
-import static com.company.policy.service.impl.PolicyFormValidation.invalid;
+import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
@@ -18,7 +18,10 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
 import com.company.policy.mapper.PolicyReviewMapper.WinnerRow;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyReviewService;
+import com.company.policy.support.policy.PolicyFormValidation;
+import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
@@ -57,16 +60,19 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private final PolicyReviewMapper reviews;
     private final PolicyApplyMapper policies;
     private final ObjectMapper json;
+    private final PolicySnapshotCodec snapshots;
 
     PolicyReviewServiceImpl(
             CatalogAccess access,
             PolicyReviewMapper reviews,
             PolicyApplyMapper policies,
-            ObjectMapper json) {
+            ObjectMapper json,
+            PolicySnapshotCodec snapshots) {
         this.access = access;
         this.reviews = reviews;
         this.policies = policies;
         this.json = json;
+        this.snapshots = snapshots;
     }
 
     @Override
@@ -384,8 +390,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if (log == null) {
             throw new IllegalStateException("政策提交快照缺失。");
         }
-        return PolicyApplyServiceImpl.displaySnapshot(
-                decode(log.getSnapshotData(), new TypeReference<Snapshot>() {}));
+        return PolicyApplyServiceImpl.displaySnapshot(snapshots.read(log.getSnapshotData()));
     }
 
     private <T> T decode(String value, TypeReference<T> type) {

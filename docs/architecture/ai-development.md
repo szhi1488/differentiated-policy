@@ -39,13 +39,20 @@ Java 生产代码根包为 `backend/src/main/java/com/company/policy/`。包名�
 | --- | --- | --- |
 | 根包、`controller/` | 根包放应用启动类；HTTP 路径、参数绑定、响应及 Knife4j 注解在 Controller | `PolicyApplication.java`、`controller/AuthController.java` |
 | `dto/`、`vo/` | `dto/` 放请求；`vo/` 放返回给前端的视图模型 | `dto/FeishuLoginRequest.java`、`vo/CurrentUserResponse.java` |
-| `service/`、`service/impl/` | 接口放 `service/`，权限、业务规则、事务和外部调用等实现放 `service/impl/` | `UserInfoService.java`、`impl/UserInfoServiceImpl.java` |
-| `entity/`、`mapper/` | 表映射对象放 `entity/`；读写 SQL 及持久化接口放 `mapper/`，沿用现有注解 Mapper | `entity/UserInfo.java`、`mapper/UserInfoMapper.java` |
+| `service/`、`service/impl/` | 业务组件通过接口注入，`service/impl/` 只放对应的 `接口名Impl` 实现类 | `CatalogAccess.java`、`impl/CatalogAccessImpl.java` |
+| `support/` | 按业务领域组织共用规则、校验、编解码及签名 | `catalog/CatalogCleaningRule.java`、`policy/PolicyFormValidation.java`、`jackyun/JackyunRequestSigner.java` |
+| `entity/`、`mapper/` | `entity/` 放表映射对象和已落库 JSON 的稳定模型；`mapper/` 放持久化接口及读写 SQL，沿用现有注解 Mapper | `entity/UserInfo.java`、`entity/PolicySnapshotData.java`、`mapper/PolicyAttachmentMapper.java` |
 | `common/config/`、`common/interceptor/` | 配置属性、组件装配，以及通用登录和来源校验；单业务规则留在该业务服务 | `FeishuProperties.java`、`LoginInterceptor.java` |
 | `common/api/`、`common/exception/` | 公共错误响应及统一异常处理 | `ApiError.java`、`ApiException.java`、`GlobalExceptionHandler.java` |
 | `backend/src/main/resources/` | 应用配置和运行时资源；真实凭证使用环境变量或被忽略的 `backend/.env.local.properties` | `application.yml`，配置样例在 `backend/.env.example` |
 | `backend/src/test/java/`、`backend/src/test/resources/` | 接口、服务与数据库测试；隔离的测试配置、测试建表 SQL 和样例 | `AuthControllerTest.java`、`user-info-schema.sql` |
 | `backend/pom.xml` | 后端依赖、编译、测试、打包和代码格式配置 | Maven 与 Spotless 配置 |
+
+#### 服务接口与注释
+
+每个服务接口在声明上方用一句中文 Javadoc（`/** … */`）说明它负责的业务。接口声明的每个方法也各写一句，说明调用方能完成什么操作；有多个重载时分别说明适用场景。权限方法应写清校验范围，例如 `CatalogAccess.requireAdmin` 校验商品管理权限，`requirePolicyAdmin` 校验政策审核权限。[CatalogAccess 源码](../../backend/src/main/java/com/company/policy/service/CatalogAccess.java)
+
+调用方通过构造器注入服务接口。`service.impl` 下的实现类使用 `@Service`，类声明上方省略职责备注。实现内部按需注释锁顺序、事务边界或历史数据兼容等具体原因。共用的清洗规则、表单校验、快照编解码和外部签名按业务放在 `support` 的对应子包。[服务层现状](system-overview.md#2026-11-17-服务层整理)
 
 ### 根目录、文档与 SQL
 

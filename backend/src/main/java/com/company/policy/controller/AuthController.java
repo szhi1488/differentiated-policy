@@ -4,6 +4,7 @@ import com.company.policy.dto.FeishuLoginRequest;
 import com.company.policy.service.FeishuBrowserLoginService;
 import com.company.policy.service.FeishuLoginService;
 import com.company.policy.service.LoginSessionService;
+import com.company.policy.service.UserInfoService;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.FeishuAuthorizationResponse;
 import com.company.policy.vo.LoginChallengeResponse;
@@ -28,14 +29,17 @@ public class AuthController {
     private final LoginSessionService sessions;
     private final FeishuLoginService loginService;
     private final FeishuBrowserLoginService browserLogin;
+    private final UserInfoService users;
 
     public AuthController(
             LoginSessionService sessions,
             FeishuLoginService loginService,
-            FeishuBrowserLoginService browserLogin) {
+            FeishuBrowserLoginService browserLogin,
+            UserInfoService users) {
         this.sessions = sessions;
         this.loginService = loginService;
         this.browserLogin = browserLogin;
+        this.users = users;
     }
 
     @PostMapping("/feishu/browser/authorize")
@@ -87,11 +91,14 @@ public class AuthController {
     @Operation(
             summary = "读取当前登录身份",
             description =
-                    "返回本地 user_info.id、roleType、可空的 avatarUrl 及经飞书核验的身份。头像在登录时同步，恢复会话读取登录快照。无会话或会话到期返回 401。会话角色为登录时快照，商品管理接口会重新校验管理员权限。")
+                    "按当前公司和已核验身份读取有效账号的最新 roleType，保留登录时头像与原到期时间。401 会话过期或身份失效，403 账号停用或公司不符，503 配置缺失或用户存储不可用。")
     public ResponseEntity<AuthSessionResponse> current(HttpServletRequest request) {
+        var login = sessions.requireLogin(request);
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .body(sessions.requireLogin(request));
+                .body(
+                        new AuthSessionResponse(
+                                users.restoreSessionUser(login.user()), login.expiresAt()));
     }
 
     @PostMapping("/logout")

@@ -6,6 +6,7 @@ import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.dto.JackyunGoodsQuery.Phase;
 import com.company.policy.service.JackyunGoodsService;
+import com.company.policy.support.jackyun.JackyunRequestSigner;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
 import com.fasterxml.jackson.databind.JsonNode;

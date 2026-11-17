@@ -90,7 +90,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。使用适配十四表基线的后端连接新库。空库首次登录生成申请人账号，管理员角色由用户在 Navicat 对已确认账号配置后重新登录。
+1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。使用适配十四表基线的后端连接新库。空库首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `FEISHU_TENANT_KEY` 为公司的飞书租户标识，原有 `JACKYUN_TENANT_KEY` 可回退使用。`JACKYUN_SOURCE_KEY` 是稳定的本地账套标识，默认 `jackyun`。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 

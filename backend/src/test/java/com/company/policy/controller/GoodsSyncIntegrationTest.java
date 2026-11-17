@@ -2246,6 +2246,14 @@ class GoodsSyncIntegrationTest {
                         "SELECT id FROM policy_audit_log WHERE policy_id=?", String.class, id);
         String history =
                 path + "/audit-logs/" + logId + "/attachments/" + attachmentId + "/content";
+        // 待审当前内容必须取提交快照，即使主表附件与该轮不一致。
+        jdbc.update("UPDATE policy_apply SET attachment_urls='[]' WHERE id=?", id);
+        mvc.perform(get(path + "/attachments/" + attachmentId + "/content").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(file.getBytes()));
+        mvc.perform(get(history).session(other))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
         String adminDownload =
                 "/api/admin/policies/"
                         + id
@@ -2261,6 +2269,11 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(file.getBytes()));
         mvc.perform(get(adminDownload).session(other)).andExpect(status().isForbidden());
+        mvc.perform(
+                        get(adminDownload.replace("/audit-logs/" + logId + "/", "/audit-logs/0/"))
+                                .session(admin))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("POLICY_AUDIT_NOT_FOUND"));
         mvc.perform(get("/api/attachments/" + attachmentId + "/content").session(admin))
                 .andExpect(status().isNotFound());
         String otherId = createPolicy(owner, form.toString()).path("id").asText();
@@ -2285,6 +2298,13 @@ class GoodsSyncIntegrationTest {
                 .andExpect(content().bytes(file.getBytes()));
         mvc.perform(policyRequest(delete("/api/attachments/" + attachmentId), owner))
                 .andExpect(status().isConflict());
+        jdbc.update("UPDATE policy_apply SET is_deleted=1 WHERE id=?", id);
+        mvc.perform(get(history).session(owner))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
+        mvc.perform(get(adminDownload).session(admin))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
     }
 
     @Test

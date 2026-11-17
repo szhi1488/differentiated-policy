@@ -10,21 +10,30 @@ import com.company.policy.vo.PolicyResponse.Detail;
 import com.company.policy.vo.PolicyResponse.Page;
 import com.company.policy.vo.PolicyResponse.Summary;
 
+/** 供申请人保存草稿、提交政策，并查询本人的申请和审核记录。 */
 public interface PolicyApplyService {
+    /** 为当前申请人首次保存政策草稿，可用请求标识核对重复创建。 */
     PolicyResponse create(
             CurrentUserResponse session, PolicyDraftRequest request, String requestKey);
 
+    /** 校验记录版本后，保存本人草稿或已驳回申请的修改。 */
     PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request);
 
+    /** 核对版本后，删除本人从未正式提交过的草稿。 */
     void deleteDraft(CurrentUserResponse session, long id, Integer recordVersion);
 
+    /** 校验已保存的申请并正式提交，生成本轮提交快照和商品明细。 */
     PolicyResponse submit(CurrentUserResponse session, long id, Integer recordVersion);
 
+    /** 读取本人申请详情，可编辑状态返回当前表单，待审或已通过状态返回提交快照。 */
     Detail detail(CurrentUserResponse session, long id);
 
+    /** 按筛选条件分页查询本人的政策申请。 */
     Page<Summary> mine(CurrentUserResponse session, PolicyListQuery query);
 
+    /** 分页查询本人指定申请的历轮提交和审核记录。 */
     Page<AuditSummary> auditLogs(CurrentUserResponse session, long id, int page, int pageSize);
 
+    /** 读取本人指定申请某一轮的提交快照和审核结果。 */
     AuditDetail auditDetail(CurrentUserResponse session, long id, long logId);
 }

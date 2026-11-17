@@ -87,6 +87,39 @@ class UserRoleControllerTest {
     }
 
     @Test
+    void existingSessionFollowsRoleChangesWithoutRenewingLogin() throws Exception {
+        var target = session(2, COMPANY, "APPLICANT");
+        var probe = get("/api/auth/session").session(target);
+        var initial = mvc.perform(probe).andExpect(status().isOk()).andReturn().getResponse();
+        var expiry = json.readTree(initial.getContentAsByteArray()).path("expiresAt").asText();
+        for (String role : List.of("ADMIN", "APPLICANT")) {
+            String previous = role.equals("ADMIN") ? "APPLICANT" : "ADMIN";
+            mvc.perform(change(admin, "2", role, previous, "ENABLED")).andExpect(status().isOk());
+            mvc.perform(probe)
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.user.id").value("2"))
+                    .andExpect(jsonPath("$.user.roleType").value(role))
+                    .andExpect(jsonPath("$.expiresAt").value(expiry));
+        }
+    }
+
+    @Test
+    void sessionRestoreRejectsDisabledForeignMissingAndReplacedAccounts() throws Exception {
+        mvc.perform(get("/api/auth/session").session(session(4, COMPANY, "APPLICANT")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("USER_DISABLED"));
+        mvc.perform(get("/api/auth/session").session(session(6, "other-company", "ADMIN")))
+                .andExpect(status().isForbidden());
+        var removed = session(2, COMPANY, "APPLICANT");
+        jdbc.update("DELETE FROM user_info WHERE id=2");
+        mvc.perform(get("/api/auth/session").session(removed)).andExpect(status().isUnauthorized());
+        addUser(7, COMPANY, "ADMIN", 0);
+        jdbc.update("UPDATE user_info SET open_id='open-2' WHERE id=7");
+        mvc.perform(get("/api/auth/session").session(removed)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void unchangedRoleDoesNotWriteUpdatedTime() throws Exception {
         var before = jdbc.queryForMap("SELECT * FROM user_info WHERE id=2");
         mvc.perform(change(admin, "2", "APPLICANT", "APPLICANT", "ENABLED"))

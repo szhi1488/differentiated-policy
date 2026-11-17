@@ -9,8 +9,9 @@ import com.company.policy.common.config.AttachmentProperties;
 import com.company.policy.common.exception.GlobalExceptionHandler;
 import com.company.policy.common.interceptor.LoginInterceptor;
 import com.company.policy.entity.UserInfo;
-import com.company.policy.mapper.PolicyApplyMapper;
+import com.company.policy.mapper.PolicyAttachmentMapper;
 import com.company.policy.mapper.UserInfoMapper;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.JsSdkSignatureService;
 import com.company.policy.service.impl.AttachmentServiceImpl;
 import com.company.policy.service.impl.LoginSessionServiceImpl;
@@ -28,6 +29,8 @@ import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.mock.web.MockMultipartFile;
@@ -56,9 +59,16 @@ class AttachmentControllerTest {
         properties.setRoot(directory.toString());
         storage =
                 new AttachmentServiceImpl(
-                        properties, json, clock, users, mock(PolicyApplyMapper.class));
+                        properties,
+                        json,
+                        clock,
+                        users,
+                        mock(PolicyAttachmentMapper.class),
+                        mock(CatalogAccess.class));
         mvc =
-                MockMvcBuilders.standaloneSetup(new AttachmentController(storage, sessions))
+                MockMvcBuilders.standaloneSetup(
+                                new AttachmentController(storage, sessions),
+                                new PolicyAttachmentController(storage, sessions))
                         .addInterceptors(
                                 new LoginInterceptor(sessions, mock(JsSdkSignatureService.class)))
                         .setControllerAdvice(new GlobalExceptionHandler())
@@ -74,6 +84,19 @@ class AttachmentControllerTest {
                         new CurrentUserResponse("1", openId, tenant, "测试用户", "APPLICANT", null),
                         Instant.now().plusSeconds(600)));
         return (MockHttpSession) request.getSession();
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "/api/policies/invalid/attachments/file/content",
+                "/api/policies/1/audit-logs/invalid/attachments/file/content",
+                "/api/admin/policies/1/audit-logs/9223372036854775808/attachments/file/content"
+            })
+    void invalidPolicyAndAuditIdsReturnClientErrors(String path) throws Exception {
+        mvc.perform(get(path).session(owner))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     private MockMultipartFile pdf(String name) {
@@ -123,7 +146,12 @@ class AttachmentControllerTest {
         properties.setRoot(directory.toString());
         var reopened =
                 new AttachmentServiceImpl(
-                        properties, json, clock, users, mock(PolicyApplyMapper.class));
+                        properties,
+                        json,
+                        clock,
+                        users,
+                        mock(PolicyAttachmentMapper.class),
+                        mock(CatalogAccess.class));
         var download =
                 reopened.download(
                         id,

@@ -1,4 +1,4 @@
-package com.company.policy.service.impl;
+package com.company.policy.support.policy;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
@@ -22,14 +22,14 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 
-final class PolicyFormValidation {
-    static final DateTimeFormatter TIME =
+public final class PolicyFormValidation {
+    public static final DateTimeFormatter TIME =
             DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'+08:00'")
                     .withResolverStyle(ResolverStyle.STRICT);
     private static final Pattern MEMORY = Pattern.compile("[1-9][0-9]{0,7}GB");
     private static final Pattern DECIMAL = Pattern.compile("[0-9]+(?:\\.[0-9]{1,2})?");
     private static final Pattern KEY = Pattern.compile("[A-Za-z0-9_-]{1,64}");
-    static final Set<String> RETAIL =
+    public static final Set<String> RETAIL =
             Set.of(
                     "KUAISHOU",
                     "PDD",
@@ -41,9 +41,9 @@ final class PolicyFormValidation {
                     "DEWU",
                     "UNICOM",
                     "GOV_ENTERPRISE");
-    static final Set<String> BILLION = Set.of("PDD", "TAOBAO", "UNICOM");
-    static final Set<String> VERIFY_TYPES = Set.of("SALES", "ACTIVATION");
-    static final Set<String> SCENES = Set.of("NATIONAL_SUB", "LOCAL_SUB", "SELF_SUB");
+    public static final Set<String> BILLION = Set.of("PDD", "TAOBAO", "UNICOM");
+    public static final Set<String> VERIFY_TYPES = Set.of("SALES", "ACTIVATION");
+    public static final Set<String> SCENES = Set.of("NATIONAL_SUB", "LOCAL_SUB", "SELF_SUB");
     private static final Set<String> BASES =
             Set.of(
                     "RETAIL_PRICE",
@@ -54,7 +54,7 @@ final class PolicyFormValidation {
 
     private PolicyFormValidation() {}
 
-    static PolicyDraftRequest validate(PolicyDraftRequest form, boolean submitting) {
+    public static PolicyDraftRequest validate(PolicyDraftRequest form, boolean submitting) {
         boolean retail = "RETAIL".equals(form.perspective());
         require(retail || "BILLION".equals(form.perspective()), "请选择政策渠道。");
         var platforms = entries(form.selectedPlatforms());
@@ -226,7 +226,7 @@ final class PolicyFormValidation {
         }
     }
 
-    static LocalDateTime time(String value) {
+    public static LocalDateTime time(String value) {
         if (value == null) {
             return null;
         }
@@ -266,7 +266,7 @@ final class PolicyFormValidation {
         require(matches(KEY, value) && keys.add(value), message);
     }
 
-    static long id(String value) {
+    public static long id(String value) {
         try {
             require(value != null && value.matches("[1-9][0-9]{0,18}"), "商品和机型 ID 须为正整数字符串。");
             return Long.parseLong(value);
@@ -275,7 +275,7 @@ final class PolicyFormValidation {
         }
     }
 
-    static <T> List<T> entries(List<T> value) {
+    public static <T> List<T> entries(List<T> value) {
         if (value == null) {
             return List.of();
         }
@@ -297,7 +297,7 @@ final class PolicyFormValidation {
         }
     }
 
-    static ApiException invalid(String message) {
+    public static ApiException invalid(String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "POLICY_VALIDATION_FAILED", message);
     }
 

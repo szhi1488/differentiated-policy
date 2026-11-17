@@ -9,29 +9,31 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogCleaningMapper;
 import com.company.policy.mapper.CatalogCleaningMapper.Change;
 import com.company.policy.mapper.CatalogGoodsMapper;
+import com.company.policy.service.CatalogCleaningResultWriter;
+import com.company.policy.support.catalog.CatalogCleaningRule;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Status;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Objects;
 import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-/** 在调用方的事务内解析标准目录映射并保存来源清洗结果。 */
-@Component
-class CatalogCleaningResultWriter {
+@Service
+public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWriter {
     private final CatalogCleaningMapper mapper;
     private final CatalogGoodsMapper goods;
     private final ObjectMapper json;
 
-    CatalogCleaningResultWriter(
+    public CatalogCleaningResultWriterImpl(
             CatalogCleaningMapper mapper, CatalogGoodsMapper goods, ObjectMapper json) {
         this.mapper = mapper;
         this.goods = goods;
         this.json = json;
     }
 
-    Mapping resolve(SourceGoodsItem source, Candidate candidate, String origin) {
+    @Override
+    public Mapping resolve(SourceGoodsItem source, Candidate candidate, String origin) {
         var memory = CatalogCleaningRule.memory(candidate.spec());
         if (memory == null) {
             throw new ApiException(
@@ -116,7 +118,8 @@ class CatalogCleaningResultWriter {
         return new Mapping("MAPPED", origin, brandId, entry.getId());
     }
 
-    void persist(
+    @Override
+    public void persist(
             CatalogCleaningJob job,
             SourceGoodsItem source,
             Candidate candidate,
@@ -161,7 +164,8 @@ class CatalogCleaningResultWriter {
         }
     }
 
-    Candidate readCandidate(SourceGoodsItem source) {
+    @Override
+    public Candidate readCandidate(SourceGoodsItem source) {
         try {
             return source.getCleanCandidate() == null
                     ? null
@@ -185,13 +189,4 @@ class CatalogCleaningResultWriter {
                     HttpStatus.CONFLICT, "CATALOG_SOURCE_CHANGED", "清洗记录已变化，请刷新后重试。");
         }
     }
-
-    // 只有目录写入前发现的业务冲突可以转待审并提交事务。
-    static final class MappingConflict extends ApiException {
-        MappingConflict(String code, String reason) {
-            super(HttpStatus.CONFLICT, code, reason);
-        }
-    }
-
-    record Mapping(String status, String origin, Long brandId, Long goodsId) {}
 }

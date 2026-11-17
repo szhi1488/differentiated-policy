@@ -13,6 +13,7 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogOperationLogMapper;
 import com.company.policy.mapper.GoodsSyncJobMapper;
 import com.company.policy.mapper.SourceGoodsItemMapper;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.vo.CurrentUserResponse;
@@ -24,7 +25,6 @@ import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -38,7 +38,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Slf4j
 @Service
 public class GoodsSyncServiceImpl implements GoodsSyncService {
-    private static final List<String> BRANDS = CatalogAccess.BRANDS;
     private static final int PAGE_SIZE = 50;
     private static final int[] FIELD_LENGTHS = {512, 128, 256, 256, 1024, 1024, 1024, 1024};
 
@@ -76,7 +75,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     public Overview overview(CurrentUserResponse session) {
         access.requireAdmin(session);
         var latest =
-                BRANDS.stream()
+                JackyunGoodsQuery.SUPPORTED_BRANDS.stream()
                         .map(brand -> jobs.latest(config.getSourceKey(), brand))
                         .filter(Objects::nonNull)
                         .map(GoodsSyncResponse::from)
@@ -203,7 +202,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             int page,
             int size) {
         access.requireAdmin(session);
-        if ((brand != null && !BRANDS.contains(brand))
+        if ((brand != null && !JackyunGoodsQuery.SUPPORTED_BRANDS.contains(brand))
                 || (keyword != null && keyword.length() > 128)
                 || (createdDate != null
                         && (createdDate.getYear() < 1000 || createdDate.getYear() > 9999))

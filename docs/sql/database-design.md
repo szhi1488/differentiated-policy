@@ -350,7 +350,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | policy_id | BIGINT | 否 | — | 关联 policy_apply.id |
 | tenant_key | VARCHAR(64) | 否 | — | 与申请及审核人相同 |
 | version | INT UNSIGNED | 否 | — | 提交轮次，从 1 开始 |
-| snapshot_data | JSON | 否 | — | 冻结的完整提交对象 |
+| snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品和附件引用，由 Java 记录类 `PolicySnapshotData` 定义格式。[快照读写与旧数据兼容](../api/policy-api.md#提交快照的存储与兼容) |
 | audit_status | VARCHAR(20) | 否 | SUBMITTED | SUBMITTED、APPROVED、REJECTED |
 | auditor_id | BIGINT | 是 | NULL | 同租户的审核人账号 |
 | auditor_name | VARCHAR(64) | 是 | NULL | 审核人姓名快照 |

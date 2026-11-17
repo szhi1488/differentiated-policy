@@ -5,11 +5,15 @@ import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.CatalogCleaningRequest.Decision;
 import com.company.policy.dto.CatalogCleaningRequest.Review;
 import com.company.policy.dto.CatalogCleaningRequest.Start;
+import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.SourceGoodsItem;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogCleaningMapper;
+import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.CatalogCleaningResultWriter;
 import com.company.policy.service.CatalogCleaningService;
+import com.company.policy.support.catalog.CatalogCleaningRule;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Detail;
 import com.company.policy.vo.CatalogCleaningResponse.Job;
@@ -274,7 +278,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     private static void validateBrand(String brand) {
-        if (brand == null || !CatalogAccess.BRANDS.contains(brand)) {
+        if (brand == null || !JackyunGoodsQuery.SUPPORTED_BRANDS.contains(brand)) {
             throw invalid("请选择有效的商品品牌。");
         }
     }

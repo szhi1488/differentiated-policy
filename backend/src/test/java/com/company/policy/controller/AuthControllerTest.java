@@ -44,6 +44,7 @@ class AuthControllerTest {
     @BeforeEach
     void setup() throws Exception {
         when(clock.instant()).thenReturn(now);
+        when(users.restoreSessionUser(any())).thenAnswer(call -> call.getArgument(0));
         when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", null))
                 .thenReturn(
                         new CurrentUserResponse(

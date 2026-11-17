@@ -3,11 +3,14 @@ package com.company.policy.service.impl;
 import com.company.policy.common.config.AttachmentProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest.Link;
-import com.company.policy.mapper.PolicyApplyMapper;
+import com.company.policy.mapper.PolicyAttachmentMapper;
+import com.company.policy.mapper.PolicyAttachmentMapper.Membership;
 import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.AttachmentService;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.vo.AttachmentResponse;
 import com.company.policy.vo.CurrentUserResponse;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,19 +58,22 @@ public class AttachmentServiceImpl implements AttachmentService {
     private final ObjectMapper json;
     private final Clock clock;
     private final UserInfoMapper users;
-    private final PolicyApplyMapper policies;
+    private final PolicyAttachmentMapper policies;
+    private final CatalogAccess access;
 
     public AttachmentServiceImpl(
             AttachmentProperties properties,
             ObjectMapper json,
             Clock clock,
             UserInfoMapper users,
-            PolicyApplyMapper policies) {
+            PolicyAttachmentMapper policies,
+            CatalogAccess access) {
         this.root = properties.rootPath().resolve("attachments");
         this.json = json;
         this.clock = clock;
         this.users = users;
         this.policies = policies;
+        this.access = access;
     }
 
     @Override
@@ -160,10 +166,70 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     @Override
-    public Download downloadForPolicy(String id, CurrentUserResponse user) {
-        verifyUser(user);
+    @Transactional(readOnly = true)
+    public Download downloadCurrent(long policyId, String id, CurrentUserResponse user) {
+        var owner = access.requireApplicant(user);
+        var membership =
+                policies.current(policyId, owner.getTenantKey(), owner.getId(), fileReference(id));
+        if (membership == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到此申请。");
+        }
+        if (membership.auditId() == null
+                && !"DRAFT".equals(membership.status())
+                && !"REJECTED".equals(membership.status())) {
+            throw new IllegalStateException("政策提交快照缺失。");
+        }
+        return policyContent(id, owner.getTenantKey(), membership);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Download downloadApplicantHistory(
+            long policyId, long logId, String id, CurrentUserResponse user) {
+        var owner = access.requireApplicant(user);
+        var membership =
+                policies.applicantHistory(
+                        policyId, logId, owner.getTenantKey(), owner.getId(), fileReference(id));
+        if (membership == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到此申请。");
+        }
+        return historicalContent(id, owner.getTenantKey(), membership);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Download downloadAdminHistory(
+            long policyId, long logId, String id, CurrentUserResponse user) {
+        var admin = access.requirePolicyAdmin(user);
+        var membership =
+                policies.adminHistory(policyId, logId, admin.getTenantKey(), fileReference(id));
+        if (membership == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到已提交的政策。");
+        }
+        return historicalContent(id, admin.getTenantKey(), membership);
+    }
+
+    private Download historicalContent(String id, String tenantKey, Membership membership) {
+        if (membership.auditId() == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");
+        }
+        return policyContent(id, tenantKey, membership);
+    }
+
+    private String fileReference(String id) {
+        try {
+            return json.writeValueAsString(Map.of("type", "FILE", "id", id));
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("无法序列化政策附件引用。", error);
+        }
+    }
+
+    private Download policyContent(String id, String tenantKey, Membership membership) {
+        if (!membership.attached()) {
+            throw notFound();
+        }
         var saved = stored(id);
-        if (!user.tenantKey().equals(saved.tenantKey())) {
+        if (!tenantKey.equals(saved.tenantKey())) {
             throw notFound();
         }
         return content(id, saved);

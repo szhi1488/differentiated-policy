@@ -111,8 +111,9 @@ backend/src/main/java/com/company/policy/
   dto/                         请求对象
   vo/                          响应对象
   service/                     服务接口
-  service/impl/                业务、组件及事务注解
-  entity/                      数据库实体
+  service/impl/                仅存放与服务接口同名加 Impl 的实现类
+  support/                     商品规则、政策表单与快照处理、吉客云签名
+  entity/                      数据库实体和已落库的 JSON 数据结构
   mapper/                      持久化
   common/api/                  公共错误响应
   common/config/               配置与组件注册
@@ -136,6 +137,35 @@ backend/src/main/java/com/company/policy/
 
 ## 当前实现与验证边界
 
+### 2026-11-17 后端结构检查
+
+首轮检查覆盖当时的 125 个生产 Java 文件、22 个测试 Java 文件，以及 Maven 配置和资源目录。Controller 通过服务接口访问业务数据，顶层分层可沿用。修复前 Maven `verify` 共 185 项，183 项通过，2 项外部环境测试跳过。下表保留原检查编号，便于跟踪。
+
+| 编号 | 检查项 | 修复结果或当前工作区状况 |
+| --- | --- | --- |
+| 1 | 参数类型错误落入通用 500 | 已修复。政策附件路径中的申请或审核日志 ID 无法转为长整数时，统一返回 400 `INVALID_REQUEST`。已有接口专用错误码继续生效。 |
+| 2 | 导入和清洗共用默认调度线程 | 待处理。吉客云请求等待或批量清洗耗时较长时，另一个定时任务会延后。 |
+| 3 | Controller 读取整份政策并核对附件 | 已修复。附件服务校验有效账号、公司、父申请与文件引用，Mapper 直接按当前状态或指定审核轮次查询。下载保留原接口和文件响应。 |
+| 4 | 请求对象直接作为永久快照格式 | 已修复。独立快照模型保存每轮提交的表单与商品。新旧记录共用已有 JSON 结构，管理员筛选、覆盖查询和历史附件继续使用原字段。 |
+| 5 | 审核实现静态引用申请实现 | 待处理。`PolicyReviewServiceImpl` 仍从 `PolicyApplyServiceImpl` 取短单号、时间、分页及审核摘要等共用逻辑。 |
+| 6 | 公司权限与商品品牌规则混放 | 部分整理。当前品牌名单已移到 `JackyunGoodsQuery.SUPPORTED_BRANDS`，导入与清洗共用；`GoodsSyncRequest` 仍单独声明可选品牌，跨业务权限入口仍命名为 `CatalogAccess`。 |
+| 7 | 选品响应对象承担查询筛选 | 待处理。服务先读取全部在售配置，再由 `ApplicantCatalogResponse.Options.from` 在内存中完成联动筛选。 |
+| 8 | 商品同步测试类跨多个业务 | 待处理。`GoodsSyncIntegrationTest` 同时覆盖导入、政策提交、审核覆盖、附件及并发操作，按功能运行回归时仍需定位到该类。 |
+
+**修复验证记录。** 第 1、3、4 项的针对性测试通过 49 项。随后完整运行 Maven `verify`，共 189 项，187 项通过、2 项外部环境测试跳过，打包与 Spotless 检查通过。旧格式样本与 H2 接口回归覆盖旧单号、已移除字段、十进制金额尾零、数量为 0 和未填写，以及草稿、提交快照、指定轮次和已删除申请的附件权限。该轮未连接目标 MySQL 或真实吉客云。[政策快照契约](../api/policy-api.md#提交快照的存储与兼容) · [附件接口](../api/attachment-api.md#政策绑定与历史保护)
+
+### 2026-11-17 服务层整理
+
+本次源码核对确认，`service` 下有 19 个接口，`service.impl` 下有 19 个对应的 `接口名Impl` 实现类。19 个接口及其声明的 78 个方法均有一句中文 Javadoc，重载方法分别计数。实现类省略类级职责备注，内部业务注释保留。[服务接口与注释规范](ai-development.md#服务接口与注释)
+
+- `CatalogAccess` 由 `CatalogAccessImpl` 实现，分别核验申请人身份、商品管理、政策审核和用户管理权限。调用方通过接口取得已核验的用户。[权限接口](../../backend/src/main/java/com/company/policy/service/CatalogAccess.java)
+- `CatalogCleaningResultWriter` 由 `CatalogCleaningResultWriterImpl` 实现。人工审核和自动清洗都注入该接口，在各自的事务内解析标准商品映射、保存源商品清洗结果。[清洗结果写入接口](../../backend/src/main/java/com/company/policy/service/CatalogCleaningResultWriter.java)
+- `support.catalog` 存放 `CatalogCleaningRule` 和 `CatalogText`，`support.policy` 存放 `PolicyFormValidation` 和 `PolicySnapshotCodec`，`support.jackyun` 存放 `JackyunRequestSigner`。
+
+服务层整理和注释调整完成后，后端 Maven `verify` 及 Spotless 检查通过。187 项测试通过，真实吉客云和 MySQL 联调测试各跳过 1 项。
+
+### 其他既往验证
+
 2026-11-15 申请人地址切换与普通卡配置移除已修复。工作台在替换未保存内容前确认，取消导航保留原地址、表单和暂存附件；Hash 变化不关闭确认框。配置移除按完整卡片覆盖分页外颜色，抽屉确认后才更新表单，重选仍保留手动取消的商品。该次修复新增 9 项回归，前端 24 个文件的 132 项测试及生产构建通过，并使用模拟申请人及接口检查 1440×1000、768×1000、390×844 的主路径。验证细节见[修复记录](frontend-development.md#2026-11-15-申请地址切换保护与已有配置移除)。本次同步仅更新文档，未重新运行上述业务检查，未修改数据库；真实飞书与目标 MySQL 仍待联调。
 
 2026-11-13 商品编辑保存通过前端 72 项测试及生产构建。后端 Maven verify 通过 79 项，跳过 2 项外部环境测试。隔离 H2 验证实际接口写入和引用保护，Chrome 使用模拟管理员与商品接口验证桌面、平板和手机的编辑流程。目标 MySQL 上的商品编辑和真实飞书会话留待联调。[管理员工作台历次验证](admin-workspace.md#历次验证)
@@ -147,7 +177,7 @@ backend/src/main/java/com/company/policy/
 | 票据缓存、页面签名、config/ready | 已实现 |
 | requestAccess、身份核验、用户落库 | 已实现；用户已确认真实登录成功 |
 | 普通浏览器扫码、网页授权与回调 | 已实现，已看到真实二维码并验证模拟扫码回调。真实手机确认后的登录待联调。[飞书登录验证记录](feishu-auth-flow.md#验证记录) |
-| 会话恢复、退出、来源保护 | 已实现；恢复及退出重登未逐项人工验证 |
+| 会话恢复、退出、来源保护 | 已实现。角色调整后的旧会话分流已通过 Chrome 与隔离 H2 验证。真实飞书账号重新进入工作台和退出重登待复测。[验证记录](feishu-auth-flow.md#验证记录) |
 | 渠道显隐、平台独立明细、补贴切换 | 已实现前端交互 |
 | 草稿保存、回填、正式提交 | 已接入本人草稿保存和回填、提交快照和商品明细 |
 | 我的提交与申请详情 | 已接入本人分页列表、当前申请详情及驳回原因，界面不展示提交轮次和历轮审核；后台保留日志和快照。草稿及已驳回申请可继续编辑，本人未提交草稿可物理删除。商品及补贴通过 `PolicySubmissionGoods.vue` 按机型、配置汇总颜色，直接对应平台与方案，指定卡按平台显示数量 |

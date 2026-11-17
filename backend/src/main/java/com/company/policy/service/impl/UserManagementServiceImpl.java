@@ -7,6 +7,7 @@ import com.company.policy.dto.UserStatusUpdate;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserManagementMapper;
 import com.company.policy.mapper.UserManagementMapper.DetailRow;
+import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.UserManagementService;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
