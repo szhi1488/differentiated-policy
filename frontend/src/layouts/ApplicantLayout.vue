@@ -8,7 +8,6 @@ import { APPLICANT_NAV_GROUPS } from '../constants/navigation'
 import { useWorkspaceSidebar } from './use-workspace-sidebar'
 import { usePolicyForm } from '../composables/usePolicyForm'
 import { authSession } from '../composables/useAuthSession'
-import { confirmPolicyAction } from './confirm-policy-action'
 import './workspace-navigation.css'
 import './applicant-layout.css'
 
@@ -16,7 +15,7 @@ const route = useRoute()
 const router = useRouter()
 const policyMenuOpen = ref(true)
 const { collapsed, expanded, toggle } = useWorkspaceSidebar(520)
-const state = usePolicyForm(confirmPolicyAction)
+const state = usePolicyForm()
 const applicationRoute = computed(() => ({
   name: 'apply',
   query: state.record.value ? { policyId: state.record.value.id } : {},
@@ -96,11 +95,13 @@ onScopeDispose(state.clear)
         @toggle-menu="toggle"
         @navigate="(name) => router.push(name === 'apply' ? applicationRoute : { name })"
       />
-      <main class="workspace-main">
-        <PolicyBanner />
-        <router-view />
-        <p class="workspace-caption">差异化政策管理 · 申请人工作台</p>
-      </main>
+      <div class="workspace-content-background">
+        <main class="workspace-main">
+          <PolicyBanner />
+          <router-view />
+          <p class="workspace-caption">差异化政策管理 · 申请人工作台</p>
+        </main>
+      </div>
     </div>
   </div>
 </template>

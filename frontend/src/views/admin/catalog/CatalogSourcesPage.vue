@@ -3,6 +3,7 @@ import { ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message-box/style/css'
 import { computed, reactive, ref } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
+import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import { useSourceGoods } from '../../../composables/useSourceGoods'
 import {
   GOODS_BRANDS,
@@ -126,12 +127,12 @@ async function confirmCancel(job) {
 
 <template>
   <section class="source-goods" aria-labelledby="source-goods-title">
-    <header class="source-banner">
-      <span class="source-banner-icon"><AppIcon name="document" :size="27" /></span>
-      <div class="source-heading">
-        <h1 id="source-goods-title">源商品库（吉客云）</h1>
-        <p>按品牌查询和导入吉客云商品。</p>
-      </div>
+    <header class="source-banner workspace-page-banner">
+      <WorkspacePageHeading
+        title="源商品库（吉客云）"
+        icon="document"
+        heading-id="source-goods-title"
+      />
       <div class="source-banner-actions">
         <el-tag v-if="activeJob" :type="GOODS_SYNC_STATUS[activeJob.status]?.[1]" size="small">
           {{ GOODS_SYNC_STATUS[activeJob.status]?.[0] }}
@@ -348,35 +349,10 @@ async function confirmCancel(job) {
   min-width: 0;
 }
 .source-banner {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 18px;
-  min-height: 86px;
-  border: 1px solid #e3ecfb;
-  border-radius: 10px;
-  background: linear-gradient(105deg, #e6efff, #f0f5ff 76%, #e8f1ff);
-}
-.source-banner-icon {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 46px;
-  border-radius: 9px;
-  background: linear-gradient(150deg, #5ca5ff, #267bf2);
-  color: #fff;
-  box-shadow: 0 4px 10px #3079dc24;
-}
-.source-heading h1 {
-  font-size: 23px;
-  font-weight: 700;
-  color: #10213a;
-}
-.source-heading p {
-  margin-top: 5px;
-  color: #465b77;
-  line-height: 1.6;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
 .source-banner-actions {
   display: flex;
@@ -430,7 +406,7 @@ async function confirmCancel(job) {
 }
 .source-panel {
   min-width: 0;
-  margin-top: 12px;
+  margin-top: 16px;
   padding: 0 16px 4px;
   border: 1px solid #e8eef8;
   border-radius: 10px;
@@ -515,24 +491,10 @@ async function confirmCancel(job) {
   row-gap: 6px;
 }
 @media (max-width: 600px) {
-  .source-banner {
-    gap: 10px;
-    padding: 13px 12px;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .source-banner-icon {
-    display: none;
-  }
   .source-banner-actions {
     flex-direction: column-reverse;
     align-items: flex-end;
     gap: 4px;
-  }
-  .source-heading h1 {
-    font-size: 19px;
-  }
-  .source-heading p {
-    font-size: 12px;
   }
   .source-panel {
     padding-inline: 10px;

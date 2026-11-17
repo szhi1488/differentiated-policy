@@ -1,10 +1,9 @@
 .catalog-cleaning {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   min-width: 0;
 }
 
-.cleaning-page-heading,
 .cleaning-page-actions,
 .cleaning-filter-actions,
 .cleaning-pagination,
@@ -26,10 +25,10 @@
   justify-content: space-between;
 }
 
-.cleaning-page-heading h1 {
-  margin: 0;
-  color: var(--el-text-color-primary);
-  font-size: clamp(20px, 2vw, 25px);
+.cleaning-page-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .cleaning-card {

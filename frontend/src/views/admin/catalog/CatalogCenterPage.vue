@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
+import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import { useCatalogCenter } from '../../../composables/useCatalogCenter'
 import { useCatalogDictionary } from '../../../composables/useCatalogDictionary'
 import { CATALOG_SALES_STATES as statuses } from '../../../constants/catalog'
@@ -298,13 +299,8 @@ async function confirmDeleteProduct(row) {
 
 <template>
   <section class="catalog-center" aria-labelledby="catalog-center-title">
-    <header class="catalog-center-heading">
-      <div>
-        <div class="catalog-center-title">
-          <h1 id="catalog-center-title">商品中心</h1>
-        </div>
-        <p>集中查看手机商品、规格和销售状态</p>
-      </div>
+    <header class="catalog-center-heading workspace-page-banner">
+      <WorkspacePageHeading title="商品中心" icon="box" heading-id="catalog-center-title" />
       <div class="catalog-center-actions">
         <el-button size="small" @click="downloadProducts(null, '商品导入模板-示例.csv')">
           <AppIcon name="download" :size="14" />
@@ -317,7 +313,7 @@ async function confirmDeleteProduct(row) {
           <AppIcon name="upload" :size="14" />
           批量导入
         </el-button>
-        <el-button type="success" size="small" @click="openProductEditor()">
+        <el-button type="primary" size="small" @click="openProductEditor()">
           <AppIcon name="plus" :size="14" />
           新增商品
         </el-button>

@@ -78,6 +78,8 @@ CREATE TABLE `goods` (
 CREATE ALIAS IF NOT EXISTS JSON_QUOTE FOR "com.company.policy.controller.PolicyJsonFunctions.quote";
 CREATE ALIAS IF NOT EXISTS JSON_CONTAINS FOR "com.company.policy.controller.PolicyJsonFunctions.contains";
 CREATE ALIAS IF NOT EXISTS JSON_SEARCH FOR "com.company.policy.controller.PolicyJsonFunctions.search";
+CREATE ALIAS IF NOT EXISTS JSON_EXTRACT FOR "com.company.policy.controller.PolicyJsonFunctions.extract";
+CREATE ALIAS IF NOT EXISTS JSON_UNQUOTE FOR "com.company.policy.controller.PolicyJsonFunctions.unquote";
 
 CREATE TABLE `policy_apply` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,

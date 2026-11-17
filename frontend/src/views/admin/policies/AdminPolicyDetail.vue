@@ -6,31 +6,31 @@ import AttachmentDownload from '../../../components/AttachmentDownload.vue'
 import {
   CHANNEL_LABELS,
   PLATFORM_LABELS,
-  PRICE_BASE_LABELS,
   SCENE_LABELS,
   VERIFY_LABELS,
 } from '../../../constants/policy'
 import { policyTime } from '../../../utils/policy-adapter'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
+import { subsidyText } from '../../../utils/policy-coverage'
+import AdminPolicyCoverage from './AdminPolicyCoverage.vue'
 
 const props = defineProps({ detail: { type: Object, required: true } })
-defineEmits(['show-policy'])
+defineEmits(['show-reference'])
 const policy = computed(() => props.detail.policy)
 const form = computed(() => props.detail.snapshot.form)
 const audit = computed(() => props.detail.audit)
-const coverage = computed(() => props.detail.coverage)
+const reviewed = computed(() => ['APPROVED', 'REJECTED'].includes(audit.value.auditStatus))
+const auditComment = computed(() =>
+  audit.value.auditComment?.trim()
+    ? audit.value.auditComment
+    : audit.value.auditStatus === 'REJECTED'
+      ? '未填写审核意见'
+      : '',
+)
 const goods = computed(
   () => new Map(props.detail.snapshot.goods.map((item) => [item.goodsId, item])),
 )
 const time = (value) => policyTime(value).replace('T', ' ')
-const coverageLabels = {
-  NEW: '生效时新增',
-  REPLACES: '生效时覆盖',
-  RETAINED: '较新的申请继续适用',
-  EFFECTIVE: '当前生效',
-  SCHEDULED: '等待开始时间',
-  SUPERSEDED: '已被较新申请覆盖',
-}
 
 function product(target) {
   const item = goods.value.get(target.goodsId)
@@ -87,28 +87,9 @@ const specifiedRows = computed(() =>
       }))
     }),
 )
-const coverageRows = computed(() =>
-  (coverage.value?.items ?? []).map((row) => {
-    const item = goods.value.get(row.goodsId)
-    return {
-      ...row,
-      key: `${row.goodsId}/${row.platformCode}`,
-      name: item?.goodsName ?? `商品 ${row.goodsId}`,
-    }
-  }),
-)
 
 function platformNames(codes) {
   return codes.map((code) => PLATFORM_LABELS[code]).join('、')
-}
-
-function subsidyText(subsidy) {
-  if (!subsidy) {
-    return '—'
-  }
-  return subsidy.subsidyMode === 'FIXED'
-    ? `固定补贴 · ${subsidy.fixedAmount} 元${typeof subsidy.maxSubsidyAmount === 'string' ? ` · 上限 ${subsidy.maxSubsidyAmount} 元` : ''}`
-    : `比例补贴 · ${subsidy.ratio}% · ${PRICE_BASE_LABELS[subsidy.priceBase] ?? '—'}`
 }
 
 const basicFields = computed(() => {
@@ -223,7 +204,7 @@ const basicFields = computed(() => {
           </dd>
         </div>
       </dl>
-      <section v-if="audit.auditTime || audit.auditComment" class="admin-policy-audit">
+      <section v-if="reviewed || audit.auditTime || audit.auditComment" class="admin-policy-audit">
         <h4>审核信息</h4>
         <dl class="admin-policy-support-fields">
           <div v-if="audit.auditTime" class="admin-policy-audit-meta">
@@ -234,47 +215,17 @@ const basicFields = computed(() => {
             <dt>审核时间</dt>
             <dd>{{ time(audit.auditTime) }}</dd>
           </div>
-          <div v-if="audit.auditComment">
+          <div v-if="auditComment">
             <dt>审核意见</dt>
-            <dd class="admin-policy-note">{{ audit.auditComment }}</dd>
+            <dd class="admin-policy-note">{{ auditComment }}</dd>
           </div>
         </dl>
       </section>
     </section>
   </div>
-  <section v-if="coverage" class="admin-policy-detail-section admin-policy-coverage">
-    <h3>{{ policy.status === 'PENDING' ? '覆盖预览' : '生效范围' }}</h3>
-    <p v-if="policy.status === 'PENDING'">
-      假设现在审核通过，最早生效于 {{ time(coverage.effectiveFrom) }}（北京时间）
-    </p>
-    <p v-else>
-      生效条件自 {{ time(coverage.effectiveFrom) }} 满足 · 查询时间
-      {{ time(coverage.at) }}（北京时间）
-    </p>
-    <el-table :data="coverageRows" row-key="key" size="small" class="admin-policy-table">
-      <el-table-column prop="name" label="商品" min-width="174" />
-      <el-table-column label="平台" width="84">
-        <template #default="{ row }">{{ PLATFORM_LABELS[row.platformCode] }}</template>
-      </el-table-column>
-      <el-table-column label="适用结果" min-width="138">
-        <template #default="{ row }">{{ coverageLabels[row.outcome] }}</template>
-      </el-table-column>
-      <el-table-column
-        :label="policy.status === 'PENDING' ? '对照政策' : '当前适用政策'"
-        min-width="150"
-      >
-        <template #default="{ row }">
-          <el-button
-            v-if="row.winner && row.winner.id !== policy.id"
-            link
-            type="primary"
-            @click="$emit('show-policy', row.winner.id)"
-          >
-            {{ row.winner.policyCode }}
-          </el-button>
-          <span v-else>{{ row.winner ? '本申请' : '—' }}</span>
-        </template>
-      </el-table-column>
-    </el-table>
-  </section>
+  <AdminPolicyCoverage
+    v-if="detail.coverage"
+    :detail="detail"
+    @show-reference="$emit('show-reference', $event)"
+  />
 </template>

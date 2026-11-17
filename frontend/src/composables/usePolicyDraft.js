@@ -41,6 +41,7 @@ export function usePolicyDraft(form, confirming, attachments) {
 
   function clear() {
     operation?.abort()
+    operation = undefined
     pendingCreate = undefined
     record.value = null
     loading.value = false
@@ -76,7 +77,9 @@ export function usePolicyDraft(form, confirming, attachments) {
         loadError.value = error.message
       }
     } finally {
-      if (!controller.signal.aborted) {
+      // 仅当前请求清理状态；取消也须复位，旧请求不得影响后续请求。
+      if (operation === controller) {
+        operation = undefined
         loading.value = false
       }
     }
@@ -192,7 +195,8 @@ export function usePolicyDraft(form, confirming, attachments) {
         'error',
       )
     } finally {
-      if (!controller.signal.aborted) {
+      if (operation === controller) {
+        operation = undefined
         writing.value = ''
       }
     }
@@ -230,7 +234,8 @@ export function usePolicyDraft(form, confirming, attachments) {
       }
       return false
     } finally {
-      if (!controller.signal.aborted) {
+      if (operation === controller) {
+        operation = undefined
         writing.value = ''
       }
     }

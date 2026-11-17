@@ -1,6 +1,11 @@
 /* 两种工作台共用侧栏菜单视觉，角色布局分别维护尺寸与手机交互。 */
 .workspace-sidebar {
-  background: linear-gradient(168deg, #fff 1%, #f9fbff 75%);
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* 透明波浪贴底并按侧栏宽度等比缩放，不随页面内容拉伸。 */
+  background:
+    url('../assets/workspace-sidebar-waves.png') center bottom / 100% auto no-repeat,
+    linear-gradient(180deg, #fff 0%, #f5f7ff 55%, #eef3ff 100%);
   border-right: 1px solid #e6ecf6;
 }
 .workspace-sidebar .workspace-brand {

@@ -102,28 +102,19 @@ function navigate(item) {
           <p v-else>在「商品」导入、清洗和维护商品，在「政策管理」查看及审核政策申请。</p>
         </div>
       </el-popover>
-      <el-popover placement="bottom-end" :width="220" trigger="click">
-        <template #reference>
-          <el-button class="workspace-user-button" text :aria-label="`当前用户：${displayName}`">
-            <span class="workspace-user-avatar" aria-hidden="true">
-              <img
-                v-if="avatarUrl && !avatarFailed"
-                :src="avatarUrl"
-                alt=""
-                referrerpolicy="no-referrer"
-                @error="avatarFailed = true"
-              />
-              <template v-else>{{ initial }}</template>
-            </span>
-            <span class="workspace-user-name">{{ displayName }}</span>
-            <AppIcon name="chevron" :size="14" />
-          </el-button>
-        </template>
-        <div class="workspace-topbar-panel">
-          <strong>{{ displayName }}</strong>
-          <p>{{ roleLabel }}工作台 · 飞书登录</p>
-        </div>
-      </el-popover>
+      <div class="workspace-user" :aria-label="`当前用户：${displayName}`">
+        <span class="workspace-user-avatar" aria-hidden="true">
+          <img
+            v-if="avatarUrl && !avatarFailed"
+            :src="avatarUrl"
+            alt=""
+            referrerpolicy="no-referrer"
+            @error="avatarFailed = true"
+          />
+          <template v-else>{{ initial }}</template>
+        </span>
+        <span class="workspace-user-name">{{ displayName }}</span>
+      </div>
     </div>
   </header>
 </template>
@@ -169,15 +160,15 @@ function navigate(item) {
 .workspace-menu-search :deep(.el-autocomplete) {
   width: 100%;
 }
-.workspace-user-button {
+.workspace-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   max-width: 180px;
   height: 36px;
   padding: 2px 4px;
   color: #25334b;
-}
-.workspace-user-button :deep(> span) {
-  min-width: 0;
-  gap: 8px;
 }
 .workspace-user-avatar {
   display: grid;
@@ -228,7 +219,7 @@ function navigate(item) {
   .workspace-menu-search {
     width: 170px;
   }
-  .workspace-user-button {
+  .workspace-user {
     max-width: 110px;
   }
 }
@@ -247,7 +238,7 @@ function navigate(item) {
     order: 1;
     width: 100%;
   }
-  .workspace-user-button {
+  .workspace-user {
     max-width: 120px;
   }
 }

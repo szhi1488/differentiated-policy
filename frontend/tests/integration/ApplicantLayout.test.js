@@ -448,7 +448,7 @@ describe('申请人工作台组件协作', () => {
     await button('读取服务端版本').trigger('click')
     await flushPromises()
     const confirm = [...document.querySelectorAll('.el-message-box button')].find((item) =>
-      item.textContent.includes('确认清除'),
+      item.textContent.includes('读取服务端版本'),
     )
     confirm.click()
     await flushPromises()
@@ -629,7 +629,7 @@ describe('申请人工作台组件协作', () => {
     await button('继续编辑').trigger('click')
     await flushPromises()
     const confirm = [...document.querySelectorAll('.el-message-box button')].findLast((item) =>
-      item.textContent.includes('确认清除'),
+      item.textContent.includes('打开申请'),
     )
     confirm.click()
     await vi.waitFor(() => expect(wrapper.text()).toContain('申请单号 QA-321'))
@@ -1250,7 +1250,7 @@ describe('申请人工作台组件协作', () => {
     channel.vm.$emit('update:modelValue', 'BILLION')
     await flushPromises()
     const confirm = [...document.querySelectorAll('.el-message-box button')].findLast((item) =>
-      item.textContent.includes('确认清除'),
+      item.textContent.includes('确认切换'),
     )
     confirm.click()
     await flushPromises()

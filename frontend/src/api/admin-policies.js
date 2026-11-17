@@ -17,6 +17,15 @@ export function readAdminPolicy(id, signal) {
   return request(policyPath(id), { signal })
 }
 
+export function listAdminPolicyAuditLogs(id, { page, pageSize }, signal) {
+  const params = new URLSearchParams({ page, pageSize })
+  return request(`${policyPath(id)}/audit-logs?${params}`, { signal })
+}
+
+export function readAdminPolicyAuditLog(id, logId, signal) {
+  return request(`${policyPath(id)}/audit-logs/${encodeURIComponent(logId)}`, { signal })
+}
+
 export function reviewAdminPolicy(id, body, signal) {
   return request(`${policyPath(id)}/review`, {
     method: 'POST',

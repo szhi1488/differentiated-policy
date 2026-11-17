@@ -43,6 +43,18 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         meta: { role: 'ADMIN' },
         component: () => import('../views/admin/policies/AdminPoliciesPage.vue'),
       },
+      {
+        path: '/admin/model-subsidies',
+        name: 'admin-model-subsidies',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/policies/AdminModelSubsidiesPage.vue'),
+      },
+      {
+        path: '/admin/users',
+        name: 'admin-users',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/users/AdminUsersPage.vue'),
+      },
       { path: '/:pathMatch(.*)*', component: EmptyRoute },
     ],
     scrollBehavior: () => ({ top: 0 }),

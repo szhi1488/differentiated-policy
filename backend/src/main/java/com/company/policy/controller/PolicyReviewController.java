@@ -54,7 +54,8 @@ public class PolicyReviewController {
     @GetMapping
     @Operation(
             summary = "分页查看已提交的政策",
-            description = "按本轮提交时间倒序。状态可选 PENDING、APPROVED 或 REJECTED。提交日期按北京时间筛选。")
+            description =
+                    "业务字段展示和筛选以最近正式提交快照为准，驳回后暂存修改在重提成功后更新。按本轮提交时间倒序。状态可选 PENDING、APPROVED 或 REJECTED。提交日期按北京时间筛选。")
     public Page list(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize,

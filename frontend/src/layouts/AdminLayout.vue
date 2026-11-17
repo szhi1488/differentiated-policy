@@ -46,12 +46,7 @@ watch(
         class="workspace-brand"
         @click="menuOpen = false"
       >
-        <span class="logo-grid" aria-hidden="true">
-          <i></i>
-          <i></i>
-          <i></i>
-          <i></i>
-        </span>
+        <AppIcon name="workspace-brand" class="admin-brand-icon" :size="23" />
         <strong>电商运营平台</strong>
       </router-link>
 
@@ -101,9 +96,11 @@ watch(
         @toggle-menu="toggle"
         @navigate="(name) => router.push({ name })"
       />
-      <main class="admin-content">
-        <router-view />
-      </main>
+      <div class="workspace-content-background">
+        <main class="admin-content">
+          <router-view />
+        </main>
+      </div>
     </div>
   </div>
 </template>

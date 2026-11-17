@@ -1,29 +1,20 @@
 .catalog-center {
-  --center-line: #e3eaf3;
-  --center-muted: #536580;
-  --center-green: #087b50;
+  --center-line: #e3ebf7;
+  --center-muted: #556784;
+  --center-blue: #176ff2;
   min-width: 0;
 }
-.catalog-center-heading,
-.catalog-center-title,
 .catalog-center-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .catalog-center-heading {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.catalog-center-title h1 {
-  font-size: 25px;
-  line-height: 1.35;
-}
-.catalog-center-heading p {
-  margin-top: 3px;
-  color: var(--center-muted);
+  margin-bottom: 16px;
 }
 .catalog-center-actions {
   flex-wrap: wrap;
@@ -42,7 +33,7 @@
 }
 .catalog-center-metric {
   --metric-tint: #e9f1ff;
-  --metric-color: #175fdf;
+  --metric-color: var(--center-blue);
   position: relative;
   overflow: hidden;
   min-width: 0;
@@ -50,6 +41,7 @@
   border: 1px solid var(--center-line);
   border-radius: 9px;
   background: #fff;
+  box-shadow: 0 3px 12px #1f53950a;
 }
 .catalog-center-metric[data-tone='green'] {
   --metric-tint: #e7f7ee;
@@ -76,6 +68,7 @@
   align-items: center;
   gap: 7px;
   font-size: 13px;
+  color: #263852;
 }
 .catalog-center-metric h2 span {
   display: grid;
@@ -93,20 +86,24 @@
   font-size: 12px;
 }
 .catalog-center-metric strong {
-  color: #17243a;
+  color: #263852;
   font-size: 25px;
   font-variant-numeric: tabular-nums;
 }
 .catalog-center .catalog-center-tabs > .el-tabs__header {
-  --el-color-primary: var(--center-green);
   margin-bottom: 8px;
   padding-inline: 12px;
   border: 1px solid var(--center-line);
-  border-radius: 8px;
+  border-radius: 9px;
   background: #fff;
+  box-shadow: 0 3px 12px #1f53950a;
+}
+.catalog-center-tabs > .el-tabs__header .el-tabs__item {
+  font-weight: 600;
 }
 .catalog-center-tabs > .el-tabs__header .el-tabs__nav-wrap::after {
-  display: none;
+  height: 1px;
+  background-color: var(--center-line);
 }
 .catalog-center-grid {
   display: grid;
@@ -121,6 +118,7 @@
   border: 1px solid var(--center-line);
   border-radius: 9px;
   background: #fff;
+  box-shadow: 0 3px 12px #1f53950a;
 }
 .catalog-center-categories {
   --el-collapse-border-color: var(--center-line);
@@ -132,6 +130,11 @@
   padding-inline: 9px;
   font-weight: 650;
   white-space: nowrap;
+  color: #263852;
+  background: #f8fafd;
+}
+.catalog-center-categories .el-collapse-item__header > svg {
+  color: var(--center-blue);
 }
 .catalog-center-categories .el-collapse-item__wrap {
   border-bottom: 0;
@@ -154,7 +157,7 @@
   color: var(--center-muted);
 }
 .catalog-center-switch .el-switch {
-  --el-switch-on-color: #0a8d5b;
+  --el-switch-on-color: var(--center-blue);
 }
 .catalog-center .catalog-center-tree-row {
   display: flex;
@@ -174,8 +177,8 @@
   font-size: 11px;
 }
 .catalog-center .catalog-center-tree-row[aria-pressed='true'] {
-  background: #eaf8f0;
-  color: var(--center-green);
+  background: #eaf2ff;
+  color: var(--center-blue);
   font-weight: 700;
 }
 .catalog-center .catalog-center-series {
@@ -207,6 +210,11 @@
 }
 .catalog-center-filters {
   padding: 9px;
+  border-color: #edf1f7;
+  background: #f8fafd;
+}
+.catalog-center-filter-row .el-form-item__label {
+  color: var(--center-muted);
 }
 .catalog-center-filter-row,
 .catalog-center-filter-actions {
@@ -242,15 +250,18 @@
 }
 .catalog-center-table .el-table {
   --el-table-header-bg-color: #f0f4fa;
-  --el-table-header-text-color: #17243a;
+  --el-table-header-text-color: #263852;
   --el-table-text-color: #253550;
-  --el-table-border-color: #edf1f7;
+  --el-table-border-color: #eaf0f7;
   --el-table-row-hover-bg-color: #f4f8ff;
   border-radius: 6px;
 }
 .catalog-center-table .el-table th {
   height: 35px;
-  border-right-color: #d5deec;
+}
+/* 保留单元格边框占位和列宽拖动，仅淡化纵向分隔，沿用政策列表的横线风格。 */
+.catalog-center-table .el-table :is(th, td).el-table__cell {
+  border-right-color: transparent;
 }
 /* 手柄位于 Element Plus 表头右侧的原生拖动区内。 */
 .catalog-center-table th.catalog-center-resizable::after {
@@ -259,7 +270,7 @@
   inset: 10px 0 10px auto;
   width: 6px;
   cursor: col-resize;
-  background: linear-gradient(#9badc5, #9badc5) right 1px center / 2px 100% no-repeat;
+  background: linear-gradient(#c4d3e8, #c4d3e8) right 1px center / 2px 100% no-repeat;
 }
 .catalog-center-table th.catalog-center-resizable:hover::after {
   background-image: linear-gradient(var(--el-color-primary), var(--el-color-primary));
@@ -373,12 +384,6 @@
   }
 }
 @media (max-width: 600px) {
-  .catalog-center-heading {
-    gap: 8px;
-  }
-  .catalog-center-title h1 {
-    font-size: 22px;
-  }
   .catalog-center-metrics {
     gap: 4px;
   }

@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { useAttachments } from './useAttachments'
 import { usePolicyDraft } from './usePolicyDraft'
+import { confirmPolicyAction } from './confirm-policy-action'
 import { BILLION_PLATFORMS, PLATFORM_LABELS, RETAIL_PLATFORMS } from '../constants/policy'
 import {
   changeChannel,
@@ -14,7 +15,7 @@ import {
 } from '../utils/policy-form'
 
 /** 维护当前页面的表单状态，不承担服务端提交、权限判断或政策生效计算。 */
-export function usePolicyForm(confirm = (message) => window.confirm(message)) {
+export function usePolicyForm(confirm = confirmPolicyAction) {
   const form = ref(createForm())
   const confirming = ref(false)
   const attachments = useAttachments({
@@ -56,7 +57,12 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     }
     if (
       (form.value.platforms.length || form.value.cards.length) &&
-      !(await confirmed(() => confirm('切换渠道会清除已选平台及对应机型明细，是否继续？')))
+      !(await confirmed(() =>
+        confirm('切换渠道会清除已选平台及对应机型明细，是否继续？', {
+          confirmButtonText: '确认切换',
+          cancelButtonText: '保留内容',
+        }),
+      ))
     ) {
       return false
     }
@@ -88,7 +94,10 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       if (
         form.value.cards.some((model) => model.platforms[code]) &&
         !(await confirmed(() =>
-          confirm(`取消${PLATFORM_LABELS[code]}会移除该平台的数量和补贴方案分配，是否继续？`),
+          confirm(`取消${PLATFORM_LABELS[code]}会移除该平台的数量和补贴方案分配，是否继续？`, {
+            confirmButtonText: '移除平台',
+            cancelButtonText: '保留平台',
+          }),
         ))
       ) {
         return
@@ -195,7 +204,12 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
   async function reset() {
     if (
       persistence.busy.value ||
-      !(await confirmed(() => confirm('确定清空当前填写的内容并打开新申请吗？')))
+      !(await confirmed(() =>
+        confirm('确定清空当前填写的内容并打开新申请吗？', {
+          confirmButtonText: '新建申请',
+          cancelButtonText: '保留内容',
+        }),
+      ))
     ) {
       return false
     }
@@ -244,6 +258,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
           model.id === undefined
             ? '移除平台会清除对应的补贴方案分配，是否继续？'
             : '移除平台会清除对应的数量和补贴方案分配，是否继续？',
+          { confirmButtonText: '移除平台', cancelButtonText: '保留平台' },
         ),
       ))
     ) {
@@ -302,6 +317,7 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
           affected.length
             ? '删除该方案后，使用此方案的平台将改用方案 1，是否继续？'
             : '确定删除该补贴方案吗？',
+          { confirmButtonText: '删除方案', cancelButtonText: '保留方案' },
         ),
       ))
     ) {
@@ -322,7 +338,11 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
       model.id === undefined
         ? '确定移除所选配置及其补贴方案吗？'
         : '确定移除该特殊商品及其平台数量和补贴方案吗？'
-    if (await confirmed(() => confirm(message))) {
+    if (
+      await confirmed(() =>
+        confirm(message, { confirmButtonText: '移除商品卡', cancelButtonText: '保留商品卡' }),
+      )
+    ) {
       form.value.cards = form.value.cards.filter((item) => item.key !== cardKey)
       return true
     }
@@ -354,7 +374,12 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
   async function reloadDraft(id, force = true) {
     if (
       persistence.conflict.value &&
-      !(await confirmed(() => confirm('读取服务端版本会替换当前填写内容，是否继续？')))
+      !(await confirmed(() =>
+        confirm('读取服务端版本会替换当前填写内容，是否继续？', {
+          confirmButtonText: '读取服务端版本',
+          cancelButtonText: '保留内容',
+        }),
+      ))
     ) {
       return
     }
@@ -387,7 +412,12 @@ export function usePolicyForm(confirm = (message) => window.confirm(message)) {
     }
     if (
       (persistence.hasUnsavedChanges() || attachmentsFailed.value) &&
-      !(await confirmed(() => confirm('打开该申请会替换当前未保存的内容，是否继续？')))
+      !(await confirmed(() =>
+        confirm('打开该申请会替换当前未保存的内容，是否继续？', {
+          confirmButtonText: '打开申请',
+          cancelButtonText: '保留内容',
+        }),
+      ))
     ) {
       return false
     }

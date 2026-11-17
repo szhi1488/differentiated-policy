@@ -1,5 +1,11 @@
 export const ADMIN_NAV_GROUPS = [
   {
+    id: 'admin-system-links',
+    label: '系统管理',
+    icon: 'settings',
+    links: [{ name: 'admin-users', label: '用户管理' }],
+  },
+  {
     id: 'admin-catalog-links',
     label: '商品',
     icon: 'box',
@@ -13,7 +19,10 @@ export const ADMIN_NAV_GROUPS = [
     id: 'admin-policy-links',
     label: '政策管理',
     icon: 'document',
-    links: [{ name: 'admin-policies', label: '差异化政策' }],
+    links: [
+      { name: 'admin-policies', label: '差异化政策' },
+      { name: 'admin-model-subsidies', label: '机型补贴查询' },
+    ],
   },
 ]
 

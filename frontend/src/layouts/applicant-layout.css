@@ -15,11 +15,14 @@
   display: none;
 }
 .workspace .workspace-main {
-  padding: 28px 28px 0;
-  max-width: 1860px;
+  padding: 16px 20px 0;
+  max-width: 1800px;
   margin: auto;
 }
 .workspace .applicant-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   margin-left: 196px;
   width: calc(100% - 196px);
   min-width: 0;
@@ -53,8 +56,15 @@
     margin-left: 160px;
     width: calc(100% - 160px);
   }
+}
+@media (max-width: 850px) {
   .workspace .workspace-main {
-    padding: 16px 12px 0;
+    padding: 14px 14px 0;
+  }
+}
+@media (max-width: 600px) {
+  .workspace .workspace-main {
+    padding: 12px 10px 0;
   }
 }
 @media (max-width: 520px) {
@@ -68,6 +78,8 @@
     align-items: center;
     border-right: 0;
     border-bottom: 1px solid #e6ecf6;
+    /* 手机导航为横向入口，保留浅蓝底色，避免波浪遮扰菜单。 */
+    background: linear-gradient(110deg, #fff, #eef3ff);
   }
   .workspace .workspace-brand {
     padding: 20px 12px;
@@ -89,9 +101,6 @@
     padding: 10px 8px;
     font-size: 12px;
     white-space: nowrap;
-  }
-  .workspace .workspace-main {
-    padding: 12px 10px 0;
   }
   .workspace .applicant-body {
     margin-left: 0;

@@ -47,6 +47,10 @@ class CatalogAccess {
         return requireAdministrator(session, "POLICY", "政策审核");
     }
 
+    UserInfo requireUserAdmin(CurrentUserResponse session) {
+        return requireAdministrator(session, "USER", "用户管理");
+    }
+
     private UserInfo requireAdministrator(CurrentUserResponse session, String domain, String page) {
         var user = users.findIdentity(session.tenantKey(), session.openId());
         if (user == null

@@ -198,132 +198,134 @@ function updateTime(value) {
 }
 </script>
 <template>
-  <el-form
-    class="policy-form"
-    :model="form"
-    :disabled="locked"
-    label-position="top"
-    @submit.prevent="submitForm"
-  >
-    <p v-if="record" class="policy-record-summary">
-      申请单号 {{ record.policyCode }} · {{ POLICY_STATUS_LABELS[record.status] }}
-    </p>
-    <p v-else-if="loading" class="policy-record-summary" role="status">正在读取申请…</p>
-    <PolicyRejectionNotice v-if="record" :policy="record" />
-    <PolicyBasicSection
-      :form="form"
-      :platforms="platforms"
-      @update-field="updateField"
-      @switch-channel="switchChannel"
-      @toggle-platform="togglePlatform"
-      @select-all="selectAll"
-    />
-    <PolicyTimeSection :form="form" @update-field="updateField" @update-time="updateTime" />
-    <section class="form-section" aria-labelledby="models-title">
-      <div class="section-heading">
-        <h2 id="models-title">
-          <span></span>
-          三、商品及补贴信息
-        </h2>
-        <div class="policy-goods-actions">
-          <el-button
-            :disabled="confirming || !selectedPlatforms.length"
-            @click="goodsPicker = { special: true }"
-          >
-            指定适用机型
-          </el-button>
-          <el-button
-            type="primary"
-            :disabled="confirming || !selectedPlatforms.length"
-            @click="goodsPicker = {}"
-          >
-            <AppIcon name="plus" :size="15" />
-            选择手机型号
-          </el-button>
+  <div class="policy-application-page">
+    <el-form
+      class="policy-form"
+      :model="form"
+      :disabled="locked"
+      label-position="top"
+      @submit.prevent="submitForm"
+    >
+      <p v-if="record" class="policy-record-summary">
+        申请单号 {{ record.policyCode }} · {{ POLICY_STATUS_LABELS[record.status] }}
+      </p>
+      <p v-else-if="loading" class="policy-record-summary" role="status">正在读取申请…</p>
+      <PolicyRejectionNotice v-if="record" :policy="record" />
+      <PolicyBasicSection
+        :form="form"
+        :platforms="platforms"
+        @update-field="updateField"
+        @switch-channel="switchChannel"
+        @toggle-platform="togglePlatform"
+        @select-all="selectAll"
+      />
+      <PolicyTimeSection :form="form" @update-field="updateField" @update-time="updateTime" />
+      <section class="form-section" aria-labelledby="models-title">
+        <div class="section-heading">
+          <h2 id="models-title">
+            <span></span>
+            三、商品及补贴信息
+          </h2>
+          <div class="policy-goods-actions">
+            <el-button
+              :disabled="confirming || !selectedPlatforms.length"
+              @click="goodsPicker = { special: true }"
+            >
+              指定适用机型
+            </el-button>
+            <el-button
+              type="primary"
+              :disabled="confirming || !selectedPlatforms.length"
+              @click="goodsPicker = {}"
+            >
+              <AppIcon name="plus" :size="15" />
+              选择手机型号
+            </el-button>
+          </div>
         </div>
-      </div>
-      <div class="policy-goods-summary">
-        <span>已选 {{ commonGoodsCount }} 件普通商品</span>
-        <span v-if="specifiedIds.length">{{ specifiedIds.length }} 件指定商品</span>
-      </div>
-      <el-empty
-        v-if="!form.cards.length"
-        class="policy-model-empty"
-        :image-size="52"
-        :description="
-          selectedPlatforms.length ? '可一次选择多个机型配置' : '请先在基础信息中选择平台'
-        "
-      />
-      <div v-else class="policy-model-list">
-        <PolicyModelCard
-          v-for="model in form.cards"
-          :key="model.key"
-          :model="model"
-          :platforms="selectedPlatforms"
-          :confirming="confirming || locked"
-          @set-model-platforms="setModelPlatforms($event, model.key)"
-          @update-model-platform="
-            (code, field, value) => updateModelPlatform(code, field, value, model.key)
+        <div class="policy-goods-summary">
+          <span>已选 {{ commonGoodsCount }} 件普通商品</span>
+          <span v-if="specifiedIds.length">{{ specifiedIds.length }} 件指定商品</span>
+        </div>
+        <el-empty
+          v-if="!form.cards.length"
+          class="policy-model-empty"
+          :image-size="52"
+          :description="
+            selectedPlatforms.length ? '可一次选择多个机型配置' : '请先在基础信息中选择平台'
           "
-          @edit-goods="editGoods(model.key, $event)"
-          @remove-model="removeModel(model.key)"
-          @remove-goods="removeGoods($event, model.key)"
-          @add-subsidy="addSubsidy(model.key)"
-          @update-subsidy="(key, field, value) => updateSubsidy(key, field, value, model.key)"
-          @remove-subsidy="removeSubsidy($event, model.key)"
         />
-      </div>
-      <PolicyGoodsPicker
-        v-if="goodsPicker"
-        :special="goodsPicker.special"
-        :editing="!!goodsPicker.cardKey"
-        :initial-goods="initialGoods"
-        :existing-goods="editingCard?.goods ?? []"
-        :added-keys="addedGoodsKeys"
-        :blocked-configurations="blockedConfigurations"
-        @close="goodsPicker = null"
-        @confirm="confirmGoods"
+        <div v-else class="policy-model-list">
+          <PolicyModelCard
+            v-for="model in form.cards"
+            :key="model.key"
+            :model="model"
+            :platforms="selectedPlatforms"
+            :confirming="confirming || locked"
+            @set-model-platforms="setModelPlatforms($event, model.key)"
+            @update-model-platform="
+              (code, field, value) => updateModelPlatform(code, field, value, model.key)
+            "
+            @edit-goods="editGoods(model.key, $event)"
+            @remove-model="removeModel(model.key)"
+            @remove-goods="removeGoods($event, model.key)"
+            @add-subsidy="addSubsidy(model.key)"
+            @update-subsidy="(key, field, value) => updateSubsidy(key, field, value, model.key)"
+            @remove-subsidy="removeSubsidy($event, model.key)"
+          />
+        </div>
+        <PolicyGoodsPicker
+          v-if="goodsPicker"
+          :special="goodsPicker.special"
+          :editing="!!goodsPicker.cardKey"
+          :initial-goods="initialGoods"
+          :existing-goods="editingCard?.goods ?? []"
+          :added-keys="addedGoodsKeys"
+          :blocked-configurations="blockedConfigurations"
+          @close="goodsPicker = null"
+          @confirm="confirmGoods"
+        />
+      </section>
+      <PolicyAttachmentsSection
+        :form="form"
+        :files="files"
+        :read-only="readOnly"
+        @update-field="updateField"
+        @add-files="addFiles"
+        @remove-file="removeFile"
+        @retry-file="retryFile"
       />
-    </section>
-    <PolicyAttachmentsSection
-      :form="form"
-      :files="files"
-      :read-only="readOnly"
-      @update-field="updateField"
-      @add-files="addFiles"
-      @remove-file="removeFile"
-      @retry-file="retryFile"
-    />
-    <footer class="form-actions">
-      <el-button v-if="!locked" :disabled="confirming" @click="resetForm">
-        {{ record ? '新建申请' : '清空表单' }}
+      <footer class="form-actions">
+        <el-button v-if="!locked" :disabled="confirming" @click="resetForm">
+          {{ record ? '新建申请' : '清空表单' }}
+        </el-button>
+        <el-button
+          v-if="!readOnly"
+          :disabled="confirming || conflict"
+          :loading="writing === 'save'"
+          @click="saveDraft"
+        >
+          保存草稿
+        </el-button>
+        <el-button
+          v-if="!readOnly"
+          native-type="submit"
+          type="primary"
+          :disabled="confirming || conflict"
+          :loading="writing === 'submit'"
+        >
+          提交申请
+          <AppIcon name="arrow" :size="15" />
+        </el-button>
+      </footer>
+    </el-form>
+    <div v-if="loadError || conflict || readOnly" class="form-actions">
+      <el-button v-if="loadError || conflict" :disabled="busy || confirming" @click="reload">
+        读取服务端版本
       </el-button>
-      <el-button
-        v-if="!readOnly"
-        :disabled="confirming || conflict"
-        :loading="writing === 'save'"
-        @click="saveDraft"
-      >
-        保存草稿
+      <el-button v-if="loadError || readOnly" :disabled="busy || confirming" @click="resetForm">
+        新建申请
       </el-button>
-      <el-button
-        v-if="!readOnly"
-        native-type="submit"
-        type="primary"
-        :disabled="confirming || conflict"
-        :loading="writing === 'submit'"
-      >
-        提交申请
-        <AppIcon name="arrow" :size="15" />
-      </el-button>
-    </footer>
-  </el-form>
-  <div v-if="loadError || conflict || readOnly" class="form-actions">
-    <el-button v-if="loadError || conflict" :disabled="busy || confirming" @click="reload">
-      读取服务端版本
-    </el-button>
-    <el-button v-if="loadError || readOnly" :disabled="busy || confirming" @click="resetForm">
-      新建申请
-    </el-button>
+    </div>
   </div>
 </template>

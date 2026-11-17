@@ -14,6 +14,25 @@ public final class PolicyJsonFunctions {
         return JSON.writeValueAsString(value);
     }
 
+    // 仅供 H2 验证管理员查询使用的单值路径，缺失路径与 JSON null 保持不同语义。
+    public static String extract(String document, String path) throws JsonProcessingException {
+        if (document == null || path == null) return null;
+        if (!path.matches("\\$\\.[A-Za-z]+(?:\\.[A-Za-z]+)*")) {
+            throw new IllegalArgumentException("测试未支持该 JSON_EXTRACT 路径");
+        }
+        var node = JSON.readTree(document);
+        for (var field : path.substring(2).split("\\.")) {
+            node = node.path(field);
+        }
+        return node.isMissingNode() ? null : JSON.writeValueAsString(node);
+    }
+
+    public static String unquote(String value) throws JsonProcessingException {
+        if (value == null) return null;
+        var node = JSON.readTree(value);
+        return node.isTextual() ? node.textValue() : value;
+    }
+
     // H2 缺少 MySQL JSON_CONTAINS，模拟平台字符串及附件嵌套对象的包含判断。
     public static boolean contains(String array, String value) throws JsonProcessingException {
         return array != null

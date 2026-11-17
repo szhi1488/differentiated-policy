@@ -1,5 +1,6 @@
 package com.company.policy.vo;
 
+import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import java.util.List;
@@ -38,11 +39,16 @@ public final class PolicyReviewResponse {
     public record Coverage(String at, String effectiveFrom, List<CoverageItem> items) {}
 
     public record CoverageItem(
-            String platformCode, String goodsId, String outcome, Winner winner) {}
+            String platformCode,
+            String goodsId,
+            String outcome,
+            Winner winner,
+            SubsidyPlan existingSubsidy) {}
 
     public record Winner(
             String id,
             String policyCode,
+            String auditLogId,
             int submissionVersion,
             String submittedAt,
             String effectiveFrom) {}

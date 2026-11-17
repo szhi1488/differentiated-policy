@@ -15,7 +15,14 @@
   overflow-y: auto;
 }
 .admin-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
   margin-left: var(--admin-sidebar-width);
+}
+.admin-sidebar .admin-brand-icon {
+  flex: none;
+  transform: rotate(-5deg);
 }
 .admin-content {
   max-width: 1800px;
@@ -68,6 +75,6 @@
     z-index: 19;
   }
   .admin-content {
-    padding-inline: 10px;
+    padding: 12px 10px 24px;
   }
 }

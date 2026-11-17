@@ -1,6 +1,6 @@
 # 系统整体架构
 
-更新日期：2026-11-15。源码现状与已确认但未实现能力分别标注。
+更新日期：2026-11-17。源码现状与已确认但未实现能力分别标注。
 
 2026-11-15 用户确认源商品与标准商品一对一：清洗或人工审核通过后，`goods.sku_id` 延续该来源的原始 SKU，不同源 SKU 的相同配置颜色不再归并；无来源手工商品 SKU 为空。用户确认删除旧表后重建，最新空库基线和核对 SQL 见[数据库设计](../sql/database-design.md#2026-11-15-原始-sku-一对一调整)。目标库调整由用户在 Navicat 执行。
 
@@ -32,6 +32,8 @@ flowchart LR
 
 吉客云只读服务独立于页面和数据库写入。服务端按 `brandName` 请求单页，校验返回品牌和游标顺序，向后续同步任务提供 SKU 原文、分类路径、修改时间、状态和下一页游标。[单页查询联调](catalog-admin-design.md#单页查询联调)
 
+管理员从「系统管理 → 用户管理」进入 `#/admin/users`。页面已接入用户列表、独立全量统计、详情、角色调整及账号启停，服务端实时核验本公司有效管理员。角色及启停写入校验最新详情中的旧值，成功后重读列表、统计和已打开的详情。[页面规则](admin-workspace.md#用户管理) · [用户接口](../api/user-api.md)
+
 ## 实际技术栈
 
 | 层 | 当前配置 |
@@ -46,14 +48,30 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 
 ## 前端组件与页面现状
 
+管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 已提供静态预览。`AdminModelSubsidiesPage.vue` 组织紧凑筛选及补贴明细，`PolicySubsidyTimeline.vue` 通过 ECharts 6.1.0 自定义图与 SVGRenderer 上下展示零售、百亿区间；`useSubsidyTimelineNavigation` 共用指针和缩放状态，示例集中在 `mocks/fixtures/model-subsidies.js`。比例显示计算基数，支持当前标记、独立商品、色块点击和右侧时点查询；悬停保持底色、移开恢复边框，移动指针不重建图表。「当前时间」读取浏览器时钟，按北京时间将查询日期范围带到今天，恢复完整缩放并同步两图指针和右侧时点结果。机型摘要、独立指针操作栏、冗余说明及明细下拉框已移除。页面保留示例标识，不调用商品或政策业务接口；真实已通过政策历史计算及申请人端未接入，无后端或数据库调整。[页面规则](admin-workspace.md#机型补贴查询静态预览) · [既往验证](frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)
+
+管理员五页及申请人提交政策、我的提交已统一侧栏、标题横幅和主内容区视觉：`workspace-sidebar-waves.png` 维护侧栏贴底波浪，`workspace-page-banner.png` 维护标题背景，`workspace-content-background.png` 在两角色布局的顶部导航下铺满正文区域。标题通过 `WorkspacePageHeading.vue` 复用 `AppIcon` SVG 线性图标，移除说明小字；共用 104px 横幅基准高度、桌面 22px／手机 20px 标题和 48px 图标底座。资源归属、裁切及响应式间距见[两角色工作台视觉](frontend-development.md#两角色工作台视觉)，各轮本地检查与模拟预览已记录，飞书真机仍待复测。
+
+2026-11-16 管理员批准前增加整单确认：`AdminPolicyApprovalDialog.vue` 通过 `useAdminPolicyApproval` 复用详情接口核对当前版本、提交轮次、待审状态、权限及覆盖结果，`utils/policy-approval.js` 比较覆盖的业务变化。变化时展示最新预览并要求勾选已核对，仅点击「确认通过」才发送审核请求，取消保留原审核上下文。通过不填写意见，已通过内容的空意见项隐藏，历史列表显示「—」。沿用原审核接口和覆盖算法；复核不锁定其他申请。已完成的检查及模拟预览见[批准确认验证](frontend-development.md#2026-11-16-审核通过前复核与确认)。
+
+2026-11-16 管理员列表、筛选、状态计数与详情摘要统一采用最近正式提交快照；驳回后的修改保存只用于本人继续编辑，重提成功后才切换管理员所见内容。权限、状态和并发版本仍由有效主表判断，未改表结构。[查询契约](../api/admin-api.md#列表与详情)
+
+2026-11-16 覆盖结果的普通选品先按型号配置与平台汇总，混合结果显示「部分覆盖」及分项数量，展开后查看各商品的结果、补贴和对照。指定卡保留单品。`policy-coverage-groups.js` 维护展示分组，`AdminPolicyCoverageReference.vue` 复用整组与逐件对照入口，后端仍按同渠道、同平台及同商品执行覆盖判断。布局使用浅色工具区，商品数量整合到型号配置列。验收与兼容规则见[型号配置汇总记录](frontend-development.md#2026-11-16-覆盖区型号配置总览与布局)。
+
+2026-11-16 管理员覆盖区由 `AdminPolicyCoverage.vue` 展示汇总、组合筛选与分页，`AdminPolicyReferenceDialog.vue` 独立读取并对照命中的提交轮次，返回保留原审核上下文；补贴定位及十进制差值在 `utils/policy-coverage.js`。后端 `winner` 增加审核日志 ID，复用原有单轮快照与附件接口，未修改覆盖规则和表结构。
+
+2026-11-16 管理员详情补上「审核记录」页签，`AdminPolicyHistory.vue` 配合 `useAdminPolicyHistory` 调用现有历轮列表及单轮快照接口，复用 `AdminPolicyDetail.vue` 展示该轮内容和附件。历史不提供审核写入或覆盖状态，当前申请继续沿用原审核流程。未调整后端和数据库结构。
+
 2026-11-11 已完成现有页面的 Element Plus 替换，依赖版本以 `frontend/package-lock.json` 为准。
 
 | 位置 | 已使用组件与行为 |
 | --- | --- |
 | `src/App.vue` | ConfigProvider 配置中文，统一会话按角色加载工作台 |
 | `layouts/components/WorkspaceTopbar.vue`、`constants/navigation.js` | 两角色共用顶部栏；按当前角色已有菜单搜索、当前位置、帮助及头像；侧栏与搜索共用管理员菜单定义 |
+| `components/WorkspacePageHeading.vue`、`layouts/components/PolicyBanner.vue`、`assets/styles/brand.css` | 两角色共用标题、SVG 图标和横幅尺寸；侧栏、横幅、正文分别使用各自背景资源，正文背景由两角色布局共用容器铺满 |
 | `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
-| `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 商品与政策管理导航、分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
+| `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 管理员侧栏依次为系统管理、商品、政策管理；默认进入源商品库，支持分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
+| `views/admin/users/AdminUsersPage.vue`、`UserDetailDrawer.vue`、`UserAccountAction.vue`、`composables/useUserManagement.js` | 管理员用户查询、角色调整和账号启停，五个接口经 `api/admin-users.js` 调用 |
 | `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和任务结果统计 |
 | `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、编辑、删除和字典维护 |
 | `views/admin/policies/AdminPoliciesPage.vue`、`AdminPolicyDetail.vue` | 政策状态页签、两行分区筛选、同尺寸查看和审核窗口、驳回原因小窗。筛选控件为 32px，标签位于上方；详情右侧将备注、附件及审核信息分区。普通机型可展开已选颜色，指定机型按平台显示颜色、数量和补贴 |
@@ -85,6 +103,8 @@ frontend/src/
   views/apply/                 政策申请页、我的提交及当前申请详情
     components/                基础、时间、明细和附件表单区块
   views/admin/catalog/         源商品库、商品清洗与识别、商品中心
+  views/admin/policies/        差异化政策审核及机型补贴静态预览
+  views/admin/users/           用户管理、详情抽屉及角色和启停确认弹窗
 
 backend/src/main/java/com/company/policy/
   controller/                  请求、校验与接口说明
@@ -111,7 +131,7 @@ backend/src/main/java/com/company/policy/
 - `policy_apply` 保存申请状态、整单字段及当前商品卡；`policy_audit_log` 保留各轮完整快照及审核结果；`policy_goods_detail` 保存各轮每个平台实际选中的商品 ID 及所属配置。补贴和数量从该轮快照读取。
 - 提交事务写入主表、快照和明细。审核事务更新主表及当前轮次审核结果。条件更新校验状态和版本。
 - ADMIN 是本地受控角色。商品管理接口按会话重新校验有效账号、管理员角色和公司飞书租户。公司内所有有效管理员共享商品数据。
-- 含删除标记的表查询须过滤；明细和日志通过父申请授权。身份查找须识别停用账号，不能重新注册绕过。
+- 含删除标记的表正常业务查询须过滤；用户管理为查看启用和停用账号，专门限定本公司 `user_info.is_deleted IN (0,1)`，不放宽操作人的有效管理员要求。明细和日志通过父申请授权。身份查找须识别停用账号，不能重新注册绕过。
 - 密钥仅在被忽略的 `backend/.env.local.properties` 或环境变量；用户 token 不存储、不下发。
 
 ## 当前实现与验证边界
@@ -136,6 +156,7 @@ backend/src/main/java/com/company/policy/
 | 管理员源商品库 | 导入弹窗支持全量和按建档日，提供续跑、建档日查看和组合筛选分页 |
 | 管理员商品中心 | 已接入列表、详情、统计、三级分类、即时筛选、手工新增、编辑、删除及字典维护。标准商品批量导入待接入 |
 | 管理员商品清洗 | 已接入手动清洗、SKU 预览、跨品牌结果、审核、重试和任务统计 |
+| 管理员用户管理 | 后端列表、独立统计、详情、角色调整及启停均已实现，复用现有用户表。前端已接入。目标 MySQL 并发和真实会话待联调。[接口及验证](../api/user-api.md) |
 | 审核、覆盖计算和生效 | 已接入审核、覆盖预览和有效政策查询。每份申请按自己的开始时间与通过时间确定生效条件，按提交顺序选最新。[覆盖规则](../business/override-engine.md) |
 
 项目未启用 Flyway 或自动建表。由用户在 Navicat 对空库执行十四表基线。商品中心的政策引用检查已使用 `policy_goods_detail`，目标库需具备该基线结构才能联调。目标库结构和实际导入结果以用户提供的 Navicat 或运行页面结果为准。[数据库设计与字段字典](../sql/database-design.md)

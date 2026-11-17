@@ -9,6 +9,7 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.validateFil
 import static com.company.policy.service.impl.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.entity.PolicyApply;
@@ -36,6 +37,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -257,6 +259,20 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                                                         row.platformCode(),
                                                         Long.toString(row.goodsId())),
                                         Function.identity()));
+        // 一次批量读取命中的已通过快照，按商品和平台核对旧补贴，避免逐商品查询。
+        Map<Long, Map<Scope, SubsidyPlan>> existingPlans = new HashMap<>();
+        existingPlans.put(log.getId(), indexSubsidies(snapshot));
+        var auditIds =
+                matches.values().stream()
+                        .map(WinnerRow::auditId)
+                        .filter(id -> !id.equals(log.getId()))
+                        .distinct()
+                        .toList();
+        if (!auditIds.isEmpty()) {
+            for (var prior : reviews.coverageSnapshots(entry.getTenantKey(), auditIds)) {
+                existingPlans.put(prior.getId(), indexSubsidies(snapshot(prior)));
+            }
+        }
         var items = new ArrayList<CoverageItem>();
         for (var card : snapshot.form().goodsForm().cards()) {
             for (var target : card.targets()) {
@@ -274,11 +290,34 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                                             currentTime,
                                             effectiveFrom,
                                             match),
-                                    match == null ? null : winner(match)));
+                                    match == null ? null : winner(match),
+                                    match == null
+                                            ? null
+                                            : existingPlans
+                                                    .getOrDefault(match.auditId(), Map.of())
+                                                    .get(scope)));
                 }
             }
         }
         return new Coverage(formatTime(at), formatTime(effectiveFrom), items);
+    }
+
+    private static Map<Scope, SubsidyPlan> indexSubsidies(Snapshot snapshot) {
+        var result = new HashMap<Scope, SubsidyPlan>();
+        for (var card : snapshot.form().goodsForm().cards()) {
+            var plans =
+                    card.subsidyPlans().stream()
+                            .collect(Collectors.toMap(SubsidyPlan::key, Function.identity()));
+            for (var assignment : card.platformAssignments()) {
+                var plan = plans.get(assignment.planKey());
+                if (plan != null) {
+                    for (var target : card.targets()) {
+                        result.put(new Scope(assignment.platformCode(), target.goodsId()), plan);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     private static String outcome(
@@ -307,6 +346,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         return new Winner(
                 Long.toString(row.policyId()),
                 policyNumber(row.policyId()),
+                Long.toString(row.auditId()),
                 row.version(),
                 formatTime(row.submittedAt()),
                 formatTime(row.effectiveFrom()));

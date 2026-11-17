@@ -16,6 +16,10 @@ import {
   VERIFY_LABELS,
 } from '../../../constants/policy'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
+import AdminPolicyHistory from './AdminPolicyHistory.vue'
+import AdminPolicyReferenceDialog from './AdminPolicyReferenceDialog.vue'
+import AdminPolicyApprovalDialog from './AdminPolicyApprovalDialog.vue'
+import { sameReviewVersion } from '../../../utils/policy-approval'
 import './admin-policies.css'
 
 const {
@@ -39,6 +43,9 @@ const filterFields = [
   { key: 'sceneType', label: '涉及场景', options: SCENE_LABELS },
 ]
 const detailOpen = ref(false)
+const detailTab = ref('current')
+const referenceDialog = ref(null)
+const approvalDialog = ref(null)
 const dialogMode = ref('view')
 const selectedId = ref('')
 const { data: detail, error: detailError, loading: detailBusy, run: runDetail } = useLatestQuery()
@@ -62,6 +69,9 @@ function showDetail(id, mode = 'view') {
     return
   }
   selectedId.value = id
+  referenceDialog.value?.close()
+  approvalDialog.value?.close()
+  detailTab.value = 'current'
   dialogMode.value = mode
   rejectionReason.value = ''
   reviewError.value = null
@@ -73,9 +83,25 @@ function loadDetail() {
   return runDetail((signal) => readAdminPolicy(selectedId.value, signal))
 }
 
-async function submitReview(decision) {
+function showReference(row) {
+  if (reviewBusy.value) {
+    return
+  }
+  referenceDialog.value?.open(row)
+}
+
+function showApproval() {
+  if (!reviewBusy.value && !reviewNeedsReload.value) {
+    approvalDialog.value?.open(detail.value)
+  }
+}
+
+async function submitReview(decision, confirmedPolicy) {
   const policy = selectedPolicy.value
   if (reviewBusy.value || reviewNeedsReload.value || !policy?.reviewable) {
+    return
+  }
+  if (decision === 'APPROVE' && !sameReviewVersion(policy, confirmedPolicy)) {
     return
   }
   reviewBusy.value = true
@@ -96,6 +122,7 @@ async function submitReview(decision) {
     if (!controller.signal.aborted) {
       ElMessage.success(decision === 'APPROVE' ? '政策已通过' : '政策已驳回')
       rejectionOpen.value = false
+      approvalDialog.value?.close()
       dialogMode.value = 'view'
       void reload()
       await loadDetail()
@@ -111,6 +138,7 @@ async function submitReview(decision) {
 
 function reloadReview() {
   rejectionOpen.value = false
+  approvalDialog.value?.close()
   reviewError.value = null
   void loadDetail()
   void reload()
@@ -119,10 +147,7 @@ function reloadReview() {
 
 <template>
   <section class="admin-policies" aria-label="差异化政策管理">
-    <PolicyBanner
-      class="admin-policy-banner"
-      description="按审核状态查看政策申请、适用机型及补贴明细"
-    />
+    <PolicyBanner class="admin-policy-banner" />
 
     <section class="admin-policy-surface" aria-label="政策列表">
       <el-tabs v-model="status" class="admin-policy-tabs" aria-label="审核状态">
@@ -286,6 +311,7 @@ function reloadReview() {
     </section>
 
     <el-dialog
+      key="policy-detail"
       v-model="detailOpen"
       class="admin-policy-dialog"
       width="min(1280px, calc(100% - 24px))"
@@ -326,8 +352,23 @@ function reloadReview() {
           </el-button>
         </el-alert>
       </div>
-      <AdminPolicyDetail v-if="detail" :detail="detail" @show-policy="showDetail" />
-      <template v-if="dialogMode === 'review' && selectedPolicy?.reviewable" #footer>
+      <div v-if="detail">
+        <el-tabs v-model="detailTab" class="admin-policy-detail-tabs" aria-label="政策详情内容">
+          <el-tab-pane label="当前申请" name="current" />
+          <el-tab-pane label="审核记录" name="history" />
+        </el-tabs>
+        <AdminPolicyDetail
+          :key="selectedId"
+          v-if="detailTab === 'current'"
+          :detail="detail"
+          @show-reference="showReference"
+        />
+        <AdminPolicyHistory v-else-if="detailOpen" :key="selectedId" :policy-id="selectedId" />
+      </div>
+      <template
+        v-if="detailTab === 'current' && dialogMode === 'review' && selectedPolicy?.reviewable"
+        #footer
+      >
         <el-button
           type="danger"
           plain
@@ -340,14 +381,33 @@ function reloadReview() {
           type="primary"
           :loading="reviewBusy"
           :disabled="reviewNeedsReload"
-          @click="submitReview('APPROVE')"
+          @click="showApproval"
         >
           通过
         </el-button>
       </template>
     </el-dialog>
 
+    <AdminPolicyReferenceDialog
+      key="policy-reference"
+      v-if="detailOpen"
+      ref="referenceDialog"
+      :origin-code="selectedPolicy?.policyCode ?? ''"
+    />
+
+    <AdminPolicyApprovalDialog
+      v-if="detailOpen"
+      ref="approvalDialog"
+      :busy="reviewBusy"
+      :review-error="reviewError"
+      :review-needs-reload="reviewNeedsReload"
+      @confirm="submitReview('APPROVE', $event)"
+      @reload="reloadReview"
+      @show-reference="showReference"
+    />
+
     <el-dialog
+      key="policy-rejection"
       v-model="rejectionOpen"
       class="admin-policy-rejection"
       title="驳回政策"

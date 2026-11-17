@@ -1,0 +1,352 @@
+.model-subsidies {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  --subsidy-muted: #71819a;
+  --subsidy-line: #e2eaf5;
+}
+.model-subsidy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.model-subsidy-surface {
+  background: #fff;
+  border: 1px solid var(--subsidy-line);
+  border-radius: 9px;
+  min-width: 0;
+  box-shadow: 0 3px 12px #1f539505;
+}
+.model-subsidy-query {
+  padding: 17px 18px 0;
+}
+.model-subsidy-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+.model-subsidy-filters .el-form-item {
+  flex: 0 0 110px;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.model-subsidy-filters .model-subsidy-model-field {
+  flex-basis: 180px;
+}
+.model-subsidy-filters .model-subsidy-config-field {
+  flex-basis: 150px;
+}
+.model-subsidy-filters .model-subsidy-date-field {
+  flex-basis: 280px;
+}
+.model-subsidy-filters .el-form-item__label {
+  font-size: 12px;
+  color: #576b88;
+  margin-bottom: 7px;
+}
+.model-subsidy-filters .el-select,
+.model-subsidy-filters .el-date-editor {
+  width: 100%;
+  min-width: 0;
+}
+.model-subsidy-query-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.model-subsidy-query-actions .el-button {
+  margin-left: 0;
+}
+.model-subsidy-query-actions .el-button svg {
+  margin-right: 5px;
+}
+.model-subsidy-query-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #9a7a43;
+  background: #fffcf6;
+  margin: 15px -18px 0;
+  padding: 9px 18px;
+  border-radius: 0 0 9px 9px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.model-subsidy-query-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+.model-subsidy-query-actions .el-checkbox {
+  margin: 0;
+  height: 32px;
+}
+.model-subsidy-query-actions .el-checkbox__label {
+  font-size: 12px;
+}
+/* 仅此预览页以 SVG 代替组件的 CSS 勾选符号，保留原生复选框交互。 */
+.model-subsidy-independent {
+  position: relative;
+}
+.model-subsidy-independent .el-checkbox__inner::after {
+  display: none;
+}
+.model-subsidy-independent .model-subsidy-independent-check {
+  position: absolute;
+  z-index: 2;
+  left: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  pointer-events: none;
+}
+.model-subsidy-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 255px;
+  align-items: start;
+  gap: 16px;
+}
+.model-subsidy-point-card {
+  padding: 2px 17px;
+}
+.model-subsidy-point-card .el-collapse {
+  border: 0;
+}
+.model-subsidy-point-card .el-collapse-item__header {
+  font-size: 14px;
+  color: #273c58;
+  font-weight: 600;
+}
+.model-subsidy-point-card .el-collapse-item__wrap {
+  border-bottom: 0;
+}
+.model-subsidy-point-time {
+  font-size: 11px;
+  color: #627c9e;
+  font-variant-numeric: tabular-nums;
+}
+.model-subsidy-point-channel {
+  margin-top: 13px;
+}
+.model-subsidy-point-channel h3 {
+  font-size: 11px;
+  color: #8a98ae;
+  font-weight: 500;
+  margin-bottom: 7px;
+}
+.model-subsidy-point-channel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.model-subsidy-point-channel li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #556d8d;
+}
+.model-subsidy-point-channel li > span {
+  flex: none;
+}
+.model-subsidy-point-channel small {
+  display: block;
+  color: #98a4b5;
+  font-size: 10px;
+}
+.model-subsidy-point-channel .el-button {
+  font-size: 11px;
+  white-space: normal;
+  text-align: right;
+  line-height: 1.5;
+}
+.model-subsidy-charts {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.model-subsidy-chart-card {
+  overflow: hidden;
+}
+.model-subsidy-chart-header {
+  padding: 16px 17px 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.model-subsidies h2 {
+  font-size: 14px;
+  color: #273c58;
+  font-weight: 600;
+}
+.model-subsidy-chart-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.model-subsidy-chart-header h2 > svg {
+  color: #347cff;
+  flex: none;
+}
+.model-subsidy-legend {
+  display: flex;
+  gap: 13px;
+  font-size: 11px;
+  color: #6b7b94;
+}
+.model-subsidy-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.model-subsidy-legend svg {
+  flex: none;
+  color: #347cff;
+}
+.model-subsidy-legend svg.ratio {
+  color: #ed963c;
+}
+.model-subsidy-details {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.model-subsidy-detail-card {
+  padding: 17px;
+}
+.model-subsidy-detail-card > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.model-subsidy-selected-plan {
+  display: grid;
+  gap: 9px;
+  padding: 15px 12px;
+  border-radius: 6px;
+}
+.model-subsidy-selected-plan.fixed {
+  background: #f0f5ff;
+  color: #3869ad;
+}
+.model-subsidy-selected-plan.ratio {
+  background: #fff6eb;
+  color: #aa702c;
+}
+.model-subsidy-selected-plan > span {
+  font-size: 11px;
+}
+.model-subsidy-selected-plan strong {
+  font-size: 21px;
+  font-weight: 600;
+}
+.model-subsidy-selected-plan small {
+  font-size: 11px;
+}
+.model-subsidy-detail-fields {
+  display: grid;
+  gap: 13px;
+  margin: 19px 0;
+}
+.model-subsidy-detail-fields > div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.model-subsidy-detail-fields dt {
+  color: #8a98ae;
+}
+.model-subsidy-detail-fields dd {
+  margin: 0;
+  color: #415777;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.model-subsidy-goods {
+  border-top: 1px solid #edf1f7;
+  padding-top: 15px;
+}
+.model-subsidy-goods h3 {
+  font-size: 12px;
+  color: #5b6e8a;
+  font-weight: 500;
+}
+.model-subsidy-goods ul {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 9px;
+}
+.model-subsidy-goods li {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: #536b8a;
+}
+.model-subsidy-goods small {
+  color: #95a1b2;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1100px) {
+  .model-subsidy-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .model-subsidy-details {
+    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr);
+  }
+}
+@media (max-width: 650px) {
+  .model-subsidy-header {
+    flex-wrap: wrap;
+  }
+  .model-subsidy-query {
+    padding: 14px 12px 0;
+  }
+  .model-subsidy-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .model-subsidy-filters > .el-form-item:nth-child(2) {
+    grid-column: 2;
+  }
+  .model-subsidy-date-field {
+    grid-column: 1 / -1;
+  }
+  .model-subsidy-query-actions {
+    grid-column: 1 / -1;
+  }
+  .model-subsidy-query-note {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+  .model-subsidy-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .model-subsidy-chart-header {
+    padding-inline: 12px;
+  }
+  .model-subsidy-date-popper .el-date-range-picker {
+    width: min(312px, calc(100vw - 24px));
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .model-subsidy-date-popper .el-date-range-picker__content {
+    width: 100%;
+    float: none;
+  }
+}

@@ -11,10 +11,25 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface PolicyReviewMapper {
+    // 管理员业务字段只读最近正式提交的快照，驳回后的暂存修改不能提前进入列表和筛选。
     String FROM =
             """
-        FROM policy_apply p JOIN policy_audit_log a
+        FROM policy_apply p JOIN (
+          SELECT id, policy_id, tenant_key, version, created_at, snapshot_data,
+            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.applicantName')), 'null') AS applicant_name,
+            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.perspective')), 'null') AS channel_type,
+            JSON_EXTRACT(snapshot_data, '$.form.selectedPlatforms') AS platforms,
+            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.verifyType')), 'null') AS write_off_type,
+            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.sceneType')), 'null') AS scene
+          FROM policy_audit_log
+        ) a
           ON a.policy_id = p.id AND a.tenant_key = p.tenant_key AND a.version = p.current_version
+        """;
+    String COLUMNS =
+            """
+        p.id, p.policy_no, p.tenant_key, p.applicant_id, a.applicant_name,
+        a.channel_type, a.platforms, a.write_off_type, a.scene,
+        p.status, p.record_version, p.current_version, a.created_at AS created_at
         """;
     String SUBMITTED =
             """
@@ -23,11 +38,11 @@ public interface PolicyReviewMapper {
         """;
     String FILTERS =
             """
-        <if test="q.perspective != null">AND p.channel_type = #{q.perspective}</if>
-        <if test="q.platformCode != null">AND JSON_CONTAINS(p.platforms, JSON_QUOTE(#{q.platformCode}))</if>
-        <if test="q.verifyType != null">AND p.write_off_type = #{q.verifyType}</if>
-        <if test="q.sceneType != null">AND p.scene = #{q.sceneType}</if>
-        <if test="q.applicant != null">AND LOWER(p.applicant_name) LIKE LOWER(#{q.applicant}) ESCAPE '!'</if>
+        <if test="q.perspective != null">AND a.channel_type = #{q.perspective}</if>
+        <if test="q.platformCode != null">AND JSON_CONTAINS(a.platforms, JSON_QUOTE(#{q.platformCode}))</if>
+        <if test="q.verifyType != null">AND a.write_off_type = #{q.verifyType}</if>
+        <if test="q.sceneType != null">AND a.scene = #{q.sceneType}</if>
+        <if test="q.applicant != null">AND LOWER(a.applicant_name) LIKE LOWER(#{q.applicant}) ESCAPE '!'</if>
         <if test="q.submittedFrom != null">AND a.created_at &gt;= #{q.submittedFrom}</if>
         <if test="q.submittedBefore != null">AND a.created_at &lt; #{q.submittedBefore}</if>
         <if test="q.keyword != null">
@@ -35,7 +50,7 @@ public interface PolicyReviewMapper {
             OR LOWER(CONCAT('ZC-', CASE WHEN p.id &lt; 1000000
               THEN LPAD(TRIM(CAST(p.id AS CHAR(20))), 6, '0')
               ELSE TRIM(CAST(p.id AS CHAR(20))) END)) LIKE LOWER(#{q.keyword}) ESCAPE '!'
-            OR LOWER(p.applicant_name) LIKE LOWER(#{q.keyword}) ESCAPE '!'
+            OR LOWER(a.applicant_name) LIKE LOWER(#{q.keyword}) ESCAPE '!'
             OR JSON_SEARCH(LOWER(a.snapshot_data), 'one', LOWER(#{q.keyword}), '!', '$.goods[*].modelname') IS NOT NULL)
         </if>
         """;
@@ -49,9 +64,8 @@ public interface PolicyReviewMapper {
     List<StatusCount> counts(String tenantKey, PolicyReviewQuery q);
 
     @Select(
-            "<script>SELECT p.id, p.policy_no, p.tenant_key, p.applicant_id, p.applicant_name,"
-                    + " p.channel_type, p.platforms, p.write_off_type, p.scene, p.status, p.record_version, p.current_version,"
-                    + " a.created_at AS created_at "
+            "<script>SELECT "
+                    + COLUMNS
                     + FROM
                     + SUBMITTED
                     + FILTERS
@@ -59,13 +73,7 @@ public interface PolicyReviewMapper {
                     + " ORDER BY a.created_at DESC, a.id DESC LIMIT #{q.pageSize} OFFSET #{offset}</script>")
     List<PolicyApply> list(String tenantKey, PolicyReviewQuery q, long offset);
 
-    @Select(
-            """
-        SELECT id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms,
-          write_off_type, scene, start_time, status, record_version, current_version
-        FROM policy_apply WHERE id = #{id} AND tenant_key = #{tenantKey}
-          AND is_deleted = 0 AND status IN ('PENDING', 'APPROVED', 'REJECTED')
-        """)
+    @Select("SELECT " + COLUMNS + ", p.start_time " + FROM + SUBMITTED + " AND p.id = #{id}")
     PolicyApply find(long id, String tenantKey);
 
     @Select(
@@ -74,6 +82,20 @@ public interface PolicyReviewMapper {
         FROM policy_audit_log WHERE policy_id = #{id} AND tenant_key = #{tenantKey} AND version = #{version}
         """)
     PolicyAuditLog current(long id, String tenantKey, int version);
+
+    @Select(
+            """
+        <script>
+        SELECT a.id, a.snapshot_data
+        FROM policy_audit_log a
+        JOIN policy_apply p ON p.id = a.policy_id AND p.tenant_key = a.tenant_key
+        WHERE p.tenant_key = #{tenantKey} AND p.is_deleted = 0
+          AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
+          AND a.id IN
+          <foreach collection="auditIds" item="auditId" open="(" separator="," close=")">#{auditId}</foreach>
+        </script>
+        """)
+    List<PolicyAuditLog> coverageSnapshots(String tenantKey, List<Long> auditIds);
 
     @Update(
             """

@@ -17,6 +17,8 @@ it('管理员可直达清洗页，恢复会话后保留地址并可切回源商�
     '/admin/catalog/cleaning',
     '/admin/catalog/center',
     '/admin/policies',
+    '/admin/model-subsidies',
+    '/admin/users',
   ])
   await router.push('/admin/catalog/cleaning')
   session.setLogin({ user: { roleType: 'ADMIN' } })
@@ -43,6 +45,14 @@ it('管理员恢复会话后保留差异化政策直达地址', { timeout: 15000
   await router.syncSessionRoute()
   expect(router.currentRoute.value.name).toBe('admin-policies')
 })
+it('管理员恢复会话后保留用户管理直达地址', { timeout: 15000 }, async () => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  await router.push('/admin/users')
+  session.setLogin({ user: { roleType: 'ADMIN' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.name).toBe('admin-users')
+})
 it('管理员打开已删除的页面或未知地址时回到源商品库', async () => {
   const session = createAuthSession()
   const router = createWorkspaceRouter(createMemoryHistory(), session)
@@ -65,5 +75,9 @@ it('申请人手动访问管理员地址仍回到申请人页，查询参数不�
   await router.push('/admin/catalog/center')
   expect(router.currentRoute.value.path).toBe('/apply')
   await router.push('/admin/policies?roleType=ADMIN')
+  expect(router.currentRoute.value.path).toBe('/apply')
+  await router.push('/admin/model-subsidies')
+  expect(router.currentRoute.value.path).toBe('/apply')
+  await router.push('/admin/users?roleType=ADMIN')
   expect(router.currentRoute.value.path).toBe('/apply')
 })

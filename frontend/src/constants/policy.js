@@ -26,6 +26,17 @@ export const POLICY_STATUS_TYPES = {
   APPROVED: 'success',
   REJECTED: 'danger',
 }
+// 审核日志以 SUBMITTED 表示待审，申请主表对应状态为 PENDING。
+export const AUDIT_STATUS_LABELS = {
+  SUBMITTED: '待审核',
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+}
+export const AUDIT_STATUS_TYPES = {
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+}
 export const policyIsEditable = (status) => status === 'DRAFT' || status === 'REJECTED'
 export const PLATFORM_LABELS = Object.fromEntries(RETAIL_PLATFORMS)
 export const VERIFY_LABELS = { SALES: '销售维度', ACTIVATION: '激活维度' }

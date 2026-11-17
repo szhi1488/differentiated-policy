@@ -62,6 +62,15 @@ HAVING COUNT(*) > 1;
 -- 有联调数据时将示例值替换为实际商品和平台，检查引用和候选范围查询的访问路径。
 EXPLAIN SELECT 1 FROM policy_goods_detail WHERE goods_id = 2001;
 
+-- 覆盖区旧补贴的批量快照读取；将企业标识及日志 ID 替换为预览实际命中的值。
+-- 预期仅命中当前企业、未删除且已通过的申请和已通过日志，使用日志主键及申请主键关联。
+EXPLAIN SELECT a.id, a.snapshot_data
+FROM policy_audit_log a
+JOIN policy_apply p ON p.id = a.policy_id AND p.tenant_key = a.tenant_key
+WHERE p.tenant_key = '请填写企业租户标识' AND p.is_deleted = 0
+  AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
+  AND a.id IN (0);
+
 EXPLAIN SELECT d.policy_id, d.version
 FROM policy_goods_detail d
 JOIN policy_apply p ON p.id = d.policy_id AND p.current_version = d.version

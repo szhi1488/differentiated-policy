@@ -1759,6 +1759,134 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
+    void adminListAndFiltersKeepLastSubmissionUntilRejectedPolicyIsResubmitted() throws Exception {
+        var good = importedGoodForEditing();
+        var owner = session("test-tenant", "submitted-view-owner", "APPLICANT");
+        var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
+        form.putArray("attachmentInfo");
+        form.put("perspective", "RETAIL");
+        form.put("verifyType", "SALES");
+        form.put("sceneType", "NATIONAL_SUB");
+        form.put("estimated", false);
+        String id = createPolicy(owner, form.toString()).path("id").asText();
+        String ownPath = "/api/policies/" + id;
+        String adminPath = "/api/admin/policies";
+        mvc.perform(
+                        policyRequest(post(ownPath + "/submit"), owner)
+                                .content("{\"recordVersion\":1}"))
+                .andExpect(status().isOk());
+        mvc.perform(
+                        policyRequest(post(adminPath + "/" + id + "/review"), admin)
+                                .content(
+                                        "{\"recordVersion\":2,\"submissionVersion\":1,\"decision\":\"REJECT\"}"))
+                .andExpect(status().isOk());
+        var before =
+                json.readTree(
+                        mvc.perform(get(adminPath).session(admin))
+                                .andExpect(status().isOk())
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsByteArray());
+
+        form.put("recordVersion", 3);
+        form.put("perspective", "BILLION");
+        form.putArray("selectedPlatforms").add("TAOBAO");
+        form.putNull("verifyType");
+        form.putNull("sceneType");
+        form.putNull("estimated");
+        ((ObjectNode)
+                        form.path("goodsForm")
+                                .path("cards")
+                                .get(0)
+                                .path("platformAssignments")
+                                .get(0))
+                .put("platformCode", "TAOBAO");
+        mvc.perform(policyRequest(put(ownPath + "/draft"), owner).content(form.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recordVersion").value(4));
+        mvc.perform(get(ownPath).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.form.perspective").value("BILLION"))
+                .andExpect(jsonPath("$.form.selectedPlatforms[0]").value("TAOBAO"));
+
+        // 管理员仍看到首轮拼多多及原渠道，四类筛选和状态计数使用同一份快照。
+        mvc.perform(
+                        get(adminPath)
+                                .session(admin)
+                                .param("perspective", "RETAIL")
+                                .param("platformCode", "PDD")
+                                .param("verifyType", "SALES")
+                                .param("sceneType", "NATIONAL_SUB")
+                                .param("status", "REJECTED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.counts.REJECTED").value(1))
+                .andExpect(jsonPath("$.items[0].perspective").value("RETAIL"))
+                .andExpect(jsonPath("$.items[0].platforms[0]").value("PDD"))
+                .andExpect(jsonPath("$.items[0].verifyType").value("SALES"))
+                .andExpect(jsonPath("$.items[0].sceneType").value("NATIONAL_SUB"))
+                .andExpect(jsonPath("$.items[0].recordVersion").value(4))
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(1))
+                .andExpect(
+                        jsonPath("$.items[0].submittedAt")
+                                .value(before.path("items").get(0).path("submittedAt").asText()));
+        for (String[] filter :
+                List.of(
+                        new String[] {"perspective", "BILLION"},
+                        new String[] {"platformCode", "TAOBAO"})) {
+            mvc.perform(get(adminPath).session(admin).param(filter[0], filter[1]))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(0))
+                    .andExpect(jsonPath("$.counts").isEmpty());
+        }
+        mvc.perform(get(adminPath + "/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policy.perspective").value("RETAIL"))
+                .andExpect(jsonPath("$.policy.platforms[0]").value("PDD"))
+                .andExpect(jsonPath("$.policy.verifyType").value("SALES"))
+                .andExpect(jsonPath("$.policy.sceneType").value("NATIONAL_SUB"))
+                .andExpect(jsonPath("$.snapshot.form.selectedPlatforms[0]").value("PDD"))
+                .andExpect(jsonPath("$.policy.reviewable").value(false));
+
+        mvc.perform(
+                        policyRequest(post(ownPath + "/submit"), owner)
+                                .content("{\"recordVersion\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.submissionVersion").value(2));
+        mvc.perform(
+                        get(adminPath)
+                                .session(admin)
+                                .param("perspective", "BILLION")
+                                .param("platformCode", "TAOBAO"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.counts.PENDING").value(1))
+                .andExpect(jsonPath("$.items[0].perspective").value("BILLION"))
+                .andExpect(jsonPath("$.items[0].platforms[0]").value("TAOBAO"))
+                .andExpect(jsonPath("$.items[0].verifyType").isEmpty())
+                .andExpect(jsonPath("$.items[0].sceneType").isEmpty())
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(2));
+        for (String[] filter :
+                List.of(
+                        new String[] {"perspective", "RETAIL"},
+                        new String[] {"platformCode", "PDD"},
+                        new String[] {"verifyType", "SALES"},
+                        new String[] {"sceneType", "NATIONAL_SUB"})) {
+            mvc.perform(get(adminPath).session(admin).param(filter[0], filter[1]))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(0));
+        }
+        mvc.perform(get(adminPath + "/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policy.perspective").value("BILLION"))
+                .andExpect(jsonPath("$.policy.platforms[0]").value("TAOBAO"))
+                .andExpect(jsonPath("$.policy.verifyType").isEmpty())
+                .andExpect(jsonPath("$.policy.sceneType").isEmpty())
+                .andExpect(jsonPath("$.snapshot.form.selectedPlatforms[0]").value("TAOBAO"))
+                .andExpect(jsonPath("$.policy.reviewable").value(true));
+    }
+
+    @Test
     void exposesShortPolicyNumbersWithoutChangingCreationIdempotencyOrLegacySnapshots()
             throws Exception {
         var good = importedGoodForEditing();
@@ -1830,6 +1958,79 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
+    void coverageIncludesEachProductsPriorSubsidyFromTheWinningSnapshot() throws Exception {
+        var black = importedGoodForEditing();
+        jdbc.update("INSERT INTO color_dict (color_name) VALUES ('白色')");
+        var product = (ObjectNode) editBody(black).path("product");
+        product.put(
+                "colorId",
+                jdbc.queryForObject(
+                        "SELECT id FROM color_dict WHERE color_name='白色'", String.class));
+        var whiteResult =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var white = json.readTree(whiteResult.getResponse().getContentAsByteArray());
+        var owner = session("test-tenant", "coverage-color-owner", "APPLICANT");
+        var form = attachmentPolicyForm(black, UUID.randomUUID().toString());
+        form.putArray("attachmentInfo");
+        var cards =
+                (com.fasterxml.jackson.databind.node.ArrayNode)
+                        form.path("goodsForm").path("cards");
+        ((ObjectNode) cards.get(0)).put("cardType", "SPECIFIED");
+        var second = ((ObjectNode) cards.get(0)).deepCopy();
+        second.put("key", "white");
+        ((ObjectNode) second.path("targets").get(0)).put("goodsId", white.path("id").asText());
+        ((ObjectNode) second.path("subsidyPlans").get(0)).put("fixedAmount", "0.30");
+        cards.add(second);
+        String prior = createPolicy(owner, form.toString()).path("id").asText();
+        mvc.perform(
+                        policyRequest(post("/api/policies/" + prior + "/submit"), owner)
+                                .content("{\"recordVersion\":1}"))
+                .andExpect(status().isOk());
+        mvc.perform(
+                        policyRequest(post("/api/admin/policies/" + prior + "/review"), admin)
+                                .content(
+                                        "{\"recordVersion\":2,\"submissionVersion\":1,\"decision\":\"APPROVE\"}"))
+                .andExpect(status().isOk());
+        // 改主表补贴原文模拟数据差异，预览的旧补贴必须继续来自正式提交快照。
+        jdbc.update("UPDATE policy_apply SET goods_form_json='{}' WHERE id=?", prior);
+        ((ObjectNode) cards.get(0).path("subsidyPlans").get(0)).put("fixedAmount", "0.50");
+        ((ObjectNode) cards.get(0)).put("cardType", "COMMON");
+        ((com.fasterxml.jackson.databind.node.ArrayNode) cards.get(0).path("targets"))
+                .add(second.path("targets").get(0).deepCopy());
+        cards.remove(1);
+        String current = createPolicy(owner, form.toString()).path("id").asText();
+        mvc.perform(
+                        policyRequest(post("/api/policies/" + current + "/submit"), owner)
+                                .content("{\"recordVersion\":1}"))
+                .andExpect(status().isOk());
+        var response =
+                mvc.perform(get("/api/admin/policies/" + current).session(admin))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        var items =
+                json.readTree(response.getResponse().getContentAsByteArray())
+                        .path("coverage")
+                        .path("items");
+        assertThat(items.size()).isEqualTo(2);
+        for (var row : items) {
+            assertThat(row.path("winner").path("id").asText()).isEqualTo(prior);
+            assertThat(row.path("existingSubsidy").path("subsidyMode").asText()).isEqualTo("FIXED");
+            assertThat(row.path("existingSubsidy").path("fixedAmount").asText())
+                    .isEqualTo(
+                            row.path("goodsId").asText().equals(black.path("id").asText())
+                                    ? "0.10"
+                                    : "0.30");
+        }
+        // 已通过详情中，当前政策命中自身时同样提供自身快照方案。
+        mvc.perform(get("/api/admin/policies/" + prior).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.coverage.items[0].existingSubsidy.fixedAmount").value("0.10"));
+    }
+
+    @Test
     void resolvesLatestSubmittedPolicyAtEachApplicationsOwnStartAndApprovalTime() throws Exception {
         var good = importedGoodForEditing();
         var owner = session("test-tenant", "coverage-owner", "APPLICANT");
@@ -1847,6 +2048,9 @@ class GoodsSyncIntegrationTest {
                 coveragePolicy(
                         owner, good, "2099-01-03", "2099-01-04", "2020-01-05 09:00:00", false);
         String base = "/api/admin/policies";
+        String olderAuditId =
+                jdbc.queryForObject(
+                        "SELECT id FROM policy_audit_log WHERE policy_id=?", String.class, older);
         String goodsId = good.path("id").asText();
         String approve = "{\"recordVersion\":2,\"submissionVersion\":1,\"decision\":\"APPROVE\"}";
 
@@ -1876,6 +2080,7 @@ class GoodsSyncIntegrationTest {
                                 .param("submissionVersion", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].outcome").value("REPLACES"))
+                .andExpect(jsonPath("$.items[0].winner.auditLogId").value(olderAuditId))
                 .andExpect(jsonPath("$.items[0].winner.id").value(older));
 
         var reviewed =

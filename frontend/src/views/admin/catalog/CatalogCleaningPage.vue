@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
+import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import {
   GOODS_BRANDS,
   GOODS_CLEAN_JOB_LABELS,
@@ -137,8 +138,8 @@ async function submitReview(body) {
 
 <template>
   <section class="catalog-cleaning" aria-labelledby="cleaning-title">
-    <header class="cleaning-page-heading">
-      <h1 id="cleaning-title">商品清洗与识别</h1>
+    <header class="cleaning-page-heading workspace-page-banner">
+      <WorkspacePageHeading title="商品清洗与识别" icon="sync" heading-id="cleaning-title" />
       <div class="cleaning-page-actions">
         <el-button @click="openHistory">{{ active ? '清洗记录（进行中）' : '清洗记录' }}</el-button>
         <el-button type="primary" :disabled="busy" @click="openStart">开始清洗</el-button>
