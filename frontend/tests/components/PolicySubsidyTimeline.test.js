@@ -183,6 +183,56 @@ it('当前时间按钮将历史和未来查询带到北京时间此刻，两图�
   }
 })
 
+it('平台条件随查询或当前时间生效，时间轴、独立商品、时点补贴和明细使用同一范围', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(new Date(`${SUBSIDY_PREVIEW_AT}+08:00`).getTime())
+  wrapper = mount(AdminModelSubsidiesPage)
+  const platform = wrapper
+    .findAllComponents({ name: 'ElSelect' })
+    .find((select) => select.props('ariaLabel') === '平台')
+  const tracks = () => wrapper.findAll('.subsidy-timeline-platform > span').map((row) => row.text())
+  const pointRows = () =>
+    wrapper.findAll('.model-subsidy-point-channel li > span').map((row) => row.text())
+  await wrapper.get('input[type="checkbox"]').setValue(true)
+  platform.vm.$emit('update:modelValue', 'PDD')
+  await nextTick()
+  expect(tracks()).toContain('京东')
+  await wrapper.get('form').trigger('submit')
+  expect(tracks()).toEqual(['拼多多', '拼多多 独立商品', '拼多多'])
+  expect(pointRows()).toEqual(tracks())
+  await wrapper.get('[aria-label="查看该时点零售拼多多独立商品补贴"]').trigger('click')
+  expect(wrapper.get('.model-subsidy-detail-card').text()).toContain('ZC-000042')
+
+  platform.vm.$emit('update:modelValue', 'JD')
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text() === '当前时间')
+    .trigger('click')
+  expect(tracks()).toEqual(['京东'])
+  expect(pointRows()).toEqual(['京东'])
+  expect(wrapper.get('[aria-label="百亿补贴时间轴"]').text()).toContain('暂无示例政策')
+  expect(wrapper.get('.model-subsidy-selected-plan').text()).toContain('京东')
+})
+
+it('平台没有示例时清空两图、时点行和旧明细，重置后恢复全部平台', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(new Date(`${SUBSIDY_PREVIEW_AT}+08:00`).getTime())
+  wrapper = mount(AdminModelSubsidiesPage)
+  const platform = wrapper
+    .findAllComponents({ name: 'ElSelect' })
+    .find((select) => select.props('ariaLabel') === '平台')
+  platform.vm.$emit('update:modelValue', 'DEWU')
+  await wrapper.get('form').trigger('submit')
+  expect(wrapper.findAllComponents(PolicySubsidyTimeline)).toHaveLength(0)
+  expect(wrapper.findAll('.model-subsidy-point-channel li')).toHaveLength(0)
+  expect(wrapper.get('.model-subsidy-detail-card').text()).toContain('暂无可展示的补贴明细')
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text() === '重置')
+    .trigger('click')
+  expect(platform.props('modelValue')).toBe('')
+  expect(wrapper.findAllComponents(PolicySubsidyTimeline)).toHaveLength(2)
+  expect(wrapper.findAll('.model-subsidy-point-channel li')).toHaveLength(8)
+})
+
 it('固定与比例补贴悬停只强调边框，点击后选中边框和底色保持正确', async () => {
   wrapper = mount(AdminModelSubsidiesPage)
   await nextTick()

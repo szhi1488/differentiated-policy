@@ -9,9 +9,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class HttpClientConfig {
     @Bean
-    HttpClient externalHttpClient() {
+    HttpClient externalHttpClient(ExternalHttpProperties properties) {
         return HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
+                .connectTimeout(Duration.ofSeconds(properties.getConnectTimeoutSeconds()))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
     }

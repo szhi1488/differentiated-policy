@@ -14,6 +14,7 @@ public class CatalogGoodsInsert {
     private final long seriesId;
     private final long spuId;
     private final String goodsName;
+    private final String policyName;
     private final String ram;
     private final String rom;
     private final long colorId;

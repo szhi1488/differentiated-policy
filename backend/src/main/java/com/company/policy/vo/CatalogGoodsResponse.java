@@ -2,6 +2,7 @@ package com.company.policy.vo;
 
 import com.company.policy.entity.CatalogGoods;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -15,6 +16,7 @@ public record CatalogGoodsResponse(
         String skuId,
         String productNo,
         String goodsName,
+        @Schema(description = "政策名，清洗或审核通过时保存的来源 goodsField1 原文。") String policyName,
         String brandId,
         String brandName,
         String seriesId,
@@ -38,6 +40,7 @@ public record CatalogGoodsResponse(
                 goods.skuId(),
                 goods.productNo(),
                 goods.goodsName(),
+                goods.policyName(),
                 Long.toString(goods.brandId()),
                 goods.brandName(),
                 Long.toString(goods.seriesId()),

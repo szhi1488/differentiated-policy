@@ -16,7 +16,7 @@ class GoodsSyncScheduling {
         this.service = service;
     }
 
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelayString = "${jackyun.import-poll-interval-ms:2000}")
     void poll() {
         service.processNextPage();
     }

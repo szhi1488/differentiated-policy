@@ -20,7 +20,7 @@
 
 管理员列表、筛选、状态数量统计及详情的 `policy` 摘要统一按 `current_version` 关联最近正式提交快照，读取其中的申请人、渠道、整单平台、核销类型及场景。驳回后申请人保存编辑内容只影响本人可回填的主表，管理员继续展示和筛选原提交内容；重提事务成功后才切换到新轮次。状态、并发版本、归属和审核权限仍按有效主表判断。快照中的可空核销类型和场景返回 null，不将 JSON null 显示为字符串。接口路径及响应字段保持兼容。
 
-目标库只读核对脚本为 [verify_admin_submission_view.sql](../sql/verify_admin_submission_view.sql)：已有最新十四表及正式提交数据后，在 Navicat 填写申请 ID、企业标识及筛选参数，依次运行主表/快照对照、状态计数和 `EXPLAIN`。驳回修改保存后按旧提交条件应命中，重提成功后切换到新条件。脚本不变更结构或业务数据；目标库结果和执行计划待用户核对。
+目标库已有十四表和正式提交数据后，在 Navicat 对照主表与最近提交快照，核对筛选结果、状态计数及查询计划。驳回修改保存后按旧提交条件应命中，重提成功后切换到新条件。目标库结果和执行计划待用户核对。
 
 文件附件下载由 `PolicyAttachmentController` 提供 `GET /api/admin/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content`。详情页面使用 `audit.id` 和快照中的文件 ID 生成下载入口，服务端校验管理员身份、申请权限及该文件属于指定提交轮次。字段和删除保护见[附件接口](attachment-api.md)。
 

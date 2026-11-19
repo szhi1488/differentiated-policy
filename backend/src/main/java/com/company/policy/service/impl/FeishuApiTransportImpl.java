@@ -1,5 +1,6 @@
 package com.company.policy.service.impl;
 
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.service.FeishuApiTransport;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -19,10 +20,13 @@ public class FeishuApiTransportImpl implements FeishuApiTransport {
     private static final String ORIGIN = "https://open.feishu.cn";
     private final HttpClient client;
     private final ObjectMapper mapper;
+    private final FeishuProperties properties;
 
-    public FeishuApiTransportImpl(HttpClient client, ObjectMapper mapper) {
+    public FeishuApiTransportImpl(
+            HttpClient client, ObjectMapper mapper, FeishuProperties properties) {
         this.client = client;
         this.mapper = mapper;
+        this.properties = properties;
     }
 
     @Override
@@ -36,7 +40,7 @@ public class FeishuApiTransportImpl implements FeishuApiTransport {
             String origin = path.equals("/oauth/v3/token") ? "https://accounts.feishu.cn" : ORIGIN;
             var builder =
                     HttpRequest.newBuilder(URI.create(origin + path))
-                            .timeout(Duration.ofSeconds(10))
+                            .timeout(Duration.ofSeconds(properties.getRequestTimeoutSeconds()))
                             .header("Content-Type", "application/json")
                             .POST(
                                     HttpRequest.BodyPublishers.ofString(
@@ -55,7 +59,7 @@ public class FeishuApiTransportImpl implements FeishuApiTransport {
     public JsonNode getUserInfo(String bearerToken) {
         var request =
                 HttpRequest.newBuilder(URI.create(ORIGIN + "/open-apis/authen/v1/user_info"))
-                        .timeout(Duration.ofSeconds(10))
+                        .timeout(Duration.ofSeconds(properties.getRequestTimeoutSeconds()))
                         .header("Authorization", "Bearer " + bearerToken)
                         .GET()
                         .build();

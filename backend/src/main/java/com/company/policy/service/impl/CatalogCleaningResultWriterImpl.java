@@ -16,11 +16,14 @@ import com.company.policy.vo.CatalogCleaningResponse.Status;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
 public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWriter {
+    private static final Pattern NON_WHITESPACE =
+            Pattern.compile("\\S", Pattern.UNICODE_CHARACTER_CLASS);
     private final CatalogCleaningMapper mapper;
     private final CatalogGoodsMapper goods;
     private final ObjectMapper json;
@@ -34,6 +37,10 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
 
     @Override
     public Mapping resolve(SourceGoodsItem source, Candidate candidate, String origin) {
+        String name = source.getGoodsName();
+        if (name == null || !NON_WHITESPACE.matcher(name).find()) {
+            throw new MappingConflict("CATALOG_SOURCE_NAME_MISSING", "源商品名称为空，请补全吉客云商品名称并重新导入。");
+        }
         var memory = CatalogCleaningRule.memory(candidate.spec());
         if (memory == null) {
             throw new ApiException(
@@ -67,8 +74,10 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
             throw new MappingConflict("CATALOG_MAPPING_CHANGED", "候选规格或颜色与已生效映射不同，需要人工确认。");
         }
         if (sameTarget) {
-            if (existing.status() == null) {
-                checkWrite(goods.defaultToOnSale(existing.id()));
+            if (existing.status() == null
+                    || !name.equals(existing.goodsName())
+                    || !Objects.equals(source.getGoodsField1(), existing.policyName())) {
+                checkWrite(goods.syncSourceNames(existing.id(), name, source.getGoodsField1()));
             }
             return new Mapping("MAPPED", origin, brand.id(), existing.id());
         }
@@ -94,13 +103,6 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
             checkWrite(goods.insertColor(candidate.colorName()));
             color = goods.lockColor(candidate.colorName());
         }
-        String name =
-                String.join(
-                                " ",
-                                candidate.modelName(),
-                                memory.ram() + "+" + memory.rom(),
-                                candidate.colorName())
-                        + (edition.isEmpty() ? "" : "（" + edition + "）");
         String productNo = source.getGoodsNo();
         var entry =
                 new CatalogGoodsInsert(
@@ -110,6 +112,7 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
                         model.seriesId(),
                         model.id(),
                         name,
+                        source.getGoodsField1(),
                         memory.ram(),
                         memory.rom(),
                         color.id(),

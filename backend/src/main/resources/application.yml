@@ -13,7 +13,7 @@ spring:
       max-file-size: 20MB
       max-request-size: 21MB
   datasource:
-    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/differentiated%20policy?connectionTimeZone=Asia/Shanghai&characterEncoding=UTF-8}
+    url: ${DB_URL:}
     username: ${DB_USERNAME:}
     password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -42,10 +42,11 @@ server:
     include-message: never
     include-stacktrace: never
 feishu:
-  tenant-key: ${FEISHU_TENANT_KEY:${JACKYUN_TENANT_KEY:}}
-  app-id: ${FEISHU_APP_ID:cli_aa64531940e15c1e}
+  tenant-key: ${FEISHU_TENANT_KEY:}
+  app-id: ${FEISHU_APP_ID:}
   app-secret: ${FEISHU_APP_SECRET:}
-  allowed-origins: ${FEISHU_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  allowed-origins: ${FEISHU_ALLOWED_ORIGINS:}
+  request-timeout-seconds: ${FEISHU_REQUEST_TIMEOUT_SECONDS:10}
 jackyun:
   app-key: ${JACKYUN_APP_KEY:}
   app-secret: ${JACKYUN_APP_SECRET:}
@@ -53,6 +54,17 @@ jackyun:
   source-key: ${JACKYUN_SOURCE_KEY:jackyun}
   import-interval-seconds: ${JACKYUN_IMPORT_INTERVAL_SECONDS:5}
   import-max-pages: ${JACKYUN_IMPORT_MAX_PAGES:2000}
+  import-scheduling-enabled: ${JACKYUN_IMPORT_SCHEDULING_ENABLED:true}
+  clean-scheduling-enabled: ${JACKYUN_CLEAN_SCHEDULING_ENABLED:true}
+  import-poll-interval-ms: ${JACKYUN_IMPORT_POLL_INTERVAL_MS:2000}
+  clean-poll-interval-ms: ${JACKYUN_CLEAN_POLL_INTERVAL_MS:2000}
+  request-timeout-seconds: ${JACKYUN_REQUEST_TIMEOUT_SECONDS:20}
+policy:
+  storage:
+    root: ${POLICY_STORAGE_ROOT:}
+external:
+  http:
+    connect-timeout-seconds: ${HTTP_CONNECT_TIMEOUT_SECONDS:5}
 knife4j:
   # /doc.html 接口文档页面仍可使用；关闭与 Springdoc 2.8 不兼容的
   # Knife4j 4.5 可选增强定制功能。

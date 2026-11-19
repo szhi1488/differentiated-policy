@@ -26,7 +26,9 @@ public interface CatalogCleaningResultWriter {
     /** 读取源商品上次保存的候选识别结果，尚无结果时返回空值。 */
     Candidate readCandidate(SourceGoodsItem source);
 
-    record Mapping(String status, String origin, Long brandId, Long goodsId) {}
+    record Mapping(String status, String origin, Long brandId, Long goodsId) {
+        public static final Mapping EXCLUDED = new Mapping("EXCLUDED", null, null, null);
+    }
 
     /** 目录写入前发现的业务冲突，允许调用方将商品转入人工审核。 */
     final class MappingConflict extends ApiException {

@@ -363,6 +363,12 @@
   margin: 3px 0 0;
   overflow-wrap: anywhere;
 }
+.catalog-center-policy-name {
+  grid-column: 1 / -1;
+}
+.catalog-center-policy-name dd {
+  white-space: pre-wrap;
+}
 .catalog-center-detail {
   display: flex;
   align-items: center;

@@ -16,6 +16,8 @@ import java.util.stream.Collectors;
 
 public final class CatalogCleaningRule {
     public static final String EXCLUSION = "RULE_EXCLUSION";
+    public static final String DIRECT_EXCLUSION = "DIRECT_EXCLUSION";
+    private static final Pattern DIRECT_TERMS = Pattern.compile("工厂代发|简易演示样机|全套演示样机");
     private static final Pattern SKU =
             Pattern.compile(
                     "([1-9][0-9]?)\\s*(?:GB?)?\\s*\\+\\s*([1-9][0-9]{0,7})\\s*(TB?|GB?)?",
@@ -28,7 +30,7 @@ public final class CatalogCleaningRule {
             Pattern.compile("(?i)(^|[/>|])\\s*IOT\\s*&\\s*配件\\s*($|[/>|])");
     private static final Pattern SPECIAL =
             Pattern.compile(
-                    "大地探索家卫星通信套装版|卫星通信版|探索家卫星版|卫星版|简易演示样机|全套演示样机"
+                    "大地探索家卫星通信套装版|卫星通信版|探索家卫星版|卫星版"
                             + "|简易样机|全套样机|演示样机|展示机|样机|原神定制版|限定版|定制版|典藏版"
                             + "|套装版|套装|礼盒|移动版|运营商版|国际版|海外版|港版|【[A-Z]】|简装版|简装",
                     Pattern.CASE_INSENSITIVE);
@@ -45,7 +47,55 @@ public final class CatalogCleaningRule {
 
     private CatalogCleaningRule() {}
 
+    /** 检查各文本字段中的完整排除词，证据按来源字段保存。 */
+    public static Candidate directExclusion(SourceGoodsItem source) {
+        List<Evidence> hits = new ArrayList<>();
+        for (var field :
+                List.of(
+                        new Evidence("goodsName", source.getGoodsName()),
+                        new Evidence("goodsNo", source.getGoodsNo()),
+                        new Evidence("skuName", source.getSkuName()),
+                        new Evidence("cateName", source.getCateName()),
+                        new Evidence("cateFullName", source.getCateFullName()),
+                        new Evidence("goodsField1", source.getGoodsField1()),
+                        new Evidence("goodsField4", source.getGoodsField4()),
+                        new Evidence("goodsField5", source.getGoodsField5()))) {
+            if (field.value() != null) {
+                String terms =
+                        DIRECT_TERMS
+                                .matcher(field.value())
+                                .results()
+                                .map(MatchResult::group)
+                                .distinct()
+                                .collect(Collectors.joining("、"));
+                if (!terms.isEmpty()) {
+                    hits.add(new Evidence(field.field(), terms));
+                }
+            }
+        }
+        if (hits.isEmpty()) {
+            return null;
+        }
+        return new Candidate(
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                null,
+                source.getGoodsName(),
+                source.getSkuName(),
+                DIRECT_EXCLUSION,
+                "来源命中直接排除词「" + hits.get(0).value() + "」。",
+                "EXCLUDE",
+                List.copyOf(hits));
+    }
+
     public static Candidate parse(SourceGoodsItem source) {
+        var excluded = directExclusion(source);
+        if (excluded != null) {
+            return excluded;
+        }
         String brand = source.getBrandName();
         String rawName = normalize(source.getGoodsName());
         String rawSku = normalize(source.getSkuName());
@@ -83,8 +133,7 @@ public final class CatalogCleaningRule {
         String title = nameTail == null ? name : nameTail;
         List<MatchResult> nameSpecs = SPEC_IN_NAME.matcher(title).results().limit(2).toList();
         var titleColor = titleColor(title, nameTail != null, nameSpecs, field1, rawSku);
-        String reason =
-                exclusion(rawName, category + " " + path, series, series.isEmpty() && usablePath);
+        String reason = exclusion(category + " " + path, series, series.isEmpty() && usablePath);
         if (Boolean.TRUE.equals(source.getIsPackageGood())) {
             evidence.add(new Evidence("isPackageGood", "true"));
             reason = "吉客云标记为组合商品。";
@@ -94,13 +143,8 @@ public final class CatalogCleaningRule {
             reason = "吉客云标记 SKU 已停用。";
         }
         if (reason != null) {
-            if (rawName.contains("工厂代发")) {
-                evidence.add(new Evidence("goodsName", "工厂代发"));
-            }
-            if (!titleColor.candidates().isEmpty() && !rawName.contains("工厂代发")) {
-                evidence.add(new Evidence("goodsName", source.getGoodsName()));
-            }
             if (!titleColor.candidates().isEmpty()) {
+                evidence.add(new Evidence("goodsName", source.getGoodsName()));
                 evidence.add(new Evidence("skuName", source.getSkuName()));
             }
             return result(
@@ -347,11 +391,7 @@ public final class CatalogCleaningRule {
         return series.endsWith("系列") && !series.equals("系列");
     }
 
-    private static String exclusion(
-            String name, String category, String series, boolean pathCandidate) {
-        if (name.contains("工厂代发")) {
-            return "商品名命中工厂代发。";
-        }
+    private static String exclusion(String category, String series, boolean pathCandidate) {
         if (category.contains("组合装")) {
             return "分类命中组合装。";
         }

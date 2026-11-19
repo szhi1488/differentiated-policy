@@ -470,6 +470,181 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
+    void directlyExcludesMatchingSourceTextBeforeOtherCleaningRules() throws Exception {
+        var mixed =
+                new Goods(
+                        "工厂代发（简易演示样机）",
+                        "多字段-全套演示样机",
+                        "简易演示样机",
+                        "工厂代发",
+                        "全套演示样机",
+                        "工厂代发",
+                        "简易演示样机",
+                        testSku("MIXED"),
+                        "OPPO手机/全套演示样机",
+                        null,
+                        null,
+                        true,
+                        true);
+        var sku =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "SKU-DEMO",
+                        "16+512 简易演示样机",
+                        "Find X8",
+                        "Find系列",
+                        null,
+                        null);
+        var policy =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "POLICY-DEMO",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "全套演示样机",
+                        null);
+        var separate =
+                goods(
+                        "Find X8 星耀黑 16+512",
+                        "NORMAL",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        "Find X8 16+512",
+                        "工厂");
+        var generic =
+                goods(
+                        "Find X8 星耀黑 16+512 演示样机",
+                        "GENERIC",
+                        "16+512",
+                        "Find X8",
+                        "Find系列",
+                        null,
+                        null);
+        importForCleaning(List.of(mixed, sku, policy, separate, generic));
+        String job = startClean(OPPO, null, false, 5);
+        cleaning.processNextBatch();
+        mvc.perform(get(CLEANING + "/jobs/" + job).session(admin))
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.processed").value(5))
+                .andExpect(jsonPath("$.resultCounts.EXCLUDED").value(3))
+                .andExpect(jsonPath("$.resultCounts.REVIEW_REQUIRED").value(1))
+                .andExpect(jsonPath("$.resultCounts.AUTO_PASSED").value(1));
+        mvc.perform(get(CLEANING + "/results").session(admin).param("status", "EXCLUDED"))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.counts.EXCLUDED").value(3));
+        var path = SOURCES + "/" + sourceId(mixed.goodsNo());
+        var detail =
+                mvc.perform(get(path).session(admin))
+                        .andExpect(jsonPath("$.result.issueCode").value("DIRECT_EXCLUSION"))
+                        .andExpect(jsonPath("$.mappingStatus").value("EXCLUDED"))
+                        .andExpect(jsonPath("$.goodsId").doesNotExist())
+                        .andExpect(jsonPath("$.reviewedBy").doesNotExist())
+                        .andExpect(jsonPath("$.reviewedAt").doesNotExist())
+                        .andExpect(jsonPath("$.reviewReason").doesNotExist())
+                        .andReturn();
+        var evidence =
+                json.readTree(detail.getResponse().getContentAsByteArray())
+                        .path("candidate")
+                        .path("evidence");
+        var fields = new java.util.HashMap<String, String>();
+        evidence.forEach(hit -> fields.put(hit.path("field").asText(), hit.path("value").asText()));
+        assertThat(fields)
+                .containsExactlyInAnyOrderEntriesOf(
+                        java.util.Map.of(
+                                "goodsName",
+                                "工厂代发、简易演示样机",
+                                "skuName",
+                                "简易演示样机",
+                                "goodsNo",
+                                "全套演示样机",
+                                "cateName",
+                                "工厂代发",
+                                "cateFullName",
+                                "全套演示样机",
+                                "goodsField1",
+                                "工厂代发",
+                                "goodsField4",
+                                "全套演示样机",
+                                "goodsField5",
+                                "简易演示样机"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isOne();
+    }
+
+    @Test
+    void automaticallyExcludesChangedMappedSkuAndRechecksCorrectedSource() throws Exception {
+        var good = importedGoodForEditing();
+        String id = good.path("id").asText();
+        referenceGoods("AUTO-EXCLUDED-SKU", id);
+        String number = good.path("productNo").asText();
+        var changed =
+                goods("Find X8 星耀黑 16+512", number, "16+512", "Find X8", "Find系列", null, "工厂代发");
+        importForCleaning(List.of(changed));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(SOURCES + "/" + sourceId(number)).session(admin))
+                .andExpect(jsonPath("$.result.status").value("EXCLUDED"))
+                .andExpect(jsonPath("$.goodsId").doesNotExist());
+        mvc.perform(get(GOODS + "/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.skuId").doesNotExist());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_goods_detail WHERE goods_id=?",
+                                Integer.class,
+                                id))
+                .isOne();
+        importForCleaning(List.of(changed));
+        mvc.perform(get(CLEANING + "/preview").param("brandName", OPPO).session(admin))
+                .andExpect(jsonPath("$.eligible").value(0));
+        importForCleaning(
+                List.of(
+                        goods(
+                                "Find X8 星耀黑 16+512",
+                                number,
+                                "16+512",
+                                "Find X8",
+                                "Find系列",
+                                null,
+                                null)));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(SOURCES + "/" + sourceId(number)).session(admin))
+                .andExpect(jsonPath("$.result.status").value("AUTO_PASSED"))
+                .andExpect(jsonPath("$.goodsId").isString());
+    }
+
+    @Test
+    void appliesCurrentExclusionsToLegacyPendingReview() throws Exception {
+        String number = "LEGACY-DEMO";
+        var sample =
+                goods("Find X8 星耀黑 16+512 演示样机", number, "16+512", "Find X8", "Find系列", null, null);
+        importForCleaning(List.of(sample));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        // 模拟旧规则为简易演示样机保存的待审候选。
+        jdbc.update("UPDATE source_goods_item SET goods_field1='简易演示样机' WHERE goods_no=?", number);
+        var path = SOURCES + "/" + sourceId(number);
+        mvc.perform(get(path).session(admin))
+                .andExpect(jsonPath("$.result.suggestedAction").value("EXCLUDE"));
+        mvc.perform(
+                        mutation(path + "/review")
+                                .content(
+                                        """
+                {"recordVersion":1,"decision":"APPROVE",
+                 "target":{"seriesName":"Find系列","modelName":"Find X8","spec":"16+512","colorName":"星耀黑"}}
+                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_RULE_EXCLUSION"));
+        startClean(OPPO, null, true, 1);
+        cleaning.processNextBatch();
+        mvc.perform(get(path).session(admin))
+                .andExpect(jsonPath("$.result.status").value("EXCLUDED"))
+                .andExpect(jsonPath("$.reviewedBy").doesNotExist());
+    }
+
+    @Test
     void usesCategoryPathAsEvidenceAndKeepsColorForIneligibleSku() throws Exception {
         importForCleaning(
                 List.of(
@@ -617,12 +792,12 @@ class GoodsSyncIntegrationTest {
     void keepsEachSourceSkuAsItsOwnGoodsAcrossAdminsAndIdenticalDatedReplay() throws Exception {
         var original =
                 goods(
-                        "Find X8 星耀黑 16+1TB",
+                        "  Ｆｉｎｄ X8　星耀黑 16+1TB  ",
                         "X8-ONE",
                         "16+1024",
                         "Find X8",
                         "Find系列",
-                        "Find X8 16+1TB",
+                        " Ｆｉｎｄ X8　16+1TB ",
                         null);
         var alias =
                 goods(
@@ -660,10 +835,13 @@ class GoodsSyncIntegrationTest {
                 .isEqualTo(2);
         assertThat(jdbc.queryForList("SELECT sku_id FROM goods ORDER BY id", String.class))
                 .containsExactly(original.skuId(), alias.skuId());
-        var beforeEdit = mvc.perform(get(GOODS + "/" + goodsId).session(admin)).andReturn();
-        var rename = editBody(json.readTree(beforeEdit.getResponse().getContentAsByteArray()));
-        ((ObjectNode) rename.path("product")).put("name", "Find X8 16GB+1024GB 星耀黑");
-        mvc.perform(putGoods(GOODS + "/" + goodsId, rename)).andExpect(status().isOk());
+        var beforeEdit =
+                mvc.perform(get(GOODS + "/" + goodsId).session(admin))
+                        .andExpect(jsonPath("$.goodsName").value(original.goodsName()))
+                        .andExpect(jsonPath("$.policyName").value(original.goodsField1()))
+                        .andReturn();
+        var unchanged = editBody(json.readTree(beforeEdit.getResponse().getContentAsByteArray()));
+        mvc.perform(putGoods(GOODS + "/" + goodsId, unchanged)).andExpect(status().isOk());
 
         var teammate = session("test-tenant", "catalog-teammate", "ADMIN");
         mvc.perform(get(CLEANING + "/jobs/" + job).session(teammate))
@@ -684,7 +862,8 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.items[0].sourceSkuId").value(original.skuId()))
                 .andExpect(jsonPath("$.items[0].ram").value("16GB"))
                 .andExpect(jsonPath("$.items[0].rom").value("1024GB"))
-                .andExpect(jsonPath("$.items[0].goodsName").value("Find X8 16GB+1024GB 星耀黑"))
+                .andExpect(jsonPath("$.items[0].goodsName").value(original.goodsName()))
+                .andExpect(jsonPath("$.items[0].policyName").value(original.goodsField1()))
                 .andExpect(jsonPath("$.items[0].status").value(1));
         mvc.perform(get(GOODS + "/" + goodsId).session(admin))
                 .andExpect(status().isOk())
@@ -904,11 +1083,45 @@ class GoodsSyncIntegrationTest {
                                 second.skuId()))
                 .isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isEqualTo(3);
+        importForCleaning(
+                List.of(
+                        goods(
+                                "Find X8 白色 16+512",
+                                second.goodsNo(),
+                                "16+512",
+                                "Find X8",
+                                "Find系列",
+                                null,
+                                null)));
+        mvc.perform(get(SOURCES + "/" + sourceId(second.goodsNo())).session(admin))
+                .andExpect(jsonPath("$.result.status").value("EXCLUDED"))
+                .andExpect(jsonPath("$.reviewedBy").isString());
     }
 
     @Test
-    void defaultsUnknownSalesStatusWhenReprocessingSameSkuAndPreservesExplicitStatus()
-            throws Exception {
+    void requiresSourceNameBeforeApprovingAManuallyIdentifiedProduct() throws Exception {
+        var unnamed =
+                goods("　 ", "X8-NAMELESS", "16+512", "Find X8", "Find系列", "Find X8 16+512", null);
+        importForCleaning(List.of(unnamed));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        String path = SOURCES + "/" + sourceId(unnamed.goodsNo());
+        mvc.perform(
+                        mutation(path + "/review")
+                                .content(
+                                        """
+                {"recordVersion":1,"decision":"APPROVE",
+                 "target":{"seriesName":"Find系列","modelName":"Find X8","spec":"16+512","colorName":"星耀黑"}}
+                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_SOURCE_NAME_MISSING"));
+        mvc.perform(get(path).session(admin))
+                .andExpect(jsonPath("$.result.status").value("REVIEW_REQUIRED"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isZero();
+    }
+
+    @Test
+    void refreshesSourceNamesOnReprocessingAndPreservesExplicitStatus() throws Exception {
         var original =
                 goods(
                         "Find X8 星耀黑 16+512",
@@ -922,10 +1135,39 @@ class GoodsSyncIntegrationTest {
         startClean(OPPO, null, false, 1);
         cleaning.processNextBatch();
         long id = jdbc.queryForObject("SELECT id FROM goods", Long.class);
+        String newName = "  Find X8 星耀黑 16+512";
+        newName += " ".repeat(512 - newName.length());
+        String newPolicyName =
+                " ".repeat(1024 - original.goodsField1().length()) + original.goodsField1();
+        importForCleaning(
+                List.of(
+                        goods(
+                                newName,
+                                original.goodsNo(),
+                                original.skuName(),
+                                original.cateName(),
+                                original.goodsField4(),
+                                newPolicyName,
+                                null)));
+        startClean(OPPO, null, false, 1);
+        cleaning.processNextBatch();
+        String path = GOODS + "/" + id;
+        var detail =
+                mvc.perform(get(path).session(admin))
+                        .andExpect(jsonPath("$.goodsName").value(newName))
+                        .andExpect(jsonPath("$.policyName").value(newPolicyName))
+                        .andReturn();
+        var edit = editBody(json.readTree(detail.getResponse().getContentAsByteArray()));
+        ((ObjectNode) edit.path("product")).put("status", 2);
+        mvc.perform(putGoods(path, edit))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.goodsName").value(newName));
         for (Integer state : new Integer[] {null, 3}) {
+            String field1 = state == null ? "" : null;
             jdbc.update("UPDATE goods SET status=? WHERE id=?", state, id);
             jdbc.update(
-                    "UPDATE source_goods_item SET clean_status='PENDING' WHERE sku_id=?",
+                    "UPDATE source_goods_item SET goods_field1=?, clean_status='PENDING' WHERE sku_id=?",
+                    field1,
                     original.skuId());
             startClean(OPPO, null, false, 1);
             cleaning.processNextBatch();
@@ -933,6 +1175,10 @@ class GoodsSyncIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.skuId").value(original.skuId()))
                     .andExpect(jsonPath("$.status").value(state == null ? 1 : state));
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT policy_name FROM goods WHERE id=?", String.class, id))
+                    .isEqualTo(field1);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM goods", Integer.class)).isOne();
         }
     }
@@ -2933,7 +3179,8 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.items[0].productNo").value("R16-Z"))
                 .andExpect(jsonPath("$.items[0].status").value(1))
                 .andExpect(jsonPath("$.items[0].edition").value("简装版"))
-                .andExpect(jsonPath("$.items[0].goodsName").value("Reno16 12GB+256GB 星河紫（简装版）"));
+                .andExpect(jsonPath("$.items[0].goodsName").value("Reno16 星河紫 12+256 简装版"))
+                .andExpect(jsonPath("$.items[0].policyName").value("Reno16 12+256 简装"));
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT COUNT(*) FROM catalog_operation_log WHERE entity_type = 'CLEAN_JOB' OR action_type LIKE 'CLEAN_%'",

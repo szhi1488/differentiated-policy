@@ -151,6 +151,17 @@ public class CatalogCleaningWorkerImpl implements CatalogCleaningWorker {
 
     private Status applyCandidate(
             CatalogCleaningJob job, SourceGoodsItem source, Candidate candidate) {
+        if (CatalogCleaningRule.DIRECT_EXCLUSION.equals(candidate.code())) {
+            writer.persist(
+                    job,
+                    source,
+                    candidate,
+                    Status.EXCLUDED,
+                    Mapping.EXCLUDED,
+                    null,
+                    candidate.explanation());
+            return Status.EXCLUDED;
+        }
         if (candidate.code() != null) {
             return saveReview(job, source, candidate);
         }

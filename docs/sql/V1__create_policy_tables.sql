@@ -1,4 +1,4 @@
--- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-15。
+-- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-19。
 -- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
 -- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
 -- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
@@ -91,7 +91,8 @@ CREATE TABLE `goods` (
   `brand_id` BIGINT NOT NULL COMMENT '与机型一致的品牌',
   `series_id` BIGINT NOT NULL COMMENT '与机型一致的系列',
   `spu_id` BIGINT NOT NULL COMMENT '所属机型及版本',
-  `goods_name` VARCHAR(384) NOT NULL COMMENT '清洗落库后的商品名称',
+  `goods_name` VARCHAR(512) NOT NULL COMMENT '商品名称，清洗或审核通过时取来源 goodsName 原文',
+  `policy_name` VARCHAR(1024) DEFAULT NULL COMMENT '政策名',
   `ram` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范运行内存，如16GB',
   `rom` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范机身存储，统一GB，如1TB记为1024GB',
   `color_id` INT UNSIGNED NOT NULL COMMENT '关联独立颜色表的主键',
@@ -264,7 +265,14 @@ CREATE TABLE `source_goods_item` (
   CONSTRAINT `ck_source_auto_pass` CHECK (`clean_status` <> 'AUTO_PASSED' OR (`mapping_status` = 'MAPPED' AND `mapping_origin` IS NOT NULL AND `mapping_origin` = 'AUTO' AND `clean_job_id` IS NOT NULL AND `clean_candidate` IS NOT NULL AND `cleaned_at` IS NOT NULL AND `clean_error_code` IS NULL AND `reviewed_by` IS NULL AND `reviewed_at` IS NULL AND `review_reason` IS NULL)),
   CONSTRAINT `ck_source_manual_pass` CHECK (`clean_status` <> 'MANUAL_PASSED' OR (`mapping_status` = 'MAPPED' AND `mapping_origin` IS NOT NULL AND `mapping_origin` = 'MANUAL' AND `reviewed_by` IS NOT NULL AND `reviewed_at` IS NOT NULL AND `review_reason` IS NOT NULL AND CHAR_LENGTH(TRIM(`review_reason`)) > 0 AND `cleaned_at` IS NOT NULL AND `clean_error_code` IS NULL)),
   CONSTRAINT `ck_source_clean_issue` CHECK (`clean_status` NOT IN ('REVIEW_REQUIRED', 'ERROR') OR (`clean_error_code` IS NOT NULL AND CHAR_LENGTH(TRIM(`clean_error_code`)) > 0)),
-  CONSTRAINT `ck_source_clean_excluded` CHECK ((`clean_status` = 'EXCLUDED' AND `mapping_status` = 'EXCLUDED' AND `reviewed_by` IS NOT NULL AND `reviewed_at` IS NOT NULL AND `review_reason` IS NOT NULL AND CHAR_LENGTH(TRIM(`review_reason`)) > 0 AND `cleaned_at` IS NOT NULL) OR (`clean_status` <> 'EXCLUDED' AND `mapping_status` <> 'EXCLUDED'))
+  CONSTRAINT `ck_source_clean_excluded` CHECK (
+    (`clean_status` <> 'EXCLUDED' AND `mapping_status` <> 'EXCLUDED') OR
+    (`clean_status` = 'EXCLUDED' AND `mapping_status` = 'EXCLUDED' AND `cleaned_at` IS NOT NULL AND (
+      (`reviewed_by` IS NOT NULL AND `reviewed_at` IS NOT NULL AND `review_reason` IS NOT NULL AND CHAR_LENGTH(TRIM(`review_reason`)) > 0) OR
+      (`reviewed_by` IS NULL AND `reviewed_at` IS NULL AND `review_reason` IS NULL AND `clean_job_id` IS NOT NULL
+       AND `clean_candidate` IS NOT NULL AND `clean_error_code` IS NULL AND `mapping_remark` IS NOT NULL AND CHAR_LENGTH(TRIM(`mapping_remark`)) > 0)
+    ))
+  )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='当前 SKU 来源字段及内联标准映射';
 
 
@@ -278,7 +286,7 @@ CREATE TABLE `catalog_clean_job_item` (
   KEY `idx_clean_item_source` (`source_id`),
   CONSTRAINT `fk_clean_item_job` FOREIGN KEY (`job_id`) REFERENCES `catalog_clean_job` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `fk_clean_item_source` FOREIGN KEY (`source_id`) REFERENCES `source_goods_item` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT `ck_clean_item_outcome` CHECK (`outcome` IN ('PENDING', 'AUTO_PASSED', 'MANUAL_PASSED', 'REVIEW_REQUIRED', 'ERROR', 'SKIPPED'))
+  CONSTRAINT `ck_clean_item_outcome` CHECK (`outcome` IN ('PENDING', 'AUTO_PASSED', 'MANUAL_PASSED', 'REVIEW_REQUIRED', 'EXCLUDED', 'ERROR', 'SKIPPED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='清洗确认时的 SKU 范围与逐条结果';
 
 

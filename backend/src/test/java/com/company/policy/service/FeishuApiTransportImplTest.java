@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.service.impl.FeishuApiTransportImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,14 +15,16 @@ import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class FeishuApiTransportImplTest {
     private final HttpClient client = mock(HttpClient.class);
+    private final FeishuProperties properties = new FeishuProperties();
     private final FeishuApiTransportImpl transport =
-            new FeishuApiTransportImpl(client, new ObjectMapper());
+            new FeishuApiTransportImpl(client, new ObjectMapper(), properties);
 
     @Test
     void hidesUpstreamErrorBody() throws Exception {
@@ -48,6 +51,7 @@ class FeishuApiTransportImplTest {
 
     @Test
     void usesOfficialV3TokenHostAndBearerUserInfoEndpoint() throws Exception {
+        properties.setRequestTimeoutSeconds(17);
         @SuppressWarnings("unchecked")
         HttpResponse<String> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(200);
@@ -59,12 +63,14 @@ class FeishuApiTransportImplTest {
         assertThat(requests.getValue().uri().toString())
                 .isEqualTo("https://accounts.feishu.cn/oauth/v3/token");
         assertThat(requests.getValue().headers().firstValue("Authorization")).isEmpty();
+        assertThat(requests.getValue().timeout()).contains(Duration.ofSeconds(17));
         org.mockito.Mockito.clearInvocations(client);
         transport.getUserInfo("private-token");
         verify(client).send(requests.capture(), any());
         assertThat(requests.getValue().uri().toString())
                 .isEqualTo("https://open.feishu.cn/open-apis/authen/v1/user_info");
         assertThat(requests.getValue().method()).isEqualTo("GET");
+        assertThat(requests.getValue().timeout()).contains(Duration.ofSeconds(17));
         assertThat(requests.getValue().headers().firstValue("Authorization"))
                 .contains("Bearer private-token");
     }

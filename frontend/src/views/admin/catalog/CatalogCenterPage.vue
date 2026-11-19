@@ -9,6 +9,7 @@ import { useCatalogCenter } from '../../../composables/useCatalogCenter'
 import { useCatalogDictionary } from '../../../composables/useCatalogDictionary'
 import { CATALOG_SALES_STATES as statuses } from '../../../constants/catalog'
 import { catalogConfigLabel as specLabel } from '../../../utils/catalog-dictionary'
+import { copyText } from '../../../utils/clipboard'
 import CatalogDictionaryPanel from './CatalogDictionaryPanel.vue'
 import CatalogPhonePreview from './CatalogPhonePreview.vue'
 import CatalogProductEditor from './CatalogProductEditor.vue'
@@ -75,6 +76,8 @@ const table = ref()
 const dialogOpen = ref(false)
 const dialogTitle = ref('')
 const dialogNote = ref('')
+const manualCopyNo = ref('')
+const manualCopyInput = ref(null)
 const productEditor = ref(null)
 const deletingProductId = ref('')
 const metrics = computed(() => [
@@ -103,7 +106,8 @@ const metrics = computed(() => [
     note: '历史机型 / 已终止销售',
   },
 ])
-const specColumns = [
+const productColumns = [
+  ['policyName', '政策名', 140],
   ['brand', '品牌', 49],
   ['series', '系列', 67],
   ['model', '机型', 70],
@@ -204,12 +208,16 @@ function applyAndClear(action, ...args) {
 }
 
 async function copyProductNo(productNo) {
-  try {
-    await navigator.clipboard.writeText(productNo)
-    ElMessage.success('货号已复制')
-  } catch {
-    ElMessage.error('复制失败，请手动复制货号')
+  if (await copyText(productNo)) {
+    ElMessage.success({ message: '货号已复制', grouping: true })
+  } else {
+    manualCopyNo.value = productNo
   }
+}
+
+function selectManualCopyNo() {
+  manualCopyInput.value?.focus()
+  manualCopyInput.value?.select()
 }
 
 const editorEntries = computed(() => {
@@ -678,7 +686,7 @@ async function confirmDeleteProduct(row) {
                   </template>
                 </el-table-column>
                 <el-table-column
-                  v-for="[prop, label, width] in specColumns"
+                  v-for="[prop, label, width] in productColumns"
                   :key="prop"
                   :prop="prop"
                   :label="label"
@@ -800,6 +808,23 @@ async function confirmDeleteProduct(row) {
     />
 
     <el-dialog
+      :model-value="Boolean(manualCopyNo)"
+      title="手动复制货号"
+      width="min(400px, calc(100% - 24px))"
+      @update:model-value="manualCopyNo = ''"
+      @opened="selectManualCopyNo"
+    >
+      <p>请按 Ctrl+C、⌘C 或长按货号复制。</p>
+      <el-input
+        ref="manualCopyInput"
+        :model-value="manualCopyNo"
+        readonly
+        aria-label="待复制货号"
+      />
+      <template #footer><el-button @click="manualCopyNo = ''">完成</el-button></template>
+    </el-dialog>
+
+    <el-dialog
       v-model="dialogOpen"
       :title="dialogTitle"
       width="min(520px, calc(100% - 24px))"
@@ -828,6 +853,10 @@ async function confirmDeleteProduct(row) {
       </div>
       <p v-if="dialogNote">{{ dialogNote }}</p>
       <dl v-if="detailId && detail" class="catalog-center-fields">
+        <div class="catalog-center-policy-name">
+          <dt>政策名</dt>
+          <dd>{{ detail.policyName || '—' }}</dd>
+        </div>
         <div v-for="[label, value] in detailFields" :key="label">
           <dt>{{ label }}</dt>
           <dd>{{ value }}</dd>

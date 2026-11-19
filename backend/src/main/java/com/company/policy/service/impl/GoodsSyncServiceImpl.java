@@ -391,12 +391,9 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                 !java.util.Arrays.equals(fields(previous), fields(current))
                         || !Objects.equals(previous.isBlockup(), current.isBlockup())
                         || !Objects.equals(previous.isPackageGood(), current.isPackageGood());
-        checkUpdated(
-                sources.updateSku(
-                        job,
-                        existing,
-                        current,
-                        changed && !"EXCLUDED".equals(existing.getMappingStatus())));
+        boolean manuallyExcluded =
+                "EXCLUDED".equals(existing.getMappingStatus()) && existing.getReviewedBy() != null;
+        checkUpdated(sources.updateSku(job, existing, current, changed && !manuallyExcluded));
         if (changed) {
             checkUpdated(
                     operationLogs.insert(

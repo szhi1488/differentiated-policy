@@ -112,6 +112,9 @@ public interface SourceGoodsItemMapper {
           <if test="recheck">
             clean_status = 'PENDING', clean_job_id = NULL,
             clean_candidate = NULL, clean_error_code = NULL, cleaned_at = NULL,
+            <if test="item.mappingStatus == 'EXCLUDED'">
+              mapping_status = 'UNMAPPED', mapping_remark = NULL,
+            </if>
           </if>
           last_seen_job_id = #{job.id}, updated_at = CURRENT_TIMESTAMP, record_version = record_version + 1
         WHERE source_key = #{job.sourceKey}

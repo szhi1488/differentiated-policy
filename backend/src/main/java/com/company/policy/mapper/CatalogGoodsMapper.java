@@ -59,33 +59,40 @@ public interface CatalogGoodsMapper {
     @Select(
             """
         <script>
-        SELECT id, status, spu_id, ram, rom, color_id FROM goods
+        SELECT id FROM goods
         WHERE spu_id = #{spu} AND ram = #{ram} AND rom = #{rom} AND color_id = #{color}
         <if test="excludedId != null">AND id != #{excludedId}</if>
         ORDER BY id LIMIT 1 FOR UPDATE
         </script>
         """)
-    Match lockDuplicateGoods(long spu, String ram, String rom, long color, Long excludedId);
+    Long lockDuplicateGoods(long spu, String ram, String rom, long color, Long excludedId);
 
-    @Select("SELECT id, status, spu_id, ram, rom, color_id FROM goods WHERE id = #{id} FOR UPDATE")
+    String MATCH_COLUMNS =
+            "SELECT id, status, spu_id, ram, rom, color_id, goods_name, policy_name FROM goods ";
+
+    @Select(MATCH_COLUMNS + "WHERE id = #{id} FOR UPDATE")
     Match lockMappedGoods(long id);
 
-    @Select(
-            "SELECT id, status, spu_id, ram, rom, color_id FROM goods WHERE sku_id = #{sku} FOR UPDATE")
+    @Select(MATCH_COLUMNS + "WHERE sku_id = #{sku} FOR UPDATE")
     Match lockGoodsBySku(String sku);
 
     @Insert(
             """
-        INSERT INTO goods (sku_id, product_no, brand_id, series_id, spu_id, goods_name,
+        INSERT INTO goods (sku_id, product_no, brand_id, series_id, spu_id, goods_name, policy_name,
                            ram, rom, color_id, status)
-        VALUES (#{skuId,jdbcType=VARCHAR}, #{productNo}, #{brandId}, #{seriesId}, #{spuId}, #{goodsName},
+        VALUES (#{skuId,jdbcType=VARCHAR}, #{productNo}, #{brandId}, #{seriesId}, #{spuId}, #{goodsName}, #{policyName,jdbcType=VARCHAR},
                 #{ram}, #{rom}, #{colorId}, #{status})
         """)
     @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
     int insertGoods(CatalogGoodsInsert entry);
 
-    @Update("UPDATE goods SET status = 1 WHERE id = #{id} AND status IS NULL")
-    int defaultToOnSale(long id);
+    @Update(
+            """
+        UPDATE goods SET goods_name = #{name}, policy_name = #{policyName,jdbcType=VARCHAR},
+                         status = COALESCE(status, 1)
+        WHERE id = #{id}
+        """)
+    int syncSourceNames(long id, String name, String policyName);
 
     @Delete("DELETE FROM goods WHERE id = #{id}")
     int delete(long id);
@@ -133,7 +140,7 @@ public interface CatalogGoodsMapper {
 
     String PRODUCT_COLUMNS =
             """
-        SELECT g.id, g.sku_id, g.product_no, g.goods_name, g.brand_id, b.name AS brand_name,
+        SELECT g.id, g.sku_id, g.product_no, g.goods_name, g.policy_name, g.brand_id, b.name AS brand_name,
           g.series_id, s.name AS series_name, g.spu_id, p.name AS model_name, p.edition,
           g.ram, g.rom, g.color_id, c.color_name, g.status, g.updated_at
         """;
@@ -309,7 +316,15 @@ public interface CatalogGoodsMapper {
 
     record Model(long id, long seriesId, String seriesName) {}
 
-    record Match(long id, Integer status, long spuId, String ram, String rom, long colorId) {}
+    record Match(
+            long id,
+            Integer status,
+            long spuId,
+            String ram,
+            String rom,
+            long colorId,
+            String goodsName,
+            String policyName) {}
 
     record Sku(long id, String skuId) {}
 }

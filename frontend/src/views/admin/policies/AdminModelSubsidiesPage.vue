@@ -27,6 +27,7 @@ import './model-subsidies.css'
 const brand = ref('OPPO')
 const modelId = ref('find-x8')
 const configId = ref('16-512')
+const platformCode = ref('')
 const currentAt = ref(timelineTimeFromValue(Date.now()))
 const dates = ref([SUBSIDY_PREVIEW_DATES[0], currentAt.value.slice(0, 10)])
 const showIndependent = ref(false)
@@ -36,6 +37,7 @@ const modelOptions = computed(() =>
 const initialSelection = () => ({
   modelId: modelId.value,
   configId: configId.value,
+  platformCode: platformCode.value,
   range: [`${dates.value[0]}T00:00:00`, `${dates.value[1]}T23:59:59`],
 })
 const applied = ref(initialSelection())
@@ -53,7 +55,12 @@ const segments = computed(() =>
   createSubsidyPreviewSegments(applied.value.modelId, applied.value.configId),
 )
 const visibleSegments = computed(() =>
-  visibleTimelineSegments(segments.value, range.value, showIndependent.value),
+  visibleTimelineSegments(
+    segments.value,
+    range.value,
+    showIndependent.value,
+    applied.value.platformCode,
+  ),
 )
 const { cursorAt, zoom, setCursor, setZoom, resetZoom } = useSubsidyTimelineNavigation(range)
 const pointPanel = ref(['point'])
@@ -141,6 +148,7 @@ function reset() {
   brand.value = 'OPPO'
   modelId.value = 'find-x8'
   configId.value = '16-512'
+  platformCode.value = ''
   currentAt.value = timelineTimeFromValue(Date.now())
   dates.value = [SUBSIDY_PREVIEW_DATES[0], currentAt.value.slice(0, 10)]
   showIndependent.value = false
@@ -152,7 +160,6 @@ function reset() {
   <section class="model-subsidies" aria-label="机型补贴查询">
     <header class="model-subsidy-header workspace-page-banner">
       <WorkspacePageHeading title="机型补贴查询" icon="history" />
-      <el-tag type="warning" effect="light">静态预览 · 示例数据</el-tag>
     </header>
 
     <section class="model-subsidy-surface model-subsidy-query" aria-label="查询条件">
@@ -180,6 +187,17 @@ function reset() {
               :key="item.id"
               :label="item.label"
               :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="平台">
+          <el-select v-model="platformCode" aria-label="平台" placeholder="全部平台">
+            <el-option label="全部平台" value="" />
+            <el-option
+              v-for="(label, code) in PLATFORM_LABELS"
+              :key="code"
+              :label="label"
+              :value="code"
             />
           </el-select>
         </el-form-item>
@@ -258,7 +276,7 @@ function reset() {
             @cursor-change="setCursor"
             @zoom-change="setZoom"
           />
-          <el-empty v-else :image-size="64" description="所选日期范围内暂无示例政策" />
+          <el-empty v-else :image-size="64" description="所选条件下暂无示例政策" />
         </section>
       </div>
 
@@ -278,7 +296,7 @@ function reset() {
                 class="model-subsidy-point-channel"
               >
                 <h3>{{ channel.short }}</h3>
-                <ul>
+                <ul v-if="segmentsByChannel[channel.code].length">
                   <li
                     v-for="row in pointRows.filter((item) => item.channel === channel.code)"
                     :key="row.key"
@@ -298,6 +316,7 @@ function reset() {
                     <small v-else>暂无适用政策</small>
                   </li>
                 </ul>
+                <small v-else>暂无符合条件的补贴</small>
               </div>
             </el-collapse-item>
           </el-collapse>

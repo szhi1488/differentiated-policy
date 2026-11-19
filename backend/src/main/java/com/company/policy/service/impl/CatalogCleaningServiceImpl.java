@@ -310,7 +310,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                         throw conflict("CATALOG_SOURCE_CHANGED", "该商品尚无可审核的结果。");
                     }
                     var job = requireJob(source.getCleanJobId());
-                    Candidate previous = writer.readCandidate(source);
+                    Candidate previous = currentCandidate(source);
                     Candidate candidate =
                             previous == null ? CatalogCleaningRule.parse(source) : previous;
                     String reason = request.reason();
@@ -325,12 +325,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 source,
                                 candidate,
                                 Status.EXCLUDED,
-                                new CatalogCleaningResultWriter.Mapping(
-                                        "EXCLUDED", null, null, null),
+                                CatalogCleaningResultWriter.Mapping.EXCLUDED,
                                 admin,
                                 reason);
                     } else {
-                        if (CatalogCleaningRule.EXCLUSION.equals(candidate.code())) {
+                        if (CatalogCleaningRule.EXCLUSION.equals(candidate.code())
+                                || CatalogCleaningRule.DIRECT_EXCLUSION.equals(candidate.code())) {
                             throw conflict("CATALOG_CLEAN_RULE_EXCLUSION", "该商品命中政策排除规则。");
                         }
                         candidate = CatalogCleaningRule.manual(request.target(), candidate);
@@ -437,7 +437,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
     }
 
     private Detail toDetail(SourceGoodsItem source) {
-        var candidate = writer.readCandidate(source);
+        var candidate = currentCandidate(source);
         return new Detail(
                 result(source, candidate),
                 source.original(),
@@ -452,6 +452,17 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     private Result storedResult(SourceGoodsItem source) {
         return result(source, writer.readCandidate(source));
+    }
+
+    private Candidate currentCandidate(SourceGoodsItem source) {
+        // 升级前的待审候选也须按当前排除词校验，防止从旧审核窗口建立映射。
+        if (Status.REVIEW_REQUIRED.name().equals(source.getCleanStatus())) {
+            var excluded = CatalogCleaningRule.directExclusion(source);
+            if (excluded != null) {
+                return excluded;
+            }
+        }
+        return writer.readCandidate(source);
     }
 
     private static Result result(SourceGoodsItem source, Candidate candidate) {

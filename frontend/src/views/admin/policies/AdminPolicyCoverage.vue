@@ -77,13 +77,9 @@ const outcomeText = (counts) =>
 <template>
   <section class="admin-policy-detail-section admin-policy-coverage" aria-label="覆盖结果">
     <div class="coverage-heading">
-      <div class="coverage-heading-title">
-        <h3>{{ pending ? '覆盖预览' : '生效范围' }}</h3>
-        <span class="coverage-boundary">同渠道 · 同平台</span>
-      </div>
-      <p class="coverage-time">
-        <template v-if="pending">假设现在通过，最早生效于</template>
-        <template v-else>生效条件满足于</template>
+      <h3>{{ pending ? '覆盖预览' : '生效范围' }}</h3>
+      <p v-if="!pending" class="coverage-time">
+        生效条件满足于
         <time>{{ time(coverage.effectiveFrom) }}</time>
         <span>（北京时间）</span>
       </p>
@@ -220,13 +216,10 @@ const outcomeText = (counts) =>
       <template #empty><el-empty :image-size="60" description="没有符合条件的覆盖结果" /></template>
     </el-table>
     <footer class="admin-policy-footer coverage-footer">
-      <div>
-        <span aria-live="polite">
-          展示 {{ groups.length }} 组，涉及 {{ filtered.length }} 项商品平台范围 / 全部
-          {{ rows.length }} 项
-        </span>
-        <p>仅统计本申请已选商品，按筛选范围汇总；展开行查看商品明细。</p>
-      </div>
+      <span aria-live="polite">
+        展示 {{ groups.length }} 组，涉及 {{ filtered.length }} 项商品平台范围 / 全部
+        {{ rows.length }} 项
+      </span>
       <el-pagination
         v-if="groups.length > pageSize"
         v-model:current-page="page"
@@ -242,7 +235,6 @@ const outcomeText = (counts) =>
 
 <style scoped>
 .coverage-heading,
-.coverage-heading-title,
 .coverage-products-heading {
   display: flex;
   align-items: center;
@@ -256,16 +248,11 @@ const outcomeText = (counts) =>
 .coverage-heading h3 {
   margin: 0;
 }
-.coverage-boundary,
 .coverage-time,
 .coverage-query-time,
 .coverage-products-heading > span {
   color: var(--policy-muted);
   font-size: 12px;
-}
-.coverage-boundary {
-  border-left: 1px solid var(--policy-line);
-  padding-left: 12px;
 }
 .coverage-time {
   margin: 0;
@@ -362,11 +349,6 @@ const outcomeText = (counts) =>
 }
 .coverage-footer {
   align-items: flex-start;
-}
-.coverage-footer p {
-  color: var(--policy-muted);
-  font-size: 12px;
-  margin: 6px 0 0;
 }
 @media (max-width: 660px) {
   .coverage-heading {

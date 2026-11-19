@@ -232,7 +232,7 @@ public interface CatalogCleaningMapper {
                 </when>
                 <otherwise>
                   clean_attempts = clean_attempts + 1,
-                  <if test="change.status == 'AUTO_PASSED'">
+                  <if test="change.status == 'AUTO_PASSED' or change.status == 'EXCLUDED'">
                     reviewed_by = NULL, reviewed_at = NULL, review_reason = NULL,
                   </if>
                 </otherwise>

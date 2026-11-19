@@ -1,6 +1,6 @@
 # 本地附件接口
 
-更新日期：2026-11-17。申请页已接通文件上传、草稿绑定与回填、提交快照，以及申请人和管理员的政策附件下载。
+更新日期：2026-11-18。申请页已接通文件上传、草稿绑定与回填、提交快照，以及申请人和管理员的政策附件下载。
 
 Element Plus Upload 负责选文件，`useAttachments` 通过统一请求层逐个上传。页面按实际响应展示上传中、已上传、失败和重试。上传期间锁定编辑与写操作，失败文件须重试或移除后再保存或提交。账号变化或退出会丢弃迟到响应并清理本地文件状态。
 
@@ -17,6 +17,8 @@ C:/Users/admin/Desktop/differentiated policy/data/
 ```
 
 从项目根目录或 `backend/` 启动均定位到同一个 `data`，首次上传自动创建目录。其他工作目录或部署环境通过 `POLICY_STORAGE_ROOT` 指定绝对路径；值不含 `attachments`。Windows properties 使用正斜杠，例如 `POLICY_STORAGE_ROOT=C:/Users/admin/Desktop/differentiated policy/data`。
+
+`application.yml` 已将 `POLICY_STORAGE_ROOT` 显式映射到 `policy.storage.root`，因此在 `backend/.env.local.properties` 填写这个大写变量即可生效；同名系统环境变量优先。样例已补齐该项，本机实际配置沿用原 `data` 目录，未移动已有附件。修改后重启后端。路径包含空格时直接填写完整路径，不加引号。
 
 `data/` 已加入 Git 忽略，不公开为静态资源。更新应用时保留整个目录，备份同时包含内容及元数据；不能仅复制 `content`。随机命名避免同名覆盖，原文件名不参与路径拼接。上传先写 `.upload-<UUID>`，验证和元数据写入完成后移动至最终目录；常规失败清理临时文件。强制结束进程可能遗留 `.upload-*`，不对外提供访问；管理员应在服务停止后核对清理。
 

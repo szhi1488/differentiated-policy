@@ -23,6 +23,7 @@ import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -52,6 +53,7 @@ class JackyunGoodsServiceImplTest {
     void signsTheOriginalJsonAndKeepsTheSourceFieldsAndExactCursor() throws Exception {
         configure();
         properties.setToken("test+token&value");
+        properties.setRequestTimeoutSeconds(27);
         respond(
                 """
                 {"code":200,"result":{"contextId":"42","data":[
@@ -88,6 +90,7 @@ class JackyunGoodsServiceImplTest {
         var request = requests.getValue();
         assertThat(request.uri().toString()).isEqualTo("https://open.jackyun.com/open/openapi/do");
         assertThat(request.method()).isEqualTo("POST");
+        assertThat(request.timeout()).contains(Duration.ofSeconds(27));
         Map<String, String> form = readForm(request);
         assertThat(form)
                 .containsEntry("method", "erp-goods.goods.sku.search")

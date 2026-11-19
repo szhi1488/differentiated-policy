@@ -1,6 +1,6 @@
 # 商品管理接口契约
 
-更新日期：2026-11-14。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护已接入原十四表基线。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期：2026-11-19。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护已接入原十四表基线。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
@@ -42,13 +42,13 @@
 | POST | /api/admin/source-goods/{id}/review | 带 `recordVersion` 和 `decision` 审核，支持通过 `APPROVE` 和不通过 `EXCLUDE` |
 | POST | /api/admin/source-goods/{id}/clean-retry | 带 `recordVersion` 和 `requestKey` 重试一条 `ERROR`，返回 202 |
 
-品牌可选 OPPO手机、一加手机。查询结果省略品牌汇总两品牌，省略状态显示全部。日期为北京时间 `YYYY-MM-DD`，`unknownDate=true` 与具体日期互斥。状态查询支持 `PENDING`（包括旧处理中状态）、`PASSED`（自动和人工通过）、`REVIEW_REQUIRED`、`ERROR`、`EXCLUDED`。关键词最多 128 字符，查商品名或货号。页码从 1 开始，每页 1 至 100 条。计数按品牌、建档日和关键词计算，和当前页签无关。
+品牌可选 OPPO手机、一加手机。查询结果省略品牌汇总两品牌，省略状态显示全部。日期为北京时间 `YYYY-MM-DD`，`unknownDate=true` 与具体日期互斥。状态查询支持 `PENDING`（包括旧处理中状态）、`PASSED`（自动和人工通过）、`REVIEW_REQUIRED`、`ERROR`、`EXCLUDED`（当前已自动排除或人工审核不通过的来源）。关键词最多 128 字符，查商品名或货号。页码从 1 开始，每页 1 至 100 条。计数按品牌、建档日和关键词计算，和当前页签无关。
 
 开始清洗指定一个品牌，日期为空时涵盖该品牌全部已入库 SKU。实际纳入已完成导入或已结束导入中已落库的待清洗 SKU，可选未映射的待审 SKU。进行中或暂停的最近导入需先完成或结束。确认数量必须大于 0；实际数量变化返回 `409 CATALOG_CLEAN_SCOPE_CHANGED`。幂等请求键同账套唯一，重复请求返回已有任务，活动任务范围相同可直接返回该任务。其他范围在同账套有运行任务时返回 `409 CATALOG_CLEAN_ACTIVE`。
 
 清洗任务独立于导入任务，ID 为字符串。任务返回 `brandName`、`createdDate`、`includeReviews`、`targetSourceId`、`status`、`requesterName`、`createdAt`、`total`、`processed`、`progress` 和 `resultCounts`。新基线任务状态为 `RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。待人工审核算作已分流，确认后发生来源变化的成员记为 `SKIPPED`，保留在本轮统计中。
 
-结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。命中排除规则的来源只允许审核不通过。兼容旧请求的可选 `reason`，省略或留空时服务端按决定记录「审核通过」或「审核不通过」。旧记录版本或不允许的状态返回 409。
+结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。来源文本命中三个直接排除词时，任务成员结果为 `EXCLUDED`，`resultCounts.EXCLUDED` 为本轮自动排除数。详情原因码为 `DIRECT_EXCLUSION`，`candidate.evidence` 列出各命中字段和词，自动排除的审核人、审核时间及审核意见为空。旧待审记录命中直接排除词时，审核通过返回 `409 CATALOG_CLEAN_RULE_EXCLUSION`。其他排除候选仍由管理员确认排除。源商品名称缺失或全为空白时，人工通过返回 `409 CATALOG_SOURCE_NAME_MISSING`，须补全来源名称后重新导入。兼容旧请求的可选 `reason`，省略或留空时服务端按决定记录「审核通过」或「审核不通过」。旧记录版本或不允许的状态返回 409。
 
 ## 已实现的标准商品目录
 
@@ -65,13 +65,13 @@
 
 列表和统计基于当前标准商品记录。销售 `status` 取 1 在售、2 待上架、3 已下架、4 已停产，响应可为 null（未知）。分页从 1 开始，默认 20 条，最多 100 条。按更新时间和 ID 降序，`ascending=true` 时升序。更新时间按北京时间精确到秒。
 
-商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。商品响应包含原始 SKU、货品编号、标准商品名称、RAM、ROM、销售状态。响应中的 `skuId` 为该商品对应源商品的原始 SKU 字符串，`sourceSkuId` 保留为兼容字段，与 `skuId` 相同，`sourceName` 使用该条来源原文 `goodsName`。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时三项均为 null。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
+商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。管理员商品列表和详情的 `goodsName` 是已保存的商品名称，`policyName` 是已保存的政策名。自动清洗和人工审核通过时分别复制来源 `goodsName`、`goodsField1` 原文。字段 1 的空串及 null 分别保留，手工新增的商品政策名为 null。其他商品字段包括原始 SKU、货品编号、RAM、ROM 和销售状态。响应中的 `skuId` 为该商品对应源商品的原始 SKU 字符串，`sourceSkuId` 保留为兼容字段，与 `skuId` 相同，`sourceName` 使用该条来源原文 `goodsName`。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时三项均为 null。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
 
 删除在事务内检查引用。关联来源 SKU 时返回 `CATALOG_GOODS_SOURCE_BOUND`，政策明细引用该商品的 `goods_id` 时返回 `CATALOG_GOODS_POLICY_BOUND`，数据库拒绝删除其他已关联记录时返回 `CATALOG_GOODS_REFERENCED`。删除成功后原商品 ID 查询详情返回 404。
 
 自动清洗通过时，标准目录、来源 `goodsId` 和任务成员结果同事务写入。人工审核通过时，同事务保存标准目录、来源映射和审核信息，本轮任务成员保留当时的分流结果。自动清洗的审核人为空，人工审核记录实际操作人。重复处理只复用该来源自身的商品；相同配置颜色的其他来源不参与复用。人工确认改映射或排除时同事务转移或释放原始 SKU，旧商品及其政策引用保留。修改现有映射按来源版本校验，冲突返回 409。标准商品批量导入接口待接入。
 
-新增商品提交 `name`、`brandId`、`seriesId`、`modelName`、`ram`、`rom`、`colorId` 和销售 `status`，`edition` 可空。RAM 支持正整数 GB，ROM 支持正整数 GB、T 或 TB，省略单位时按 GB 处理。ROM 的 1T 与 1024GB 统一存为 1024GB。同品牌同机型版本必须归属同一系列，手工新增时同机型版本、RAM、ROM 和颜色重复返回 409；此校验不阻止不同原始 SKU 的清洗建档。新增商品的 `skuId`、来源关联和货号均留空，以 `id` 标识。
+新增或编辑的商品名称最多 512 个 Unicode 字符。新增商品提交 `name`、`brandId`、`seriesId`、`modelName`、`ram`、`rom`、`colorId` 和销售 `status`，`edition` 可空。RAM 支持正整数 GB，ROM 支持正整数 GB、T 或 TB，省略单位时按 GB 处理。ROM 的 1T 与 1024GB 统一存为 1024GB。同品牌同机型版本必须归属同一系列，手工新增时同机型版本、RAM、ROM 和颜色重复返回 409；此校验不阻止不同原始 SKU 的清洗建档。新增商品的 `skuId`、来源关联和货号均留空，以 `id` 标识。
 
 ### 商品编辑
 

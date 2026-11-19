@@ -68,6 +68,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                             target.series(),
                             target.spu(),
                             request.name().strip(),
+                            null,
                             target.ram(),
                             target.rom(),
                             target.color(),
@@ -106,7 +107,11 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
             if (!target.matches(current) && current.sourceSkuId() == null) {
                 checkDuplicate(target, id);
             }
-            String name = product.name().strip();
+            // 编辑其他字段时保留清洗落库的原名，包括首尾空格。
+            String name =
+                    product.name().equals(current.goodsName())
+                            ? current.goodsName()
+                            : product.name().strip();
             if (target.matches(current)
                     && name.equals(current.goodsName())
                     && Objects.equals(product.status(), current.status())) {

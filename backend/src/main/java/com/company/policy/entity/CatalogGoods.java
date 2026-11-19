@@ -7,6 +7,7 @@ public record CatalogGoods(
         String skuId,
         String productNo,
         String goodsName,
+        String policyName,
         long brandId,
         String brandName,
         long seriesId,

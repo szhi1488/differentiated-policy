@@ -16,7 +16,7 @@ class CatalogCleaningScheduling {
         this.worker = worker;
     }
 
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelayString = "${jackyun.clean-poll-interval-ms:2000}")
     void poll() {
         worker.processNextBatch();
     }

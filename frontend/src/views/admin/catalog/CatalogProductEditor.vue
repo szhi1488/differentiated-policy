@@ -47,7 +47,10 @@ const required = (label) => ({
   trigger: 'blur',
 })
 const rules = {
-  name: required('商品名称'),
+  name: [
+    required('商品名称'),
+    { pattern: /^[\s\S]{1,512}$/u, message: '商品名称最多 512 个字符', trigger: 'blur' },
+  ],
   brandId: { required: true, message: '请选择品牌', trigger: 'change' },
   seriesId: { required: true, message: '请选择系列', trigger: 'change' },
   model: required('机型'),
@@ -77,7 +80,7 @@ async function save() {
       return
     }
     await props.saveProduct({
-      name: draft.name.trim(),
+      name: draft.name,
       brandId: draft.brandId.slice('brand-'.length),
       seriesId: draft.seriesId.slice('series-'.length),
       modelName: draft.model.trim(),
@@ -152,7 +155,7 @@ async function close(done) {
         @submit.prevent="save"
       >
         <el-form-item label="商品名称" prop="name" class="catalog-product-editor-wide">
-          <el-input v-model="draft.name" maxlength="384" />
+          <el-input v-model="draft.name" />
         </el-form-item>
         <el-form-item label="品牌" prop="brandId">
           <el-select

@@ -14,6 +14,7 @@ defineProps({ job: { type: Object, required: true } })
     <div class="cleaning-job-counts">
       <span>自动通过 {{ job.resultCounts.AUTO_PASSED ?? 0 }}</span>
       <span>人工通过 {{ job.resultCounts.MANUAL_PASSED ?? 0 }}</span>
+      <span>自动排除 {{ job.resultCounts.EXCLUDED ?? 0 }}</span>
       <span>待人工审核 {{ job.resultCounts.REVIEW_REQUIRED ?? 0 }}</span>
       <span>技术失败 {{ job.resultCounts.ERROR ?? 0 }}</span>
       <span v-if="job.resultCounts.SKIPPED">源商品已更新 {{ job.resultCounts.SKIPPED }}</span>

@@ -1,8 +1,8 @@
 # 系统整体架构
 
-更新日期：2026-11-17。源码现状与已确认但未实现能力分别标注。
+更新日期：2026-11-18。源码现状与已确认但未实现能力分别标注。
 
-2026-11-15 用户确认源商品与标准商品一对一：清洗或人工审核通过后，`goods.sku_id` 延续该来源的原始 SKU，不同源 SKU 的相同配置颜色不再归并；无来源手工商品 SKU 为空。用户确认删除旧表后重建，最新空库基线和核对 SQL 见[数据库设计](../sql/database-design.md#2026-11-15-原始-sku-一对一调整)。目标库调整由用户在 Navicat 执行。
+2026-11-15 用户确认源商品与标准商品一对一：清洗或人工审核通过后，`goods.sku_id` 延续该来源的原始 SKU，不同源 SKU 的相同配置颜色不再归并；无来源手工商品 SKU 为空。用户确认删除旧表后重建，执行顺序见 [Navicat 重建步骤](../sql/database-design.md#1-在-navicat-建表)。目标库调整由用户在 Navicat 执行。
 
 商品读取已接入后端 `JackyunGoodsService`，并实测一加、OPPO 两品牌的单页查询及续拉。已实现按 SKU 更新原文、建档日追溯、手动启动清洗及异常审核。管理员在源商品库右上角打开导入弹窗，选品牌并发起全量或按建档日期导入。[商品方案](catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
@@ -48,7 +48,7 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 
 ## 前端组件与页面现状
 
-管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 已提供静态预览。`AdminModelSubsidiesPage.vue` 组织紧凑筛选及补贴明细，`PolicySubsidyTimeline.vue` 通过 ECharts 6.1.0 自定义图与 SVGRenderer 上下展示零售、百亿区间；`useSubsidyTimelineNavigation` 共用指针和缩放状态，示例集中在 `mocks/fixtures/model-subsidies.js`。比例显示计算基数，支持当前标记、独立商品、色块点击和右侧时点查询；悬停保持底色、移开恢复边框，移动指针不重建图表。「当前时间」读取浏览器时钟，按北京时间将查询日期范围带到今天，恢复完整缩放并同步两图指针和右侧时点结果。机型摘要、独立指针操作栏、冗余说明及明细下拉框已移除。页面保留示例标识，不调用商品或政策业务接口；真实已通过政策历史计算及申请人端未接入，无后端或数据库调整。[页面规则](admin-workspace.md#机型补贴查询静态预览) · [既往验证](frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)
+管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 已提供静态预览。`AdminModelSubsidiesPage.vue` 组织紧凑筛选及补贴明细，`PolicySubsidyTimeline.vue` 通过 ECharts 6.1.0 自定义图与 SVGRenderer 上下展示零售、百亿区间；`useSubsidyTimelineNavigation` 共用指针和缩放状态，示例集中在 `mocks/fixtures/model-subsidies.js`。比例显示计算基数，支持当前标记、独立商品、色块点击和右侧时点查询；悬停保持底色、移开恢复边框，移动指针不重建图表。「当前时间」读取浏览器时钟，按北京时间将查询日期范围带到今天，恢复完整缩放并同步两图指针和右侧时点结果。机型摘要、独立指针操作栏、冗余说明及明细下拉框已移除。查询条件下方说明数据来自内置示例。页面不调用商品或政策业务接口；真实已通过政策历史计算及申请人端未接入，无后端或数据库调整。[页面规则](admin-workspace.md#机型补贴查询静态预览) · [既往验证](frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)
 
 管理员五页及申请人提交政策、我的提交已统一侧栏、标题横幅和主内容区视觉：`workspace-sidebar-waves.png` 维护侧栏贴底波浪，`workspace-page-banner.png` 维护标题背景，`workspace-content-background.png` 在两角色布局的顶部导航下铺满正文区域。标题通过 `WorkspacePageHeading.vue` 复用 `AppIcon` SVG 线性图标，移除说明小字；共用 104px 横幅基准高度、桌面 22px／手机 20px 标题和 48px 图标底座。资源归属、裁切及响应式间距见[两角色工作台视觉](frontend-development.md#两角色工作台视觉)，各轮本地检查与模拟预览已记录，飞书真机仍待复测。
 
@@ -196,3 +196,5 @@ backend/src/main/java/com/company/policy/
 2026-11-11 Element Plus 替换：本轮前端 lint、格式、41 项测试及生产构建通过。覆盖组件切换、确认框、日期及附件暂存交互。用户授权后，已检查 1440px、768px、390px 浏览器布局，修复窄屏时间与弹层及空状态显示，验证日期选择、明细输入、渠道提示和菜单返回。使用本地临时组件预览，未进行真实飞书授权或业务提交联调；本次未运行后端检查。
 
 本地前端 `http://127.0.0.1:5173`，后端 `http://127.0.0.1:8080`，Vite 代理 `/api`；默认只监听本机。正式 HTTPS 部署须同源代理并设置 Secure Cookie，多实例共享会话和缓存。当前单进程会话随重启清空。
+
+环境配置统一由实际 `.env.local.properties` 或系统环境变量经 YAML 映射读取，样例不参与运行。正式同机 Nginx 代理也可监听 `127.0.0.1:8080`，独立容器按网络需要监听 `0.0.0.0:8080`。导入和清洗任务由后端执行，任务成功创建后不依赖网页或飞书客户端保持打开；后台继续执行以服务、宿主机、开关和任务状态正常为前提。[完整配置与运行规则](environment-configuration.md)

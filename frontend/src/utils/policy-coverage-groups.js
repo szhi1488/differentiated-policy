@@ -35,7 +35,6 @@ export function coverageProducts(detail) {
     return {
       ...row,
       ...selection,
-      comparisonAt: detail.coverage.at,
       key: JSON.stringify([row.goodsId, row.platformCode]),
       name: product?.goodsName ?? `商品 ${row.goodsId}`,
       color: product?.colorName ?? null,

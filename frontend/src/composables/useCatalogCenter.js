@@ -35,6 +35,7 @@ function toProduct(row) {
     productNo: row.productNo,
     name: catalogGoodsNameLabel(row.goodsName),
     goodsName: row.goodsName,
+    policyName: row.policyName?.trim() ? row.policyName : null,
     source: row.sourceName,
     brandId: row.brandId,
     brand: row.brandName,

@@ -28,7 +28,32 @@
 
 环境：Node.js 22.12+、npm、JDK 17、Maven 3.8+。本机检查为 Node.js 22.15.0、npm 10.9.2、JDK 17.0.6、Maven 3.8.4。
 
-后端从 `backend/.env.local.properties` 读取私密配置，已在本机配置。支持从项目根目录（包括 IDEA 默认工作目录）或 `backend/` 目录启动；两种工作目录均有回归验证。新环境可将 `backend/.env.example` 复制为该文件并填写密钥，也可使用同名系统环境变量；环境变量优先。不要把密钥放到 `frontend/`、`VITE_*` 变量、源码或可提交的配置中。
+后端配置文件分工如下，真实值填写在 `backend/.env.local.properties`：
+
+| 文件 | 用途 | 是否由应用读取 |
+| --- | --- | --- |
+| `backend/.env.example` | 唯一配置样例，供新环境复制，不填写真实凭证 | 否 |
+| `backend/.env.local.properties` | 本机实际配置，保存真实值，已被 Git 忽略 | 是 |
+| `backend/src/main/resources/application.yml` | 声明配置项及默认值，从上述本地文件或系统环境变量取值 | 是 |
+
+已移除重复且过时的 `.env.local.properties.example`。新环境将 `.env.example` 复制为 `.env.local.properties` 后填写；已有实际配置不要用样例覆盖。支持从项目根目录（包括 IDEA 默认工作目录）或 `backend/` 目录启动；同名系统环境变量优先，修改后重启后端。不要把密钥放到 `frontend/`、`VITE_*` 变量、源码或可提交的配置中。
+
+飞书登录必须配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `FEISHU_TENANT_KEY`，应用 ID 不再内置测试值。租户只读取 `FEISHU_TENANT_KEY`，不再回退到其他名称：测试环境填测试企业标识，正式环境填正式公司标识。切换正式环境时同步核对应用凭证、访问 Origin、飞书回调地址及权限。吉客云接口使用独立的 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET` 及按需配置的 `JACKYUN_TOKEN`，不使用飞书租户值。
+
+环境参数均通过 `application.yml` 显式映射，下面的大写变量可填写在 `.env.local.properties`，也可使用同名系统环境变量。`DB_URL` 和 `FEISHU_ALLOWED_ORIGINS` 必须按实际环境填写，不再回退到内置的本机库和开发地址。
+
+| 配置项 | 用途与默认行为 |
+| --- | --- |
+| `SERVER_ADDRESS`、`SERVER_PORT` | 默认监听 `127.0.0.1:8080`；局域网或部署环境按需填写，修改端口时同步 `/api` 代理目标 |
+| `POLICY_STORAGE_ROOT` | 附件存储根目录，不含 `attachments`；Windows 使用正斜杠，部署使用稳定绝对路径。本机已明确配置原项目 `data` 目录；留空仍兼容从项目根目录或 `backend/` 启动 |
+| `JACKYUN_IMPORT_SCHEDULING_ENABLED`、`JACKYUN_CLEAN_SCHEDULING_ENABLED` | 默认均为 `true`，控制导入和清洗后台任务；设为 `false` 后不自动领取或处理对应任务，不会自动取消已保存的任务 |
+| `JACKYUN_IMPORT_POLL_INTERVAL_MS`、`JACKYUN_CLEAN_POLL_INTERVAL_MS` | 后台任务检查间隔，默认均为 2000 毫秒，允许 1000～60000；导入接口请求间隔仍由 `JACKYUN_IMPORT_INTERVAL_SECONDS` 控制 |
+| `HTTP_CONNECT_TIMEOUT_SECONDS` | 外部 HTTP 连接超时，默认 5 秒 |
+| `FEISHU_REQUEST_TIMEOUT_SECONDS`、`JACKYUN_REQUEST_TIMEOUT_SECONDS` | 飞书和吉客云的请求超时，默认分别为 10 秒、20 秒 |
+
+三项超时均允许 1～60 秒；超时或轮询间隔超出范围时启动校验失败。升级已有环境时保留原有配置值，补齐样例中的新增项后重启后端。本次不调整会话时长、上传限制、任务租约及业务规则。
+
+完整参数及测试转正式规则见[环境配置说明](docs/architecture/environment-configuration.md)。正式同机 Nginx 代理可继续使用 `127.0.0.1:8080`，独立容器通常监听 `0.0.0.0:8080`，按[部署方式](docs/architecture/environment-configuration.md#正式部署时的监听地址)选择。服务端成功创建导入或清洗任务后，关闭网页或飞书客户端不会取消后台处理；后端及宿主机必须保持正常运行，详见[后台任务规则](docs/architecture/environment-configuration.md#后台任务与关闭页面)。
 
 在项目根目录打开两个 PowerShell 终端，分别执行：
 
@@ -48,7 +73,7 @@
 
 ## 飞书开发者后台配置
 
-应用 ID：`cli_aa64531940e15c1e`。以下为需要在飞书开放平台完成的设置，本次没有修改或发布远端应用。
+应用 ID 以当前环境配置的 `FEISHU_APP_ID` 为准。以下为需要在飞书开放平台完成的设置，本次没有修改或发布远端应用。
 
 1. 在应用的「应用能力」添加/开启「网页应用」。
 2. 本机电脑端调试时，将「桌面端主页」设为 `http://127.0.0.1:5173`。
@@ -90,8 +115,8 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 在 Navicat 选中目标库。停止指向目标库的应用，对空库执行 [十四表建表 SQL](docs/sql/schema.sql)，与 [V1](docs/sql/V1__create_policy_tables.sql) 二选一。用 [SKU 与标准目录核对 SQL](docs/sql/verify_sku_sync.sql) 和 [清洗结构核对 SQL](docs/sql/verify_catalog_cleaning.sql) 检查结构及数据关联。使用适配十四表基线的后端连接新库。空库首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。
-2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。设置 `FEISHU_TENANT_KEY` 为公司的飞书租户标识，原有 `JACKYUN_TENANT_KEY` 可回退使用。`JACKYUN_SOURCE_KEY` 是稳定的本地账套标识，默认 `jackyun`。
+1. 已有十四表库按当前结构分别完成[商品名称与政策名升级](docs/sql/database-design.md#已有十四表库升级商品名称与政策名)和[清洗自动排除升级](docs/sql/database-design.md#已有十四表库升级清洗自动排除)。首次部署则按[空库建表步骤](docs/sql/database-design.md#1-在-navicat-建表)建立十四张表后启动后端。空库首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。
+2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。`FEISHU_TENANT_KEY` 仅用于本系统的飞书登录及权限校验，不发送给吉客云。`JACKYUN_SOURCE_KEY` 是稳定的本地商品账套标识，默认 `jackyun`，与飞书企业标识无关。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 
 2026-11-15 商品 SKU 调整：每条通过的源商品单独对应一条 `goods`，`sku_id` 延续该来源的原始 SKU；不同来源的相同规格颜色不归并，手工无来源商品 SKU 为空。用户确认现有数据无需保留，由用户在 Navicat 删除旧表后，按[执行说明](docs/sql/database-design.md#2026-11-15-原始-sku-一对一调整)对空库执行最新基线二选一。代码与新结构须配套使用。
@@ -110,7 +135,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 用户已确认目标库空表重建，由用户在 Navicat 执行。商品导入和清洗已接入持久化。建表脚本仅恢复结构，旧用户、商品和政策记录须通过备份恢复或重新导入。
 
-2026-11-15 已确认新增用户头像字段。已有十四表库由用户在 Navicat 按 [头像增量 SQL](docs/sql/add_user_avatar_url.sql) 的检查、加列、核对顺序执行，再启动新版后端并重新登录；保留现有用户及业务数据。新空库两份基线已包含 `avatar_url`，无需再执行增量。申请人与管理员顶部栏共用头像展示，空头像或图片失败显示姓名首字。
+2026-11-15 已确认新增用户头像字段。两份建表脚本均已包含 `avatar_url`，登录时同步头像。申请人与管理员顶部栏共用头像展示，空头像或图片失败显示姓名首字。
 
 本机数据库为 `127.0.0.1:3306` 下的 `differentiated policy`（库名包含空格，JDBC URL 使用 `differentiated%20policy`）。连接使用 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`，真实凭证只保存在被忽略的 `backend/.env.local.properties`；新环境参考 `.env.example`。应用不自动建表、不初始化真实业务数据。修改后须重启后端，让新登录经过落库；已有旧进程内会话不代表已写入 user_info。
 

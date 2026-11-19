@@ -139,7 +139,7 @@ public class JackyunGoodsServiceImpl implements JackyunGoodsService {
                 (key, value) ->
                         form.add(key + "=" + URLEncoder.encode(value, StandardCharsets.UTF_8)));
         return HttpRequest.newBuilder(GATEWAY)
-                .timeout(Duration.ofSeconds(20))
+                .timeout(Duration.ofSeconds(properties.getRequestTimeoutSeconds()))
                 .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(form.toString(), StandardCharsets.UTF_8))

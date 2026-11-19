@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import { readAdminPolicyAuditLog } from '../../../api/admin-policies'
 import { useLatestQuery } from '../../../composables/useLatestQuery'
 import { PLATFORM_LABELS } from '../../../constants/policy'
-import { policyTime } from '../../../utils/policy-adapter'
 import { subsidyChanges, subsidyForGroup, subsidyText } from '../../../utils/policy-coverage'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 
@@ -89,10 +88,6 @@ const detail = computed(() =>
         本组包含已选 {{ row.colorCount }} 色、{{ row.members.length }}
         件商品，以下补贴对照适用于本组全部商品。
       </p>
-      <p>对照第 {{ row.winner.submissionVersion }} 轮提交内容，关闭后返回 {{ originCode }}。</p>
-      <p v-if="row.comparisonAt">
-        对照时点：{{ policyTime(row.comparisonAt).replace('T', ' ') }}（北京时间）
-      </p>
       <p v-if="loading" role="status">正在读取对照政策…</p>
       <el-alert v-else-if="error" :title="error.message" type="error" :closable="false">
         <el-button link type="primary" @click="load">重试读取对照政策</el-button>
@@ -115,12 +110,6 @@ const detail = computed(() =>
           v-if="row.outcome === 'RETAINED'"
           title="较新的政策将继续适用，本申请补贴不会替换该范围。"
           type="warning"
-          :closable="false"
-        />
-        <el-alert
-          v-else-if="row.outcome === 'REPLACES'"
-          title="以上为审核通过后的预览，实际适用结果以审核通过时间及生效条件为准。"
-          type="info"
           :closable="false"
         />
         <el-button class="reference-toggle" @click="showWhole = !showWhole">

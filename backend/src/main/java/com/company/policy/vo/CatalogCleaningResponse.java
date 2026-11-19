@@ -2,6 +2,7 @@ package com.company.policy.vo;
 
 import com.company.policy.vo.JackyunGoodsPage.Goods;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -32,7 +33,8 @@ public final class CatalogCleaningResponse {
             long total,
             long processed,
             int progress,
-            Map<String, Long> resultCounts) {}
+            @Schema(description = "按本轮成员统计处理结果，EXCLUDED 为规则直接排除数。")
+                    Map<String, Long> resultCounts) {}
 
     public record Candidate(
             String seriesName,

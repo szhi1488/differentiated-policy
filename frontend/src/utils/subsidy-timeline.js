@@ -33,12 +33,13 @@ export function timelineContainsAt(segment, at) {
   return Boolean(at && segment.startAt <= at && (!segment.endAt || at < segment.endAt))
 }
 
-export function visibleTimelineSegments(segments, range, showIndependent) {
+export function visibleTimelineSegments(segments, range, showIndependent, platformCode) {
   if (range[0] >= range[1]) {
     return []
   }
   return segments.filter(
     (segment) =>
+      (!platformCode || segment.platformCode === platformCode) &&
       (showIndependent || segment.scope === 'NORMAL') &&
       segment.startAt <= range[1] &&
       (!segment.endAt || segment.endAt > range[0]),

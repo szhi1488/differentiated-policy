@@ -104,7 +104,6 @@ function beforeClose(done) {
           <el-checkbox v-model="acknowledged">我已核对最新覆盖结果</el-checkbox>
         </template>
         <p v-else>覆盖结果与当前审核窗口一致。</p>
-        <p>实际适用结果以审核通过时间及生效条件为准。</p>
       </template>
       <el-alert
         v-if="reviewError"

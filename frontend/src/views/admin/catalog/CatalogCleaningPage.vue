@@ -499,8 +499,9 @@ async function submitReview(body) {
           <template #default="{ row }">
             通过
             {{ (row.resultCounts?.AUTO_PASSED ?? 0) + (row.resultCounts?.MANUAL_PASSED ?? 0) }} ·
-            待审 {{ row.resultCounts?.REVIEW_REQUIRED ?? 0 }} · 失败
-            {{ row.resultCounts?.ERROR ?? 0 }} · 跳过 {{ row.resultCounts?.SKIPPED ?? 0 }}
+            自动排除 {{ row.resultCounts?.EXCLUDED ?? 0 }} · 待审
+            {{ row.resultCounts?.REVIEW_REQUIRED ?? 0 }} · 失败 {{ row.resultCounts?.ERROR ?? 0 }} ·
+            跳过 {{ row.resultCounts?.SKIPPED ?? 0 }}
           </template>
         </el-table-column>
       </el-table>

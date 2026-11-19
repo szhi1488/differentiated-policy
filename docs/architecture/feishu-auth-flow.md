@@ -1,6 +1,6 @@
 # 飞书客户端免登、浏览器扫码与网页授权
 
-更新日期：2026-11-17。飞书客户端使用 JS-SDK 免登。普通浏览器可在应用页用手机飞书扫码，或前往飞书网页授权，两者共用浏览器 OAuth 回调。三种方式均由服务端核验身份、保存用户和建立应用会话。
+更新日期：2026-11-18。飞书客户端使用 JS-SDK 免登。普通浏览器可在应用页用手机飞书扫码，或前往飞书网页授权，两者共用浏览器 OAuth 回调。三种方式均由服务端核验身份、保存用户和建立应用会话。
 
 `FeishuLoginPage.vue` 展示登录入口。`useAuthSession.js` 集中维护会话，供 App 和路由读取。并发登录请求合并，退出或失效后丢弃迟到结果。账号、租户或角色变化、退出及会话失效会清理申请表单和暂存附件。会话探测和授权码交换的 401 由登录流程处理，业务请求 401 会使会话失效，403 和 409 分别提示权限与冲突。[前端规范](frontend-development.md#6-路由请求与业务操作)
 
@@ -65,9 +65,9 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 1. `POST /api/auth/feishu/login` 提交 `{ "code": "授权码", "state": "本次随机值" }`。
 2. 服务端一次性消费 state，经 `https://accounts.feishu.cn/oauth/v3/token` 交换用户 token，再请求 `https://open.feishu.cn/open-apis/authen/v1/user_info`。
-3. 各登录入口先校验飞书返回的租户与 `FEISHU_TENANT_KEY` 一致，再保存用户并建立会话。旧环境的 `JACKYUN_TENANT_KEY` 仍可作为回退配置。现有身份记录以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id` 和有效 HTTPS `avatar_url`，保留角色、部门、停用标记，不从姓名推断部门。
+3. 各登录入口先校验飞书返回的租户与 `FEISHU_TENANT_KEY` 一致，再保存用户并建立会话。租户配置只读取该名称，未填写则拒绝登录；测试环境使用测试企业标识，正式环境使用正式公司标识。现有身份记录以核验结果 `(tenant_key, open_id)` 幂等写入 `user_info`。新用户默认 `APPLICANT`，再次登录更新姓名、有效 `union_id` 和有效 HTTPS `avatar_url`，保留角色、部门、停用标记，不从姓名推断部门。
 
-头像取自[飞书获取登录用户信息接口](https://open.feishu.cn/document/server-docs/authentication-management/login-state-management/get)，仅保存不超过 2048 字符的 HTTPS 地址，不代理下载图片，不保存用户 token。缺失、空值或无效地址保留原头像，新用户为空；停用用户保持原资料并拒绝登录。登录及 `GET /api/auth/session` 返回 `user.avatarUrl`，恢复会话沿用登录时的头像，重新登录才同步最新头像。两端共用顶部栏展示，地址为空或图片加载失败时显示姓名首字。空库重建使用已包含头像字段的最新基线；保留旧库数据时，先由用户按 [avatar_url 增量 SQL](../sql/add_user_avatar_url.sql) 核对和补齐字段。真实飞书头像及目标 MySQL 留待联调。
+头像取自[飞书获取登录用户信息接口](https://open.feishu.cn/document/server-docs/authentication-management/login-state-management/get)，仅保存不超过 2048 字符的 HTTPS 地址，不代理下载图片，不保存用户 token。缺失、空值或无效地址保留原头像，新用户为空；停用用户保持原资料并拒绝登录。登录及 `GET /api/auth/session` 返回 `user.avatarUrl`，恢复会话沿用登录时的头像，重新登录才同步最新头像。两端共用顶部栏展示，地址为空或图片加载失败时显示姓名首字。两份空库建表脚本均已包含头像字段。真实飞书头像及目标 MySQL 留待联调。
 4. 停用账号拒绝登录，存储失败不建会话。前端姓名、open_id 或角色不能作为身份依据。
 5. 落库后轮换 Session ID，保存本地用户 ID、角色及核验身份；响应 `{ "user": { ... }, "expiresAt": "..." }`，ID 为字符串，不返回用户 token。
 
@@ -103,11 +103,13 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 
 ## 飞书后台与配置
 
+- 配置文件分工、飞书测试企业切换正式公司、完整环境参数及正式监听地址统一见[环境配置、部署与后台任务](environment-configuration.md)。飞书企业标识只填 `FEISHU_TENANT_KEY`，吉客云请求不使用该值。新企业身份不会自动继承测试身份的管理员角色。
 - 电脑主页 `http://127.0.0.1:5173`，H5 可信域名 `127.0.0.1:5173`。
 - 另在「安全设置 → 重定向 URL」加入 `http://127.0.0.1:5173/`。即使 requestAccess 不跳转也必须配置，H5 可信域名不能替代。
 - 签名保留 query，而后台重定向 URL 按现有说明配置页面路径，去除 query 和 fragment。localhost 或新路径须单独同步。
 - `FEISHU_ALLOWED_ORIGINS` 用带协议的 origin；部署域名确定后同步主页、可信域名、重定向 URL 和白名单。
-- Secret 只在服务端环境变量或被忽略本地文件，不进入 `VITE_*`；新环境参考 `backend/.env.example`。
+- `backend/.env.example` 是唯一配置样例，不由应用读取；真实值填写在被忽略的 `backend/.env.local.properties` 或同名系统环境变量，环境变量优先。Secret 不进入 `VITE_*`，修改配置后重启后端。
+- `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `FEISHU_TENANT_KEY` 必须明确填写，应用 ID 不再内置测试值，租户不再兼容其他配置名。已有环境升级前将原租户值迁入 `FEISHU_TENANT_KEY`；本次本机配置已保留原值完成改名。
 - 手机直接打开应用页面时，需要使用手机可访问的应用地址。测试桌面网页登录时，在桌面浏览器打开已登记的回调地址，由手机飞书扫描桌面显示的二维码。
 
 ## 常见错误
@@ -121,6 +123,20 @@ App Secret、应用 token、ticket 不返回前端、不记日志；签名响应
 本地错误 `{ "code": "稳定错误码", "message": "中文提示" }`。HTTP：400 参数/签名来源错误，401 state/code/会话失效，403 请求来源或停用账号，502 上游异常，503 缺配置或用户存储不可用。
 
 ## 验证记录
+
+### 2026-11-18 环境参数补齐
+
+实际配置和唯一样例补齐服务监听地址、端口、附件目录、导入及清洗开关、后台轮询间隔和 HTTP 超时，均通过 `application.yml` 显式读取大写配置名。数据库 URL 和允许访问的 Origin 不再回退到具体的本机库及开发地址。原有凭证、租户、数据库和白名单值保持不变，附件目录仍指向原项目 `data`；默认任务频率和请求超时保持原行为。配置项及范围见 [本地配置说明](../../README.md#本地启动)。
+
+本轮 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' verify` 通过：共 202 项测试，200 项通过、2 项外部环境测试跳过，打包和 Spotless 通过。配置探针覆盖两种启动目录、带空格的附件路径、本地文件及环境变量优先级、旧租户名称无效、缺少环境身份配置时不回退开发值、非法超时和轮询间隔；请求测试验证飞书 POST/GET 和吉客云使用配置的超时。探针不初始化数据库或任务。本轮未重启实际后端、未执行目标 MySQL 操作，也未重新进行真实飞书登录和吉客云调用。
+
+### 2026-11-18 后端配置规范化
+
+保留 `backend/.env.example` 作为唯一样例，真实配置只填写在 `backend/.env.local.properties` 或系统环境变量，删除重复的 `.env.local.properties.example`。飞书企业只读取 `FEISHU_TENANT_KEY`，取消旧名称回退；本机已将原租户值原样迁入飞书配置分组，并逐项核对其他配置值未变。样例和默认配置均移除内置测试 App ID，应用凭证须按当前环境明确填写。实际配置文件继续被 Git 忽略，修改后须重启后端。
+
+`LocalConfigLoadingTest` 验证项目根目录和 `backend/` 两种启动目录、新租户配置加载、旧名称在文件及环境变量中均不生效，以及环境变量优先级。配置探针只加载属性，不初始化数据库或后台任务。全量后端测试共 193 项，191 项通过，2 项外部环境测试跳过；修正一处测试换行格式后，以 `mvn.cmd '-Dmaven.repo.local=.local-cache/maven-repository' '-DskipTests' verify` 完成打包和 Spotless 检查。本轮未重启实际后端、未执行目标 MySQL 操作，也未进行真实飞书登录。
+
+### 既往验证
 
 2026-11-17 角色恢复回归先复现了申请人升为管理员后原会话仍返回 `APPLICANT`。修复后，前端 37 个文件共 204 项测试通过，生产构建通过。后端 `verify` 共 191 项，189 项通过、2 项外部环境测试跳过，打包和 Spotless 通过。
 
