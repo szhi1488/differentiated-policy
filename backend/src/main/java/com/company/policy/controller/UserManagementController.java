@@ -2,12 +2,14 @@ package com.company.policy.controller;
 
 import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.UserListQuery;
+import com.company.policy.dto.UserPlatformsUpdate;
 import com.company.policy.dto.UserRoleUpdate;
 import com.company.policy.dto.UserStatusUpdate;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.UserManagementService;
 import com.company.policy.vo.PageResponse;
 import com.company.policy.vo.UserDetailResponse;
+import com.company.policy.vo.UserPlatformOwner;
 import com.company.policy.vo.UserStatsResponse;
 import com.company.policy.vo.UserSummaryResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +18,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
@@ -28,6 +31,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
@@ -67,6 +71,26 @@ public class UserManagementController {
         return users.list(
                 sessions.requireLogin(request).user(),
                 new UserListQuery(page, pageSize, keyword, roleType, status));
+    }
+
+    @GetMapping("/platform-assignments")
+    @Operation(summary = "按渠道读取本公司各平台的负责人")
+    public List<UserPlatformOwner> platformOwners(HttpServletRequest request) {
+        return users.platformOwners(sessions.requireLogin(request).user());
+    }
+
+    @PatchMapping("/{id}/platforms")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(
+            summary = "设置申请人的负责平台",
+            description =
+                    "同时传入 platforms 和 expectedPlatforms。每项包含 perspective 和 platformCode。空数组解除分配。每个渠道的平台独立分配，零售和百亿的同名平台可以由同一人或不同人负责。")
+    @ApiResponse(responseCode = "409", description = "USER_PLATFORMS_CONFLICT：平台占用、账号或原分工已变化")
+    public void updatePlatforms(
+            @PathVariable long id,
+            @RequestBody UserPlatformsUpdate body,
+            HttpServletRequest request) {
+        users.updatePlatforms(sessions.requireLogin(request).user(), id, body);
     }
 
     @GetMapping("/stats")
@@ -140,7 +164,9 @@ public class UserManagementController {
             MethodArgumentTypeMismatchException error, HttpServletRequest request) {
         if ("id".equals(error.getName())) {
             String code = "USER_DETAIL_INVALID_REQUEST";
-            if (request.getRequestURI().endsWith("/role")) {
+            if (request.getRequestURI().endsWith("/platforms")) {
+                code = "USER_PLATFORMS_INVALID";
+            } else if (request.getRequestURI().endsWith("/role")) {
                 code = "USER_ROLE_INVALID_REQUEST";
             } else if (request.getRequestURI().endsWith("/status")) {
                 code = "USER_STATUS_INVALID_REQUEST";
@@ -156,7 +182,9 @@ public class UserManagementController {
         String code =
                 request.getRequestURI().endsWith("/status")
                         ? "USER_STATUS_CONFLICT"
-                        : "USER_ROLE_CONFLICT";
+                        : request.getRequestURI().endsWith("/platforms")
+                                ? "USER_PLATFORMS_CONFLICT"
+                                : "USER_ROLE_CONFLICT";
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ApiError(code, "用户正在被其他操作修改，请重新读取详情后重试。"));
     }

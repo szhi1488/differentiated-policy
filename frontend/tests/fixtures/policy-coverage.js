@@ -1,4 +1,4 @@
-import { currentDetail, historySnapshot } from './admin-policy-history.js'
+import { currentDetail } from './admin-policy-history.js'
 
 export const referenceWinner = {
   id: '4',
@@ -28,22 +28,6 @@ export function coverageDetail() {
   }))
   return detail
 }
-export function referenceDetail() {
-  const snapshot = historySnapshot(1)
-  snapshot.id = '4'
-  snapshot.policyCode = 'ZC-000004'
-  return {
-    snapshot,
-    log: {
-      id: '800',
-      submissionVersion: 1,
-      auditStatus: 'APPROVED',
-      auditorName: '对照审核员',
-      auditTime: '2026-11-15T14:00:00+08:00',
-    },
-  }
-}
-
 // 与管理员示例一致：3 个普通颜色加 1 个其他配置，每个商品适用两个平台。
 export function groupedCoverageDetail() {
   const detail = currentDetail()

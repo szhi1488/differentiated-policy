@@ -152,6 +152,11 @@ public interface PolicyReviewMapper {
                   AND targets.platform_code = d.platform_code AND targets.goods_id = d.goods_id
               )
             </when>
+            <when test="draftScope != null">
+              AND p.applicant_id = #{draftScope.applicantId}
+              AND (d.platform_code, d.goods_id) IN
+              <foreach collection="draftScope.targets" item="line" open="(" separator="," close=")">(#{line.platform}, #{line.goodsId})</foreach>
+            </when>
             <otherwise>AND d.platform_code = #{platformCode} AND d.goods_id = #{goodsId}</otherwise>
           </choose>
         ) ranked WHERE position_no = 1
@@ -164,7 +169,10 @@ public interface PolicyReviewMapper {
             Long policyId,
             Integer version,
             String platformCode,
-            Long goodsId);
+            Long goodsId,
+            DraftScope draftScope);
+
+    record DraftScope(long applicantId, List<PolicyApplyMapper.DetailLine> targets) {}
 
     record StatusCount(String status, long total) {}
 

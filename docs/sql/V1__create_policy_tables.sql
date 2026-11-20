@@ -1,4 +1,4 @@
--- 差异化政策管理：公司共用商品目录十四表，MySQL 8.0.16+，2026-11-19。
+-- 差异化政策管理：公司共用商品目录及平台分工十五表，MySQL 8.0.16+，2026-11-20。
 -- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
 -- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
 -- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
@@ -33,6 +33,21 @@ CREATE TABLE `user_info` (
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci
   COMMENT='用户与角色映射表';
+
+CREATE TABLE `user_platform_assignment` (
+  `tenant_key` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '飞书公司标识',
+  `perspective` VARCHAR(16) COLLATE utf8mb4_bin NOT NULL COMMENT '零售或百亿渠道',
+  `platform_code` VARCHAR(32) COLLATE utf8mb4_bin NOT NULL COMMENT '平台编码',
+  `user_id` BIGINT NOT NULL COMMENT '负责申请人',
+  PRIMARY KEY (`tenant_key`, `perspective`, `platform_code`),
+  KEY `idx_assignment_user_tenant` (`user_id`, `tenant_key`),
+  CONSTRAINT `fk_assignment_user` FOREIGN KEY (`user_id`, `tenant_key`)
+    REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_assignment_platform` CHECK (
+    (`perspective` = 'RETAIL' AND `platform_code` IN
+      ('KUAISHOU','PDD','JD','DOUYIN','TMALL','TAOBAO','ZHAOSHANG','DEWU','UNICOM','GOV_ENTERPRISE'))
+    OR (`perspective` = 'BILLION' AND `platform_code` IN ('PDD','TAOBAO','UNICOM')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='申请人渠道平台分工';
 
 CREATE TABLE `brand` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '品牌主键',

@@ -1,16 +1,5 @@
 import { expect, it } from 'vitest'
-import { subsidyChanges, subsidyForScope } from '../../src/utils/policy-coverage'
-import { historySnapshot } from '../fixtures/admin-policy-history'
-
-it('补贴匹配具体商品和平台，不用数量决定范围，也不借用其他颜色或平台', () => {
-  const snapshot = historySnapshot(1)
-  expect(subsidyForScope(snapshot, '100', 'JD').fixedAmount).toBe('0.10')
-  expect(subsidyForScope(snapshot, '100', 'PDD')).toBeNull()
-  expect(subsidyForScope(snapshot, '101', 'JD')).toBeNull()
-  snapshot.form.goodsForm.cards.push(snapshot.form.goodsForm.cards[0])
-  expect(subsidyForScope(snapshot, '100', 'JD')).toBeNull()
-})
-
+import { subsidyChanges } from '../../src/utils/policy-coverage'
 it('固定金额和上限精确比较，区分 0、空上限及数值相同的不同字符串', () => {
   const fixed = (fixedAmount, maxSubsidyAmount) => ({
     subsidyMode: 'FIXED',

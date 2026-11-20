@@ -17,7 +17,7 @@ public interface PolicyReviewService {
     Page list(CurrentUserResponse session, PolicyReviewQuery query);
 
     /** 读取本公司申请的最近提交详情，按状态返回待审覆盖预览或已通过政策的生效范围。 */
-    Detail detail(CurrentUserResponse session, long id);
+    Detail detail(CurrentUserResponse session, long id, boolean includeCoverage);
 
     /** 核对记录版本和提交轮次后，通过或驳回待审申请。 */
     Review review(CurrentUserResponse session, long id, PolicyReviewRequest request);

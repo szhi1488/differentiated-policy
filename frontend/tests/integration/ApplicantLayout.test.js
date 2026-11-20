@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { RETAIL_PLATFORMS, BILLION_PLATFORMS } from '../../src/constants/policy'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import {
@@ -17,6 +18,13 @@ import { createAuthSession, authSession } from '../../src/composables/useAuthSes
 import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
 import { createForm, policyModelKey } from '../../src/utils/policy-form'
 
+const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
+const crossChannel = [
+  { perspective: 'RETAIL', platformCode: 'JD' },
+  ...BILLION_PLATFORMS.map(([platformCode]) => ({ perspective: 'BILLION', platformCode })),
+]
+
+let permitted
 let wrapper
 
 const active = catalogCenterSamples.filter(({ status }) => status === 'active')
@@ -76,6 +84,7 @@ let auditRounds
 let submissionVersion
 let uploadFailure
 beforeEach(() => {
+  permitted = retail
   rows = catalog
   draft = null
   savedStatus = 'DRAFT'
@@ -87,6 +96,9 @@ beforeEach(() => {
   uploadFailure = null
   fetchMock = vi.fn(async (path, init) => {
     const url = new URL(path, 'http://test.local')
+    if (url.pathname === '/api/policies/platforms') {
+      return reply(permitted)
+    }
     if (url.pathname === '/api/attachments' && init.method === 'POST') {
       if (uploadFailure) {
         return reply({ message: uploadFailure }, 503)
@@ -172,9 +184,34 @@ beforeEach(() => {
       version++
       return reply(record(), init.method === 'POST' ? 201 : 200)
     }
+    if (url.pathname === '/api/policies/321/submission-preview') {
+      if (submitFailure) {
+        return reply({ code: 'POLICY_VALIDATION_FAILED', message: submitFailure }, 400)
+      }
+      expect(Number(url.searchParams.get('recordVersion'))).toBe(version)
+      const items = draft.goodsForm.cards.flatMap((card) =>
+        card.targets.flatMap(({ goodsId }) =>
+          card.platformAssignments.map(({ platformCode }) => ({
+            goodsId,
+            platformCode,
+            outcome: 'NEW',
+            winner: null,
+          })),
+        ),
+      )
+      return reply({
+        snapshot: { form: draft, goods: rows },
+        coverage: { items, effectiveFrom: '2026-11-20T12:00:00+08:00' },
+        confirmationToken: 'scope-' + version,
+      })
+    }
     if (url.pathname === '/api/policies/321/submit') {
       if (submitFailure) {
         return reply({ code: 'POLICY_VALIDATION_FAILED', message: submitFailure }, 400)
+      }
+      if (submitResponseMode === 'changed') {
+        submitResponseMode = null
+        return reply({ code: 'POLICY_COVERAGE_CHANGED', message: '覆盖范围已变化' }, 409)
       }
       if (submitResponseMode === 'unknown') {
         return reply({ message: '服务暂时不可用' }, 503)
@@ -214,6 +251,12 @@ function button(text) {
   }
   return result
 }
+async function confirmFormSubmission() {
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+  await button('确认整单并提交').trigger('click')
+}
+
 async function selectPlatform(name) {
   await wrapper
     .findAll('.el-check-tag')
@@ -249,6 +292,33 @@ async function render(path = '/apply') {
 }
 
 describe('申请人工作台组件协作', () => {
+  it('只列出当前渠道分给本人的平台，移交后可保留内容并手动移除', async () => {
+    permitted = [
+      { perspective: 'RETAIL', platformCode: 'JD' },
+      { perspective: 'BILLION', platformCode: 'TAOBAO' },
+    ]
+    await render()
+    const options = () =>
+      wrapper.findAll('.platform-options .el-check-tag').map((item) => item.text())
+    expect(options()).toEqual(['京东'])
+    await selectPlatform('京东')
+    await wrapper.get('[aria-label="特别备注"]').setValue('移交后保留输入')
+    permitted = [{ perspective: 'BILLION', platformCode: 'TAOBAO' }]
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    expect(options()).toEqual([])
+    expect(button('提交申请').element.disabled).toBe(true)
+    await button('移除已移交的京东').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('移交后保留输入')
+    wrapper
+      .findAllComponents(ElSelect)
+      .find((select) => select.props('ariaLabel') === '渠道')
+      .vm.$emit('update:modelValue', 'BILLION')
+    await flushPromises()
+    expect(options()).toEqual(['淘宝'])
+  })
+
   it('政策提交分组可收起和展开，保留表单内容及菜单往返状态', async () => {
     const router = await render()
     await wrapper.get('[aria-label="特别备注"]').setValue('收起菜单后仍保留')
@@ -269,6 +339,44 @@ describe('申请人工作台组件协作', () => {
     expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('收起菜单后仍保留')
   })
 
+  it('核对范围时返回编辑保留草稿和选品，筛选空结果后仍按整单提交', async () => {
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('本人历史政策对照')
+    await button('返回编辑').trigger('click')
+    await flushPromises()
+    expect(savedStatus).toBe('DRAFT')
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    expect(wrapper.find('.policy-model-card').exists()).toBe(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('[aria-label="覆盖商品关键词"]').setValue('不会命中的颜色')
+    expect(wrapper.text()).toContain('没有符合条件的对照结果')
+    await button('确认整单并提交').trigger('click')
+    await flushPromises()
+    expect(savedStatus).toBe('PENDING')
+  })
+
+  it('确认期间旧政策变化时重新展示范围，取消后不重发提交', async () => {
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    submitResponseMode = 'changed'
+    await confirmFormSubmission()
+    await flushPromises()
+    expect(wrapper.text()).toContain('商品或本人历史政策已变化，请重新核对整单范围')
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url.includes('/submission-preview?')),
+    ).toHaveLength(2)
+    await button('返回编辑').trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(1)
+    expect(savedStatus).toBe('DRAFT')
+  })
+
   it.each([null, 'confirmed'])(
     '提交成功后返回空白新申请，清理附件缓存并保留服务端申请（响应模式 %s）',
     async (responseMode) => {
@@ -285,7 +393,7 @@ describe('申请人工作台组件协作', () => {
       await flushPromises()
       expect(wrapper.text()).toContain('提交附件.pdf')
       submitResponseMode = responseMode
-      await wrapper.get('form').trigger('submit')
+      await confirmFormSubmission()
       await flushPromises()
       await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/apply'))
       expect(wrapper.findComponent(ElForm).props('model')).toEqual(createForm())
@@ -323,7 +431,7 @@ describe('申请人工作台组件协作', () => {
     await wrapper.get('[aria-label="特别备注"]').setValue('待核对内容')
     const previous = JSON.parse(JSON.stringify(wrapper.findComponent(ElForm).props('model')))
     submitResponseMode = 'unknown'
-    await wrapper.get('form').trigger('submit')
+    await confirmFormSubmission()
     await flushPromises()
     expect(router.currentRoute.value.query.policyId).toBe('321')
     expect(wrapper.findComponent(ElForm).props('model')).toEqual(previous)
@@ -580,11 +688,12 @@ describe('申请人工作台组件协作', () => {
     expect(router.currentRoute.value.query.policyId).toBe('321')
     expect(wrapper.text()).toContain('已驳回')
     expect(wrapper.get('.policy-rejection').text()).toContain('请核对活动说明')
-    await wrapper.get('form').trigger('submit')
+    await addModel()
+    await confirmFormSubmission()
     await flushPromises()
     expect(document.body.textContent).toContain('申请已提交，等待审核')
     expect(fetchMock.mock.calls.find(([url]) => url.endsWith('/321/submit'))[1].body).toBe(
-      '{"recordVersion":4}',
+      '{"recordVersion":4,"confirmationToken":"scope-4"}',
     )
     expect(router.currentRoute.value.fullPath).toBe('/apply')
     expect(wrapper.findComponent(ElForm).props('model')).toEqual(createForm())
@@ -596,6 +705,7 @@ describe('申请人工作台组件协作', () => {
   })
 
   it('打开另一份草稿前确认，取消后菜单返回仍保留未保存内容', async () => {
+    permitted = crossChannel
     draft = {
       perspective: 'BILLION',
       selectedPlatforms: ['PDD'],
@@ -651,6 +761,7 @@ describe('申请人工作台组件协作', () => {
     })
     await upload.trigger('change')
     await flushPromises()
+    permitted = crossChannel
     draft = {
       perspective: 'BILLION',
       selectedPlatforms: ['PDD'],
@@ -846,11 +957,11 @@ describe('申请人工作台组件协作', () => {
     const picker = wrapper.findComponent(ElDatePicker)
     picker.vm.$emit('update:modelValue', ['2026-11-10T09:00:00', '2026-11-20T18:00:00'])
     await wrapper.get('[aria-label="方案 1 补贴金额"]').setValue('0.10')
-    await wrapper.get('form').trigger('submit')
+    await confirmFormSubmission()
     await flushPromises()
     expect(document.body.textContent).toContain('申请已提交，等待审核')
     expect(fetchMock.mock.calls.find(([url]) => url.endsWith('/321/submit'))[1].body).toBe(
-      '{"recordVersion":2}',
+      '{"recordVersion":2,"confirmationToken":"scope-2"}',
     )
     expect(draft.goodsForm.cards[0].targets.some(({ goodsId }) => goodsId === white.goodsId)).toBe(
       false,
@@ -976,7 +1087,7 @@ describe('申请人工作台组件协作', () => {
     wrapper
       .findComponent(ElDatePicker)
       .vm.$emit('update:modelValue', ['2026-11-10T09:00:00', '2026-11-20T18:00:00'])
-    await wrapper.get('form').trigger('submit')
+    await confirmFormSubmission()
     await flushPromises()
     expect(savedStatus).toBe('PENDING')
     expect(draft.goodsForm.cards[0].targets.map(({ goodsId }) => goodsId)).toEqual([
@@ -1220,6 +1331,7 @@ describe('申请人工作台组件协作', () => {
   })
 
   it('同一表单切换百亿后仅显示百亿平台与公共字段', async () => {
+    permitted = crossChannel
     await render()
     wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 'BILLION')
     await flushPromises()
@@ -1286,7 +1398,7 @@ describe('申请人工作台组件协作', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(document.querySelector('.el-message--error')?.textContent).toContain(
-      '草稿已保存。提交失败，请选择整单平台。',
+      '草稿已保存。请选择整单平台。',
     )
     expect(wrapper.find('.el-alert').exists()).toBe(false)
     ElMessage.closeAll()
@@ -1294,7 +1406,7 @@ describe('申请人工作台组件协作', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(document.querySelector('.el-message--error')?.textContent).toContain(
-      '草稿已保存。提交失败，请选择整单平台。',
+      '草稿已保存。请选择整单平台。',
     )
     expect(wrapper.text()).not.toContain('申请已提交')
     expect(draft.attachmentInfo).toEqual([])

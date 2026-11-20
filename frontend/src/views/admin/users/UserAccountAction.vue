@@ -139,7 +139,9 @@ async function confirm() {
             </span>
           </el-radio>
         </el-radio-group>
-        <p class="admin-user-action-hint">调整角色后，已有申请和审核历史继续保留。</p>
+        <p class="admin-user-action-hint">
+          申请人升为管理员时，会释放其负责的平台。已有申请和审核历史继续保留。
+        </p>
       </template>
       <el-alert
         v-else
@@ -152,7 +154,7 @@ async function confirm() {
           targetStatus === user.status
             ? '账号已处于目标状态。'
             : targetStatus === 'DISABLED'
-              ? '停用后，该用户将无法继续使用系统。'
+              ? '停用后会释放该用户负责的平台，并停止其系统访问权限。'
               : '启用后，该用户将恢复原角色的使用资格。'
         "
         description="已有申请、审核及商品操作记录继续保留。"

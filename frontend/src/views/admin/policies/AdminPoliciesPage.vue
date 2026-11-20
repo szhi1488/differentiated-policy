@@ -17,9 +17,6 @@ import {
 } from '../../../constants/policy'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 import AdminPolicyHistory from './AdminPolicyHistory.vue'
-import AdminPolicyReferenceDialog from './AdminPolicyReferenceDialog.vue'
-import AdminPolicyApprovalDialog from './AdminPolicyApprovalDialog.vue'
-import { sameReviewVersion } from '../../../utils/policy-approval'
 import './admin-policies.css'
 
 const {
@@ -44,8 +41,6 @@ const filterFields = [
 ]
 const detailOpen = ref(false)
 const detailTab = ref('current')
-const referenceDialog = ref(null)
-const approvalDialog = ref(null)
 const dialogMode = ref('view')
 const selectedId = ref('')
 const { data: detail, error: detailError, loading: detailBusy, run: runDetail } = useLatestQuery()
@@ -57,7 +52,7 @@ const reviewBusy = ref(false)
 const reviewError = ref(null)
 const reviewNeedsReload = computed(
   () =>
-    reviewError.value?.status === 409 ||
+    [401, 403, 404, 409].includes(reviewError.value?.status) ||
     reviewError.value?.status >= 500 ||
     ['network', 'timeout', 'parse'].includes(reviewError.value?.kind),
 )
@@ -69,8 +64,6 @@ function showDetail(id, mode = 'view') {
     return
   }
   selectedId.value = id
-  referenceDialog.value?.close()
-  approvalDialog.value?.close()
   detailTab.value = 'current'
   dialogMode.value = mode
   rejectionReason.value = ''
@@ -83,25 +76,9 @@ function loadDetail() {
   return runDetail((signal) => readAdminPolicy(selectedId.value, signal))
 }
 
-function showReference(row) {
-  if (reviewBusy.value) {
-    return
-  }
-  referenceDialog.value?.open(row)
-}
-
-function showApproval() {
-  if (!reviewBusy.value && !reviewNeedsReload.value) {
-    approvalDialog.value?.open(detail.value)
-  }
-}
-
-async function submitReview(decision, confirmedPolicy) {
+async function submitReview(decision) {
   const policy = selectedPolicy.value
   if (reviewBusy.value || reviewNeedsReload.value || !policy?.reviewable) {
-    return
-  }
-  if (decision === 'APPROVE' && !sameReviewVersion(policy, confirmedPolicy)) {
     return
   }
   reviewBusy.value = true
@@ -122,7 +99,6 @@ async function submitReview(decision, confirmedPolicy) {
     if (!controller.signal.aborted) {
       ElMessage.success(decision === 'APPROVE' ? '政策已通过' : '政策已驳回')
       rejectionOpen.value = false
-      approvalDialog.value?.close()
       dialogMode.value = 'view'
       void reload()
       await loadDetail()
@@ -138,7 +114,6 @@ async function submitReview(decision, confirmedPolicy) {
 
 function reloadReview() {
   rejectionOpen.value = false
-  approvalDialog.value?.close()
   reviewError.value = null
   void loadDetail()
   void reload()
@@ -357,12 +332,7 @@ function reloadReview() {
           <el-tab-pane label="当前申请" name="current" />
           <el-tab-pane label="审核记录" name="history" />
         </el-tabs>
-        <AdminPolicyDetail
-          :key="selectedId"
-          v-if="detailTab === 'current'"
-          :detail="detail"
-          @show-reference="showReference"
-        />
+        <AdminPolicyDetail :key="selectedId" v-if="detailTab === 'current'" :detail="detail" />
         <AdminPolicyHistory v-else-if="detailOpen" :key="selectedId" :policy-id="selectedId" />
       </div>
       <template
@@ -381,30 +351,12 @@ function reloadReview() {
           type="primary"
           :loading="reviewBusy"
           :disabled="reviewNeedsReload"
-          @click="showApproval"
+          @click="submitReview('APPROVE')"
         >
           通过
         </el-button>
       </template>
     </el-dialog>
-
-    <AdminPolicyReferenceDialog
-      key="policy-reference"
-      v-if="detailOpen"
-      ref="referenceDialog"
-      :origin-code="selectedPolicy?.policyCode ?? ''"
-    />
-
-    <AdminPolicyApprovalDialog
-      v-if="detailOpen"
-      ref="approvalDialog"
-      :busy="reviewBusy"
-      :review-error="reviewError"
-      :review-needs-reload="reviewNeedsReload"
-      @confirm="submitReview('APPROVE', $event)"
-      @reload="reloadReview"
-      @show-reference="showReference"
-    />
 
     <el-dialog
       key="policy-rejection"

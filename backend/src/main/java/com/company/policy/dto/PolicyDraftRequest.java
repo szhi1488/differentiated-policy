@@ -65,7 +65,9 @@ public record PolicyDraftRequest(
             String planKey,
             @JsonDeserialize(using = IntOnly.class) Integer quantity) {}
 
-    public record Submission(@JsonDeserialize(using = IntOnly.class) Integer recordVersion) {}
+    public record Submission(
+            @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
+            String confirmationToken) {}
 
     public static final class IntOnly extends StdScalarDeserializer<Integer> {
         public IntOnly() {

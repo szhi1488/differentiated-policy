@@ -4,6 +4,7 @@ import static com.company.policy.support.policy.PolicyFormValidation.entries;
 import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.GoodsForm;
 import com.company.policy.dto.PolicyDraftRequest.Link;
@@ -15,9 +16,11 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogGoodsMapper;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyApplyMapper.DetailLine;
+import com.company.policy.mapper.UserPlatformMapper;
 import com.company.policy.service.AttachmentService;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyApplyService;
+import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.support.policy.PolicyFormValidation;
 import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.ApplicantCatalogResponse;
@@ -28,16 +31,20 @@ import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Detail;
 import com.company.policy.vo.PolicyResponse.Page;
 import com.company.policy.vo.PolicyResponse.Snapshot;
+import com.company.policy.vo.PolicyResponse.SubmissionPreview;
 import com.company.policy.vo.PolicyResponse.Summary;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -54,7 +61,9 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final Set<String> STATUSES = Set.of("DRAFT", "PENDING", "APPROVED", "REJECTED");
     private static final Set<String> PERSPECTIVES = Set.of("RETAIL", "BILLION");
+    private final PolicyCoverageService coverage;
     private final CatalogAccess access;
+    private final UserPlatformMapper platforms;
     private final PolicyApplyMapper policies;
     private final CatalogGoodsMapper catalog;
     private final ObjectMapper json;
@@ -62,13 +71,17 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private final AttachmentService attachments;
 
     PolicyApplyServiceImpl(
+            PolicyCoverageService coverage,
             CatalogAccess access,
+            UserPlatformMapper platforms,
             PolicyApplyMapper policies,
             CatalogGoodsMapper catalog,
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
             AttachmentService attachments) {
+        this.coverage = coverage;
         this.access = access;
+        this.platforms = platforms;
         this.policies = policies;
         this.catalog = catalog;
         this.json = json;
@@ -85,6 +98,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             throw invalid("首次保存草稿时请省略记录版本。");
         }
         var form = PolicyFormValidation.validate(request, false);
+        requirePlatforms(owner, form, true);
         var entry = new PolicyApply();
         entry.setPolicyNo(creationCode(owner, requestKey));
         entry.setTenantKey(owner.getTenantKey());
@@ -114,9 +128,11 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request) {
-        var entry = owned(access.requireApplicant(session), id);
+        var owner = access.requireApplicant(session);
+        var entry = owned(owner, id);
         checkEditable(entry, request.recordVersion());
         var form = PolicyFormValidation.validate(request, false);
+        requirePlatforms(owner, form, true);
         writeForm(entry, form);
         entry.setAttachmentUrls(encode(attachments.bind(form.attachmentInfo(), session)));
         checkUpdated(policies.updateDraft(entry, now()));
@@ -138,11 +154,26 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     }
 
     @Override
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    public PolicyResponse submit(CurrentUserResponse session, long id, Integer recordVersion) {
-        var entry = owned(access.requireApplicant(session), id);
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public SubmissionPreview preview(CurrentUserResponse session, long id, Integer recordVersion) {
+        var owner = access.requireApplicant(session);
+        var entry = owned(owner, id);
         checkEditable(entry, recordVersion);
         var form = PolicyFormValidation.validate(readForm(entry), true);
+        requirePlatforms(owner, form, false);
+        var prepared = prepare(entry, form, targetIds(form));
+        return preview(entry, prepared, now());
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public PolicyResponse submit(
+            CurrentUserResponse session, long id, Integer recordVersion, String confirmationToken) {
+        var owner = access.requireApplicant(session);
+        var entry = owned(owner, id);
+        checkEditable(entry, recordVersion);
+        var form = PolicyFormValidation.validate(readForm(entry), true);
+        requirePlatforms(owner, form, true);
         var ids = targetIds(form);
 
         // 与商品编辑和删除使用同一组行锁，先按商品 ID 顺序锁定，再读取最新配置。
@@ -152,6 +183,59 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 throw goodsChanged();
             }
         }
+        var prepared = prepare(entry, form, ids);
+        if (confirmationToken == null || confirmationToken.isBlank()) {
+            throw invalid("请先核对并确认整单覆盖范围。");
+        }
+        var now = now();
+        if (!preview(entry, prepared, now).confirmationToken().equals(confirmationToken)) {
+            throw conflict("POLICY_COVERAGE_CHANGED", "商品或本人历史政策已变化，请重新核对后提交。");
+        }
+        var snapshot = prepared.snapshot();
+        var lines = prepared.lines();
+        int version = snapshot.submissionVersion();
+        checkUpdated(policies.markSubmitted(entry, now));
+        checkUpdated(
+                policies.insertAudit(
+                        id, entry.getTenantKey(), version, snapshots.write(snapshot), now));
+        // 分批写入同一事务，避免单条 SQL 的参数数随商品数和平台数相乘。
+        for (int offset = 0; offset < lines.size(); offset += 500) {
+            var batch = lines.subList(offset, Math.min(offset + 500, lines.size()));
+            if (policies.insertDetails(id, version, batch, now) != batch.size()) {
+                throw new IllegalStateException("政策商品明细写入数量不一致");
+            }
+        }
+        entry.setStatus("PENDING");
+        entry.setRecordVersion(entry.getRecordVersion() + 1);
+        entry.setCurrentVersion(version);
+        return response(entry);
+    }
+
+    @Override
+    public List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session) {
+        var owner = access.requireApplicant(session);
+        return platforms.assigned(owner.getTenantKey(), owner.getId());
+    }
+
+    private void requirePlatforms(UserInfo owner, PolicyDraftRequest form, boolean writing) {
+        String tenant = owner.getTenantKey();
+        long id = owner.getId();
+        // 与分工和账号状态更新共用用户行锁，移交与写入按取得锁的顺序生效。
+        if ((writing && platforms.lockApplicant(tenant, id) == null)
+                || !platforms
+                        .assigned(tenant, id)
+                        .containsAll(
+                                entries(form.selectedPlatforms()).stream()
+                                        .map(code -> new ChannelPlatform(form.perspective(), code))
+                                        .toList())) {
+            throw new ApiException(
+                    HttpStatus.FORBIDDEN, "POLICY_PLATFORM_FORBIDDEN", "负责平台已变化，请核对当前渠道并移除未分配的平台。");
+        }
+    }
+
+    private record PreparedSubmission(Snapshot snapshot, List<DetailLine> lines) {}
+
+    private PreparedSubmission prepare(PolicyApply entry, PolicyDraftRequest form, List<Long> ids) {
         var goods = readGoods(ids);
         var lines = new ArrayList<DetailLine>();
         for (var card : form.goodsForm().cards()) {
@@ -173,32 +257,39 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             }
         }
 
-        var now = now();
         int version = entry.getCurrentVersion() + 1;
         var snapshot =
                 new Snapshot(
-                        Long.toString(id),
+                        entry.getId().toString(),
                         policyNumber(entry.getId()),
                         entry.getApplicantId().toString(),
                         entry.getApplicantName(),
                         version,
                         form,
                         ids.stream().map(goods::get).toList());
-        checkUpdated(policies.markSubmitted(entry, now));
-        checkUpdated(
-                policies.insertAudit(
-                        id, entry.getTenantKey(), version, snapshots.write(snapshot), now));
-        // 分批写入同一事务，避免单条 SQL 的参数数随商品数和平台数相乘。
-        for (int offset = 0; offset < lines.size(); offset += 500) {
-            var batch = lines.subList(offset, Math.min(offset + 500, lines.size()));
-            if (policies.insertDetails(id, version, batch, now) != batch.size()) {
-                throw new IllegalStateException("政策商品明细写入数量不一致");
-            }
+        return new PreparedSubmission(snapshot, lines);
+    }
+
+    private SubmissionPreview preview(
+            PolicyApply entry, PreparedSubmission prepared, LocalDateTime at) {
+        var result = coverage.previewDraft(entry, prepared.snapshot(), prepared.lines(), at);
+        // 表单版本固定选品和新补贴，命中日志固定对应轮次的旧补贴。自然推进的时钟不参与比较。
+        String contents =
+                encode(
+                        List.of(
+                                entry.getId(),
+                                entry.getRecordVersion(),
+                                prepared.snapshot().goods(),
+                                result.items()));
+        try {
+            var digest =
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(contents.getBytes(StandardCharsets.UTF_8));
+            return new SubmissionPreview(
+                    prepared.snapshot(), result, HexFormat.of().formatHex(digest));
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException(error);
         }
-        entry.setStatus("PENDING");
-        entry.setRecordVersion(entry.getRecordVersion() + 1);
-        entry.setCurrentVersion(version);
-        return response(entry);
     }
 
     @Override

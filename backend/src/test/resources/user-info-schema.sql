@@ -13,3 +13,12 @@ CREATE TABLE IF NOT EXISTS user_info (
   UNIQUE (tenant_key, open_id),
   UNIQUE (id, tenant_key)
 );
+
+CREATE TABLE IF NOT EXISTS user_platform_assignment (
+  tenant_key VARCHAR(64) NOT NULL,
+  perspective VARCHAR(16) NOT NULL,
+  platform_code VARCHAR(32) NOT NULL,
+  user_id BIGINT NOT NULL,
+  PRIMARY KEY (tenant_key, perspective, platform_code),
+  FOREIGN KEY (user_id, tenant_key) REFERENCES user_info(id, tenant_key)
+);

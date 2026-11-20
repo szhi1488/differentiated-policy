@@ -15,7 +15,7 @@ describe('申请表单默认确认框', () => {
       .spyOn(ElMessageBox, 'confirm')
       .mockRejectedValueOnce('cancel')
       .mockResolvedValueOnce('confirm')
-    const state = usePolicyForm()
+    const state = usePolicyForm({ value: [] })
     state.updateField('remark', '尚未保存')
 
     expect(await state.reset()).toBe(false)
@@ -47,7 +47,7 @@ describe('申请表单默认确认框', () => {
       form: policyDraft({ ...createForm(), remark: '服务端内容' }),
       goods: [],
     })
-    const state = usePolicyForm()
+    const state = usePolicyForm({ value: [] })
     state.updateField('remark', '保留本地输入')
     state.conflict.value = true
 
@@ -74,7 +74,7 @@ describe('申请表单默认确认框', () => {
       .spyOn(ElMessageBox, 'confirm')
       .mockRejectedValueOnce('close')
       .mockResolvedValueOnce('confirm')
-    const state = usePolicyForm()
+    const state = usePolicyForm({ value: [] })
     state.updateField('remark', '当前申请')
 
     expect(await state.confirmPolicyReplacement()).toBe(false)

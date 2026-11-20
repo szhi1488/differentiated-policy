@@ -9,7 +9,6 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.validateFil
 import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
-import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.entity.PolicyApply;
@@ -17,8 +16,8 @@ import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
-import com.company.policy.mapper.PolicyReviewMapper.WinnerRow;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.support.policy.PolicyFormValidation;
 import com.company.policy.support.policy.PolicySnapshotCodec;
@@ -28,23 +27,17 @@ import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.company.policy.vo.PolicyReviewResponse.Coverage;
-import com.company.policy.vo.PolicyReviewResponse.CoverageItem;
 import com.company.policy.vo.PolicyReviewResponse.Detail;
 import com.company.policy.vo.PolicyReviewResponse.Effective;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
 import com.company.policy.vo.PolicyReviewResponse.Summary;
-import com.company.policy.vo.PolicyReviewResponse.Winner;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -56,6 +49,7 @@ import org.springframework.transaction.annotation.Transactional;
 class PolicyReviewServiceImpl implements PolicyReviewService {
     private static final Set<String> STATUSES = Set.of("PENDING", "APPROVED", "REJECTED");
     private static final Set<String> CHANNELS = Set.of("RETAIL", "BILLION");
+    private final PolicyCoverageService coverage;
     private final CatalogAccess access;
     private final PolicyReviewMapper reviews;
     private final PolicyApplyMapper policies;
@@ -63,11 +57,13 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private final PolicySnapshotCodec snapshots;
 
     PolicyReviewServiceImpl(
+            PolicyCoverageService coverage,
             CatalogAccess access,
             PolicyReviewMapper reviews,
             PolicyApplyMapper policies,
             ObjectMapper json,
             PolicySnapshotCodec snapshots) {
+        this.coverage = coverage;
         this.access = access;
         this.reviews = reviews;
         this.policies = policies;
@@ -122,7 +118,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     }
 
     @Override
-    public Detail detail(CurrentUserResponse session, long id) {
+    public Detail detail(CurrentUserResponse session, long id, boolean includeCoverage) {
         var admin = access.requirePolicyAdmin(session);
         var entry = find(admin, id);
         var log = current(entry);
@@ -131,7 +127,9 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 summary(entry, log.getCreatedAt(), admin),
                 snapshot,
                 auditSummary(log),
-                "REJECTED".equals(entry.getStatus()) ? null : coverage(entry, log, snapshot));
+                !includeCoverage || "REJECTED".equals(entry.getStatus())
+                        ? null
+                        : coverage.submitted(entry, log, snapshot));
     }
 
     @Override
@@ -179,7 +177,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var entry = find(access.requirePolicyAdmin(session), id);
         checkPending(entry, recordVersion, submissionVersion);
         var log = current(entry);
-        return coverage(entry, log, snapshot(log));
+        return coverage.submitted(entry, log, snapshot(log));
     }
 
     @Override
@@ -203,14 +201,21 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var time = at == null ? now() : PolicyFormValidation.time(at);
         var matches =
                 reviews.winners(
-                        admin.getTenantKey(), perspective, time, null, null, platformCode, goodsId);
+                        admin.getTenantKey(),
+                        perspective,
+                        time,
+                        null,
+                        null,
+                        platformCode,
+                        goodsId,
+                        null);
         if (matches.isEmpty()) {
             return new Effective(formatTime(time), null, null);
         }
         var match = matches.get(0);
         return new Effective(
                 formatTime(time),
-                winner(match),
+                PolicyCoverageServiceImpl.winner(match),
                 snapshot(reviews.current(match.policyId(), admin.getTenantKey(), match.version())));
     }
 
@@ -238,124 +243,6 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");
         }
         return new AuditDetail(auditSummary(log), snapshot(log));
-    }
-
-    private Coverage coverage(PolicyApply entry, PolicyAuditLog log, Snapshot snapshot) {
-        boolean pending = "PENDING".equals(entry.getStatus());
-        var currentTime = now();
-        var decisionTime = pending ? currentTime : log.getAuditTime();
-        var effectiveFrom =
-                entry.getStartTime().isAfter(decisionTime) ? entry.getStartTime() : decisionTime;
-        var at = pending ? effectiveFrom : currentTime;
-        Map<Scope, WinnerRow> matches =
-                reviews
-                        .winners(
-                                entry.getTenantKey(),
-                                entry.getChannelType(),
-                                at,
-                                entry.getId(),
-                                entry.getCurrentVersion(),
-                                null,
-                                null)
-                        .stream()
-                        .collect(
-                                Collectors.toMap(
-                                        row ->
-                                                new Scope(
-                                                        row.platformCode(),
-                                                        Long.toString(row.goodsId())),
-                                        Function.identity()));
-        // 一次批量读取命中的已通过快照，按商品和平台核对旧补贴，避免逐商品查询。
-        Map<Long, Map<Scope, SubsidyPlan>> existingPlans = new HashMap<>();
-        existingPlans.put(log.getId(), indexSubsidies(snapshot));
-        var auditIds =
-                matches.values().stream()
-                        .map(WinnerRow::auditId)
-                        .filter(id -> !id.equals(log.getId()))
-                        .distinct()
-                        .toList();
-        if (!auditIds.isEmpty()) {
-            for (var prior : reviews.coverageSnapshots(entry.getTenantKey(), auditIds)) {
-                existingPlans.put(prior.getId(), indexSubsidies(snapshot(prior)));
-            }
-        }
-        var items = new ArrayList<CoverageItem>();
-        for (var card : snapshot.form().goodsForm().cards()) {
-            for (var target : card.targets()) {
-                for (var assignment : card.platformAssignments()) {
-                    var scope = new Scope(assignment.platformCode(), target.goodsId());
-                    var match = matches.get(scope);
-                    items.add(
-                            new CoverageItem(
-                                    scope.platformCode(),
-                                    scope.goodsId(),
-                                    outcome(
-                                            pending,
-                                            log,
-                                            entry.getId(),
-                                            currentTime,
-                                            effectiveFrom,
-                                            match),
-                                    match == null ? null : winner(match),
-                                    match == null
-                                            ? null
-                                            : existingPlans
-                                                    .getOrDefault(match.auditId(), Map.of())
-                                                    .get(scope)));
-                }
-            }
-        }
-        return new Coverage(formatTime(at), formatTime(effectiveFrom), items);
-    }
-
-    private static Map<Scope, SubsidyPlan> indexSubsidies(Snapshot snapshot) {
-        var result = new HashMap<Scope, SubsidyPlan>();
-        for (var card : snapshot.form().goodsForm().cards()) {
-            var plans =
-                    card.subsidyPlans().stream()
-                            .collect(Collectors.toMap(SubsidyPlan::key, Function.identity()));
-            for (var assignment : card.platformAssignments()) {
-                var plan = plans.get(assignment.planKey());
-                if (plan != null) {
-                    for (var target : card.targets()) {
-                        result.put(new Scope(assignment.platformCode(), target.goodsId()), plan);
-                    }
-                }
-            }
-        }
-        return result;
-    }
-
-    private static String outcome(
-            boolean pending,
-            PolicyAuditLog log,
-            long policyId,
-            LocalDateTime now,
-            LocalDateTime effectiveFrom,
-            WinnerRow match) {
-        if (pending) {
-            if (match == null) {
-                return "NEW";
-            }
-            int order = log.getCreatedAt().compareTo(match.submittedAt());
-            return order > 0 || (order == 0 && log.getId() > match.auditId())
-                    ? "REPLACES"
-                    : "RETAINED";
-        }
-        if (effectiveFrom.isAfter(now)) {
-            return "SCHEDULED";
-        }
-        return match != null && match.policyId() == policyId ? "EFFECTIVE" : "SUPERSEDED";
-    }
-
-    private static Winner winner(WinnerRow row) {
-        return new Winner(
-                Long.toString(row.policyId()),
-                policyNumber(row.policyId()),
-                Long.toString(row.auditId()),
-                row.version(),
-                formatTime(row.submittedAt()),
-                formatTime(row.effectiveFrom()));
     }
 
     private PolicyApply find(UserInfo admin, long id) {
@@ -431,6 +318,4 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         }
         return "%" + value.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
-
-    private record Scope(String platformCode, String goodsId) {}
 }

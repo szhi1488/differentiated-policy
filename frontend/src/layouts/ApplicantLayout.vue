@@ -6,6 +6,8 @@ import PolicyBanner from './components/PolicyBanner.vue'
 import WorkspaceTopbar from './components/WorkspaceTopbar.vue'
 import { APPLICANT_NAV_GROUPS } from '../constants/navigation'
 import { useWorkspaceSidebar } from './use-workspace-sidebar'
+import { useLatestQuery } from '../composables/useLatestQuery'
+import { readAssignedPlatforms } from '../api/policies'
 import { usePolicyForm } from '../composables/usePolicyForm'
 import { authSession } from '../composables/useAuthSession'
 import './workspace-navigation.css'
@@ -15,7 +17,10 @@ const route = useRoute()
 const router = useRouter()
 const policyMenuOpen = ref(true)
 const { collapsed, expanded, toggle } = useWorkspaceSidebar(520)
-const state = usePolicyForm()
+const permissions = useLatestQuery()
+const refreshPlatforms = () => permissions.run(readAssignedPlatforms)
+const state = usePolicyForm(permissions.data, undefined, refreshPlatforms)
+provide('platformPermissions', { ...permissions, refreshPlatforms })
 const applicationRoute = computed(() => ({
   name: 'apply',
   query: state.record.value ? { policyId: state.record.value.id } : {},
@@ -34,7 +39,14 @@ const removePolicyGuard = router.beforeEach((to) => {
   return true
 })
 onScopeDispose(removePolicyGuard)
-watch(authSession.revision, state.clear, { flush: 'sync' })
+watch(
+  authSession.revision,
+  () => {
+    state.clear()
+    void refreshPlatforms()
+  },
+  { flush: 'sync' },
+)
 onScopeDispose(state.clear)
 </script>
 <template>

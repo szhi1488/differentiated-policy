@@ -37,6 +37,9 @@ public record PolicyResponse(
             PolicyDraftRequest form,
             List<ApplicantCatalogResponse> goods) {}
 
+    public record SubmissionPreview(
+            Snapshot snapshot, PolicyReviewResponse.Coverage coverage, String confirmationToken) {}
+
     public record AuditSummary(
             String id,
             int submissionVersion,

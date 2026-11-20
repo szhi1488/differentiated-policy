@@ -4,39 +4,29 @@ import { PLATFORM_LABELS } from '../../../constants/policy'
 import { policyTime } from '../../../utils/policy-adapter'
 import { subsidyText } from '../../../utils/policy-coverage'
 import { coverageProducts, groupCoverageProducts } from '../../../utils/policy-coverage-groups'
-import AdminPolicyCoverageReference from './AdminPolicyCoverageReference.vue'
+import CoverageComparison from './CoverageComparison.vue'
 
 const props = defineProps({ detail: { type: Object, required: true } })
-defineEmits(['show-reference'])
 const outcome = ref(''),
   platform = ref(''),
   keyword = ref(''),
   page = ref(1)
 const pageSize = 10
 const filterId = useId()
-const pending = computed(() => props.detail.policy.status === 'PENDING')
 const coverage = computed(() => props.detail.coverage)
 const labels = {
-  NEW: '生效时新增',
-  REPLACES: '生效时覆盖',
-  RETAINED: '较新的申请继续适用',
-  EFFECTIVE: '当前生效',
-  SCHEDULED: '等待开始时间',
-  SUPERSEDED: '已被较新申请覆盖',
-  PARTIAL: '部分覆盖',
+  NEW: '无可对照政策',
+  REPLACES: '更新已有政策',
+  RETAINED: '沿用较新政策',
+  PARTIAL: '对照结果不同',
 }
 const outcomeTypes = {
   NEW: 'primary',
   REPLACES: 'warning',
   RETAINED: 'info',
-  EFFECTIVE: 'success',
-  SCHEDULED: 'info',
-  SUPERSEDED: 'info',
   PARTIAL: 'warning',
 }
-const outcomes = computed(() =>
-  pending.value ? ['NEW', 'REPLACES', 'RETAINED'] : ['EFFECTIVE', 'SCHEDULED', 'SUPERSEDED'],
-)
+const outcomes = ['NEW', 'REPLACES', 'RETAINED']
 const rows = computed(() => coverageProducts(props.detail))
 const counts = computed(() =>
   rows.value.reduce((result, row) => {
@@ -75,17 +65,16 @@ const outcomeText = (counts) =>
 </script>
 
 <template>
-  <section class="admin-policy-detail-section admin-policy-coverage" aria-label="覆盖结果">
+  <section class="submission-coverage" aria-label="本人历史政策对照">
     <div class="coverage-heading">
-      <h3>{{ pending ? '覆盖预览' : '生效范围' }}</h3>
-      <p v-if="!pending" class="coverage-time">
-        生效条件满足于
-        <time>{{ time(coverage.effectiveFrom) }}</time>
-        <span>（北京时间）</span>
+      <h3>本人历史政策对照</h3>
+      <p class="coverage-time">
+        仅对照本人在同一渠道、同一平台为该商品提交且已通过的政策。对照时点
+        {{ time(coverage.effectiveFrom) }}（北京时间）。
       </p>
     </div>
     <div class="coverage-controls">
-      <div class="coverage-summary" aria-label="覆盖结果汇总">
+      <div class="coverage-summary" aria-label="对照结果汇总">
         <el-button :type="!outcome ? 'primary' : 'default'" plain @click="outcome = ''">
           全部 {{ rows.length }} 项
         </el-button>
@@ -128,29 +117,23 @@ const outcomeText = (counts) =>
           />
         </div>
         <el-button @click="reset">重置</el-button>
-        <span v-if="!pending" class="coverage-query-time">查询时间 {{ time(coverage.at) }}</span>
       </div>
     </div>
-    <el-table
-      :data="visibleRows"
-      row-key="key"
-      size="small"
-      class="admin-policy-table coverage-main-table"
-    >
+    <el-table :data="visibleRows" row-key="key" size="small" class="coverage-main-table">
       <el-table-column type="expand" width="44">
         <template #default="{ row }">
-          <section class="coverage-product-details" :aria-label="`${row.name} 商品覆盖明细`">
+          <section class="coverage-product-details" :aria-label="`${row.name} 商品对照明细`">
             <div class="coverage-products-heading">
-              <h4>商品覆盖明细</h4>
+              <h4>商品对照明细</h4>
               <span>{{ PLATFORM_LABELS[row.platformCode] }} · {{ row.members.length }} 件商品</span>
             </div>
-            <el-table :data="row.members" row-key="key" size="small" class="admin-policy-table">
+            <el-table :data="row.members" row-key="key" size="small">
               <el-table-column prop="color" label="颜色" min-width="100">
                 <template #default="{ row: member }">{{ member.color ?? '颜色未记录' }}</template>
               </el-table-column>
               <el-table-column prop="goodsId" label="商品 ID" min-width="100" />
               <el-table-column prop="name" label="商品名称" min-width="180" />
-              <el-table-column label="适用结果" min-width="170">
+              <el-table-column label="对照结果" min-width="170">
                 <template #default="{ row: member }">
                   <el-tag :type="outcomeTypes[member.outcome]" size="small" effect="light">
                     {{ labels[member.outcome] }}
@@ -162,13 +145,9 @@ const outcomeText = (counts) =>
                   {{ subsidyText(member.proposedSubsidy) }}
                 </template>
               </el-table-column>
-              <el-table-column :label="pending ? '政策及补贴对照' : '当前适用政策'" min-width="200">
+              <el-table-column label="本人历史政策及补贴" min-width="200">
                 <template #default="{ row: member }">
-                  <AdminPolicyCoverageReference
-                    :row="member"
-                    :policy-id="detail.policy.id"
-                    @show-reference="$emit('show-reference', $event)"
-                  />
+                  <CoverageComparison :row="member" />
                 </template>
               </el-table-column>
             </el-table>
@@ -189,7 +168,7 @@ const outcomeText = (counts) =>
       <el-table-column label="平台" width="90">
         <template #default="{ row }">{{ PLATFORM_LABELS[row.platformCode] }}</template>
       </el-table-column>
-      <el-table-column label="适用结果" min-width="200">
+      <el-table-column label="对照结果" min-width="200">
         <template #default="{ row }">
           <el-tag :type="outcomeTypes[row.outcome]" size="small" effect="light">
             {{ labels[row.outcome] }}
@@ -204,18 +183,14 @@ const outcomeText = (counts) =>
           {{ row.subsidyVaries ? '补贴不同，展开逐项查看' : subsidyText(row.proposedSubsidy) }}
         </template>
       </el-table-column>
-      <el-table-column :label="pending ? '政策及补贴对照' : '当前适用政策'" min-width="190">
+      <el-table-column label="本人历史政策及补贴" min-width="190">
         <template #default="{ row }">
-          <AdminPolicyCoverageReference
-            :row="row"
-            :policy-id="detail.policy.id"
-            @show-reference="$emit('show-reference', $event)"
-          />
+          <CoverageComparison :row="row" />
         </template>
       </el-table-column>
-      <template #empty><el-empty :image-size="60" description="没有符合条件的覆盖结果" /></template>
+      <template #empty><el-empty :image-size="60" description="没有符合条件的对照结果" /></template>
     </el-table>
-    <footer class="admin-policy-footer coverage-footer">
+    <footer class="coverage-footer">
       <span aria-live="polite">
         展示 {{ groups.length }} 组，涉及 {{ filtered.length }} 项商品平台范围 / 全部
         {{ rows.length }} 项
@@ -234,6 +209,14 @@ const outcomeText = (counts) =>
 </template>
 
 <style scoped>
+.submission-coverage :deep(.el-table) {
+  --el-table-header-bg-color: #f0f4fa;
+  --el-table-header-text-color: #263852;
+  --el-table-text-color: #253550;
+  --el-table-border-color: #eaf0f7;
+  --el-table-row-hover-bg-color: #f4f8ff;
+  border-radius: 6px;
+}
 .coverage-heading,
 .coverage-products-heading {
   display: flex;
@@ -249,7 +232,6 @@ const outcomeText = (counts) =>
   margin: 0;
 }
 .coverage-time,
-.coverage-query-time,
 .coverage-products-heading > span {
   color: var(--policy-muted);
   font-size: 12px;
@@ -303,10 +285,6 @@ const outcomeText = (counts) =>
   width: 320px;
   max-width: 100%;
 }
-.coverage-query-time {
-  margin-left: auto;
-  line-height: 32px;
-}
 .coverage-model-name {
   font-weight: 600;
   line-height: 1.7;
@@ -348,7 +326,12 @@ const outcomeText = (counts) =>
   padding: 0;
 }
 .coverage-footer {
-  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  color: var(--policy-muted);
 }
 @media (max-width: 660px) {
   .coverage-heading {
@@ -362,11 +345,6 @@ const outcomeText = (counts) =>
   }
   .coverage-filter-keyword {
     flex: 1 1 180px;
-  }
-  .coverage-query-time {
-    flex-basis: 100%;
-    margin: 0;
-    line-height: 1.6;
   }
 }
 </style>

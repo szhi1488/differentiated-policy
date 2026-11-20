@@ -88,9 +88,14 @@ public class PolicyReviewController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "读取最近提交快照及覆盖范围", description = "待审核返回假设此刻通过的预览，已通过返回当前生效情况。")
-    public Detail detail(@PathVariable long id, HttpServletRequest request) {
-        return policies.detail(sessions.requireLogin(request).user(), id);
+    @Operation(
+            summary = "读取最近提交快照及覆盖范围",
+            description = "管理页面传 includeCoverage=false，仅返回审核内容。省略时兼容返回覆盖范围。")
+    public Detail detail(
+            @PathVariable long id,
+            @RequestParam(defaultValue = "true") boolean includeCoverage,
+            HttpServletRequest request) {
+        return policies.detail(sessions.requireLogin(request).user(), id, includeCoverage);
     }
 
     @PostMapping("/{id}/review")

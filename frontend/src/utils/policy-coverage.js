@@ -1,24 +1,5 @@
 import { PRICE_BASE_LABELS } from '../constants/policy'
 
-/** 按具体商品与平台读取提交快照中的唯一补贴，数量不参与适用范围判断。 */
-export function subsidyForScope(snapshot, goodsId, platformCode) {
-  const matches = []
-  for (const card of snapshot?.form?.goodsForm?.cards ?? []) {
-    if (!card.targets.some((target) => target.goodsId === goodsId)) {
-      continue
-    }
-    for (const assignment of card.platformAssignments) {
-      if (assignment.platformCode === platformCode) {
-        const plan = card.subsidyPlans.find(({ key }) => key === assignment.planKey)
-        if (plan) {
-          matches.push(plan)
-        }
-      }
-    }
-  }
-  return matches.length === 1 ? matches[0] : null
-}
-
 export function subsidyText(plan) {
   if (!plan) {
     return '未找到对应补贴方案'
@@ -55,12 +36,6 @@ export function subsidySignature(plan) {
   return plan.subsidyMode === 'RATIO' && ratio !== null && plan.priceBase
     ? JSON.stringify(['RATIO', ratio.toString(), plan.priceBase])
     : null
-}
-
-export function subsidyForGroup(snapshot, members, platformCode) {
-  const plans = members.map(({ goodsId }) => subsidyForScope(snapshot, goodsId, platformCode))
-  const signature = subsidySignature(plans[0])
-  return signature && plans.every((plan) => subsidySignature(plan) === signature) ? plans[0] : null
 }
 
 function difference(before, after, unit) {

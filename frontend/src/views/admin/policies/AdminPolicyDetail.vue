@@ -12,10 +12,8 @@ import {
 import { policyTime } from '../../../utils/policy-adapter'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 import { subsidyText } from '../../../utils/policy-coverage'
-import AdminPolicyCoverage from './AdminPolicyCoverage.vue'
 
 const props = defineProps({ detail: { type: Object, required: true } })
-defineEmits(['show-reference'])
 const policy = computed(() => props.detail.policy)
 const form = computed(() => props.detail.snapshot.form)
 const audit = computed(() => props.detail.audit)
@@ -223,9 +221,4 @@ const basicFields = computed(() => {
       </section>
     </section>
   </div>
-  <AdminPolicyCoverage
-    v-if="detail.coverage"
-    :detail="detail"
-    @show-reference="$emit('show-reference', $event)"
-  />
 </template>

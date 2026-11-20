@@ -1,7 +1,19 @@
 <script setup>
-import { CHANNEL_LABELS, VERIFY_LABELS, SCENE_LABELS } from '../../../constants/policy'
-defineProps({ form: { type: Object, required: true }, platforms: { type: Array, required: true } })
-defineEmits(['update-field', 'switch-channel', 'toggle-platform', 'select-all'])
+import {
+  PLATFORM_LABELS,
+  CHANNEL_LABELS,
+  VERIFY_LABELS,
+  SCENE_LABELS,
+} from '../../../constants/policy'
+defineProps({
+  form: { type: Object, required: true },
+  platforms: { type: Array, required: true },
+  assigned: Array,
+  platformError: Error,
+  removedPlatforms: { type: Array, required: true },
+  readOnly: Boolean,
+})
+defineEmits(['update-field', 'switch-channel', 'toggle-platform', 'select-all', 'retry-platforms'])
 </script>
 <template>
   <section class="form-section" aria-labelledby="basic-title">
@@ -25,7 +37,10 @@ defineEmits(['update-field', 'switch-channel', 'toggle-platform', 'select-all'])
         </el-select>
       </el-form-item>
       <el-form-item label="平台" class="platforms-field" required>
-        <div class="platform-options" role="group" aria-label="平台">
+        <span v-if="readOnly">
+          {{ form.platforms.map((code) => PLATFORM_LABELS[code]).join('、') || '未填写' }}
+        </span>
+        <div v-else class="platform-options" role="group" aria-label="平台">
           <el-check-tag
             v-for="[code, name] in platforms"
             :key="code"
@@ -34,7 +49,28 @@ defineEmits(['update-field', 'switch-channel', 'toggle-platform', 'select-all'])
           >
             {{ name }}
           </el-check-tag>
-          <el-button link type="primary" @click="$emit('select-all')">全部选择</el-button>
+          <el-button v-if="platforms.length" link type="primary" @click="$emit('select-all')">
+            全部选择
+          </el-button>
+          <template v-if="platformError">
+            <span>{{ platformError.message }}</span>
+            <el-button link type="primary" @click="$emit('retry-platforms')">
+              重新读取负责平台
+            </el-button>
+          </template>
+          <span v-else-if="!assigned">正在读取负责平台…</span>
+          <span v-else-if="!assigned.length">尚未分配负责平台，请联系管理员。</span>
+          <span v-else-if="!platforms.length">本渠道没有分配给你的平台，请切换渠道。</span>
+          <el-button
+            v-for="code in removedPlatforms"
+            :key="code"
+            type="warning"
+            plain
+            size="small"
+            @click="$emit('toggle-platform', code)"
+          >
+            移除已移交的{{ PLATFORM_LABELS[code] }}
+          </el-button>
         </div>
       </el-form-item>
       <template v-if="form.channel === 'RETAIL'">

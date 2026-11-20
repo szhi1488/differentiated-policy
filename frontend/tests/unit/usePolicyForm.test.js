@@ -1,7 +1,14 @@
+import { RETAIL_PLATFORMS, BILLION_PLATFORMS } from '../../src/constants/policy'
 import { describe, expect, it, vi } from 'vitest'
 import { usePolicyForm } from '../../src/composables/usePolicyForm'
 import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
 import { policyGoodsKey } from '../../src/utils/policy-form'
+
+const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
+const crossChannel = [
+  { perspective: 'RETAIL', platformCode: 'JD' },
+  ...BILLION_PLATFORMS.map(([platformCode]) => ({ perspective: 'BILLION', platformCode })),
+]
 
 const [firstGoods, secondGoods] = catalogCenterSamples
 
@@ -17,7 +24,7 @@ describe('申请表单状态', () => {
             accept = resolve
           }),
       )
-    const state = usePolicyForm(confirm)
+    const state = usePolicyForm({ value: retail }, confirm)
     await state.togglePlatform('JD')
     state.addGoods([firstGoods, secondGoods])
     await state.removeModel(state.form.value.cards[0].key)
@@ -33,7 +40,7 @@ describe('申请表单状态', () => {
   })
 
   it('普通型号可共用或分配不同方案，仅指定特殊商品可填写数量', async () => {
-    const state = usePolicyForm(() => true)
+    const state = usePolicyForm({ value: retail }, () => true)
     await state.togglePlatform('KUAISHOU')
     await state.togglePlatform('PDD')
     await state.togglePlatform('JD')
@@ -75,7 +82,7 @@ describe('申请表单状态', () => {
 
   it('取消清除时保留已填写的平台数量，确认后仍保留机型公共字段', async () => {
     const confirm = vi.fn().mockReturnValue(false)
-    const state = usePolicyForm(confirm)
+    const state = usePolicyForm({ value: crossChannel }, confirm)
     await state.togglePlatform('JD')
     state.addSpecialGood(firstGoods)
     const [model] = state.form.value.cards
@@ -98,7 +105,7 @@ describe('申请表单状态', () => {
   })
 
   it('同规格不同颜色保留各自 ID，可一起加入并保留已填补贴', async () => {
-    const state = usePolicyForm()
+    const state = usePolicyForm({ value: retail })
     await state.togglePlatform('JD')
     const [first, second] = catalogCenterSamples.filter((goods) => goods.model === 'Find X8')
     const anotherColor = { ...first, id: 'other-color', color: '黑色' }

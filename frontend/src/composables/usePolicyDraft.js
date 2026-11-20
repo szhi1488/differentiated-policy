@@ -3,17 +3,19 @@ import {
   createPolicyDraft,
   deletePolicyDraft,
   readPolicy,
+  previewPolicySubmission,
   savePolicyDraft,
   submitPolicy,
 } from '../api/policies'
 import { policyIsEditable } from '../constants/policy'
+import { RequestError } from '../api/request'
 import { createRequestId } from '../utils/request-id'
 import { policyDraft, restorePolicyForm } from '../utils/policy-draft'
 
 const uncertain = (error) =>
   ['timeout', 'network', 'parse'].includes(error.kind) || error.status >= 500
 
-export function usePolicyDraft(form, confirming, attachments) {
+export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) {
   const record = ref(null)
   const loading = ref(false)
   const writing = ref('')
@@ -26,6 +28,8 @@ export function usePolicyDraft(form, confirming, attachments) {
   )
   const readOnly = computed(() => Boolean(record.value && !policyIsEditable(record.value.status)))
   const locked = computed(() => busy.value || readOnly.value || Boolean(loadError.value))
+  const submissionPreview = ref(null)
+  let finishConfirmation
   let operation
   let pendingCreate
   let savedForm = JSON.stringify(form.value)
@@ -39,7 +43,14 @@ export function usePolicyDraft(form, confirming, attachments) {
     noticeType.value = type
   }
 
+  function confirmSubmission(accepted = false) {
+    finishConfirmation?.(accepted === true)
+    finishConfirmation = undefined
+    submissionPreview.value = null
+  }
+
   function clear() {
+    confirmSubmission(false)
     operation?.abort()
     operation = undefined
     pendingCreate = undefined
@@ -136,12 +147,48 @@ export function usePolicyDraft(form, confirming, attachments) {
       if (!submit) {
         return true
       }
-      phase = 'submit'
-      const submitted = await submitPolicy(
-        record.value.id,
-        record.value.recordVersion,
-        controller.signal,
-      )
+      let changed = false
+      let submitted
+      while (true) {
+        phase = 'preview'
+        const { id, recordVersion } = record.value
+        const preview = await previewPolicySubmission(id, recordVersion, controller.signal)
+        if (controller.signal.aborted) {
+          return
+        }
+        if (
+          !preview?.confirmationToken ||
+          !preview.coverage?.items?.length ||
+          !preview.snapshot?.form?.goodsForm
+        ) {
+          throw new Error('未能读取整单覆盖范围，请重试。')
+        }
+        const accepted = await new Promise((resolve) => {
+          finishConfirmation = resolve
+          submissionPreview.value = { ...preview, changed }
+        })
+        if (!accepted || controller.signal.aborted) {
+          return
+        }
+        phase = 'submit'
+        try {
+          submitted = await submitPolicy(
+            id,
+            recordVersion,
+            preview.confirmationToken,
+            controller.signal,
+          )
+          if (!submitted?.id) {
+            throw new RequestError('提交响应缺少申请信息。', 'parse')
+          }
+          break
+        } catch (error) {
+          if (error.code !== 'POLICY_COVERAGE_CHANGED' || controller.signal.aborted) {
+            throw error
+          }
+          changed = true
+        }
+      }
       if (!controller.signal.aborted) {
         record.value = submitted
         show('申请已提交，等待审核。', 'success')
@@ -150,6 +197,9 @@ export function usePolicyDraft(form, confirming, attachments) {
     } catch (error) {
       if (controller.signal.aborted) {
         return
+      }
+      if (error.code === 'POLICY_PLATFORM_FORBIDDEN') {
+        void refreshPlatforms?.()
       }
       if (!record.value && !uncertain(error) && error.status !== 409) {
         pendingCreate = undefined
@@ -180,18 +230,20 @@ export function usePolicyDraft(form, confirming, attachments) {
         error.code === 'POLICY_VERSION_CONFLICT' ||
         error.code === 'POLICY_STATE_CONFLICT' ||
         error.code === 'POLICY_CREATE_CONFLICT' ||
-        (record.value && uncertain(error))
+        (phase !== 'preview' && record.value && uncertain(error))
       ) {
         conflict.value = true
       }
       show(
-        uncertain(error)
-          ? record.value
-            ? '请求结果待核对。当前输入已保留，可读取服务端版本核对状态。'
-            : '首次保存结果待核对。再次保存会使用同一个创建标识。'
-          : phase === 'submit'
-            ? `草稿已保存。提交失败，${error.message}`
-            : error.message,
+        phase === 'preview'
+          ? '草稿已保存。' + error.message
+          : uncertain(error)
+            ? record.value
+              ? '请求结果待核对。当前输入已保留，可读取服务端版本核对状态。'
+              : '首次保存结果待核对。再次保存会使用同一个创建标识。'
+            : phase === 'submit'
+              ? `草稿已保存。提交失败，${error.message}`
+              : error.message,
         'error',
       )
     } finally {
@@ -243,6 +295,8 @@ export function usePolicyDraft(form, confirming, attachments) {
 
   return {
     record,
+    submissionPreview,
+    confirmSubmission,
     loading,
     busy,
     writing,

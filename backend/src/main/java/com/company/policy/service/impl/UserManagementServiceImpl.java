@@ -1,25 +1,31 @@
 package com.company.policy.service.impl;
 
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.UserListQuery;
+import com.company.policy.dto.UserPlatformsUpdate;
 import com.company.policy.dto.UserRoleUpdate;
 import com.company.policy.dto.UserStatusUpdate;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.UserManagementMapper;
 import com.company.policy.mapper.UserManagementMapper.DetailRow;
+import com.company.policy.mapper.UserPlatformMapper;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.UserManagementService;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
 import com.company.policy.vo.UserDetailResponse;
+import com.company.policy.vo.UserPlatformOwner;
 import com.company.policy.vo.UserStatsResponse;
 import com.company.policy.vo.UserSummaryResponse;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -34,13 +40,18 @@ public class UserManagementServiceImpl implements UserManagementService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private final CatalogAccess access;
     private final UserManagementMapper users;
+    private final UserPlatformMapper platforms;
     private final Clock clock;
 
     public UserManagementServiceImpl(
-            CatalogAccess access, UserManagementMapper users, Clock clock) {
+            CatalogAccess access,
+            UserManagementMapper users,
+            UserPlatformMapper platforms,
+            Clock clock) {
         this.access = access;
         this.users = users;
         this.clock = clock;
+        this.platforms = platforms;
     }
 
     @Override
@@ -138,6 +149,9 @@ public class UserManagementServiceImpl implements UserManagementService {
                 != 1) {
             throw stale("USER_ROLE_CONFLICT");
         }
+        if ("ADMIN".equals(request.roleType())) {
+            platforms.release(admin.getTenantKey(), id);
+        }
         return detailResponse(users.detail(admin.getTenantKey(), id));
     }
 
@@ -180,7 +194,54 @@ public class UserManagementServiceImpl implements UserManagementService {
                 != 1) {
             throw stale("USER_STATUS_CONFLICT");
         }
+        if (deleted == 1) {
+            platforms.release(admin.getTenantKey(), id);
+        }
         return detailResponse(users.detail(admin.getTenantKey(), id));
+    }
+
+    @Override
+    public List<UserPlatformOwner> platformOwners(CurrentUserResponse session) {
+        return platforms.owners(access.requireUserAdmin(session).getTenantKey());
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void updatePlatforms(CurrentUserResponse session, long id, UserPlatformsUpdate request) {
+        var admin = access.requireUserAdmin(session);
+        if (id < 1
+                || request == null
+                || !validScopes(request.platforms())
+                || !validScopes(request.expectedPlatforms())) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST, "USER_PLATFORMS_INVALID", "请选择有效的渠道和平台，同一渠道内的平台不能重复。");
+        }
+        var target = lockTarget(admin, session, id);
+        String tenant = admin.getTenantKey();
+        if (target.isDeleted() != 0 || !"APPLICANT".equals(target.roleType())) {
+            throw conflict("USER_PLATFORMS_CONFLICT", "仅可为启用的申请人分配平台，请刷新用户列表。");
+        }
+        var current = new HashSet<>(platforms.assigned(tenant, id));
+        if (!current.equals(new HashSet<>(request.expectedPlatforms()))) {
+            throw conflict("USER_PLATFORMS_CONFLICT", "此人的负责平台已变化，请重新读取后确认。");
+        }
+        if (current.equals(new HashSet<>(request.platforms()))) {
+            return;
+        }
+        platforms.release(tenant, id);
+        try {
+            for (var scope : request.platforms()) {
+                platforms.assign(tenant, id, scope);
+            }
+        } catch (DuplicateKeyException error) {
+            throw conflict("USER_PLATFORMS_CONFLICT", "所选渠道的平台已有负责人，请重新读取后确认。");
+        }
+    }
+
+    private static boolean validScopes(List<ChannelPlatform> scopes) {
+        return scopes != null
+                && scopes.stream().allMatch(s -> s != null && s.valid())
+                && new HashSet<>(scopes).size() == scopes.size();
     }
 
     private DetailRow lockTarget(UserInfo admin, CurrentUserResponse session, long id) {

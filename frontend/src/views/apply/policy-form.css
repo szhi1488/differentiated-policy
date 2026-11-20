@@ -559,3 +559,18 @@
 .policy-goods-picker .policy-picker-retry {
   padding: 8px 0;
 }
+
+.submission-coverage-dialog {
+  --policy-line: #e3ebf7;
+  --policy-muted: #556784;
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+}
+.submission-coverage-dialog .el-dialog__body {
+  overflow-y: auto;
+  min-width: 0;
+}
+.submission-coverage-dialog .el-alert {
+  margin-bottom: 12px;
+}

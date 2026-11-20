@@ -26,8 +26,13 @@ export function deletePolicyDraft(id, recordVersion, signal) {
   return request(`${itemPath(id)}/draft?${params}`, { method: 'DELETE', signal })
 }
 
-export function submitPolicy(id, recordVersion, signal) {
-  return write(`${itemPath(id)}/submit`, 'POST', { recordVersion }, {}, signal)
+export function previewPolicySubmission(id, recordVersion, signal) {
+  const params = new URLSearchParams({ recordVersion })
+  return request(itemPath(id) + '/submission-preview?' + params, { signal })
+}
+
+export function submitPolicy(id, recordVersion, confirmationToken, signal) {
+  return write(`${itemPath(id)}/submit`, 'POST', { recordVersion, confirmationToken }, {}, signal)
 }
 
 export function readPolicy(id, signal) {
@@ -47,4 +52,8 @@ export function listMyPolicies({ page, pageSize, status, perspective, platformCo
 export function listPolicyAuditLogs(id, { page, pageSize }, signal) {
   const params = new URLSearchParams({ page, pageSize })
   return request(`${logsPath(id)}?${params}`, { signal })
+}
+
+export function readAssignedPlatforms(signal) {
+  return request(path + '/platforms', { signal })
 }

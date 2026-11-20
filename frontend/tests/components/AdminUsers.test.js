@@ -28,7 +28,7 @@ const button = (root, label) => root.findAll('button').find((item) => item.text(
 const dialog = () => wrapper.get('.admin-user-action-dialog')
 const drawer = () => wrapper.get('.admin-user-drawer')
 const table = () => wrapper.get('.el-table__body')
-let wrapper, list, stats, detail, role, status
+let wrapper, list, stats, detail, role, status, platformOwners, updatePlatforms
 
 beforeEach(() => {
   authSession.setLogin({ user: owner })
@@ -37,6 +37,8 @@ beforeEach(() => {
   detail = vi.fn(() => profile)
   role = vi.fn()
   status = vi.fn()
+  platformOwners = vi.fn()
+  updatePlatforms = vi.fn(() => new Response(null, { status: 204 }))
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path, init) => {
@@ -47,6 +49,10 @@ beforeEach(() => {
         result = await list(Object.fromEntries(searchParams))
       } else if (get && pathname === base + '/stats') {
         result = await stats(searchParams.toString())
+      } else if (get && pathname === base + '/platform-assignments') {
+        result = await platformOwners()
+      } else if (init.method === 'PATCH' && pathname === targetPath + '/platforms') {
+        result = await updatePlatforms(JSON.parse(init.body))
       } else if (get && pathname === targetPath) {
         result = await detail()
       } else if (init.method === 'PATCH' && pathname === targetPath + '/role') {
@@ -262,4 +268,40 @@ it('关闭弹窗取消在途读取，迟到的详情不能覆盖下一次操作'
   await flushPromises()
   expect(wrapper.getComponent(ElRadioGroup).props('modelValue')).toBe('APPLICANT')
   expect(status).not.toHaveBeenCalled()
+})
+
+it('同名平台可在两渠道独立勾选和移除，其他人占用的渠道平台仍禁选', async () => {
+  const scope = (perspective, platformCode) => ({ perspective, platformCode })
+  const retail = scope('RETAIL', 'PDD')
+  const billion = scope('BILLION', 'PDD')
+  const existing = { ...retail, userId: target.id, name: target.name }
+  const occupied = { ...scope('BILLION', 'TAOBAO'), userId: '3', name: '另一位同事' }
+  platformOwners.mockReturnValue([existing, occupied])
+  await start()
+  const checkbox = (channel, label) =>
+    wrapper
+      .findAll('fieldset')
+      .find((group) => group.get('legend').text() === channel)
+      .findAll('label')
+      .find((option) => option.text().startsWith(label))
+      .get('input')
+  await clickLabel('负责平台 采购同事')
+  expect(checkbox('百亿渠道', '淘宝').element.disabled).toBe(true)
+  expect(checkbox('零售渠道', '淘宝').element.disabled).toBe(false)
+  expect(checkbox('百亿渠道', '拼多多').element.disabled).toBe(false)
+  await checkbox('百亿渠道', '拼多多').setValue(true)
+  await click(wrapper, '保存分工')
+  expect(updatePlatforms).toHaveBeenLastCalledWith({
+    platforms: [retail, billion],
+    expectedPlatforms: [retail],
+  })
+  platformOwners.mockReturnValue([existing, { ...existing, ...billion }, occupied])
+  await clickLabel('负责平台 采购同事')
+  await checkbox('零售渠道', '拼多多').setValue(false)
+  expect(checkbox('百亿渠道', '拼多多').element.checked).toBe(true)
+  await click(wrapper, '保存分工')
+  expect(updatePlatforms).toHaveBeenLastCalledWith({
+    platforms: [billion],
+    expectedPlatforms: [retail, billion],
+  })
 })

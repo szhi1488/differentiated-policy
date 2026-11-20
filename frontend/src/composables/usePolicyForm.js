@@ -15,7 +15,7 @@ import {
 } from '../utils/policy-form'
 
 /** 维护当前页面的表单状态，不承担服务端提交、权限判断或政策生效计算。 */
-export function usePolicyForm(confirm = confirmPolicyAction) {
+export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPlatforms) {
   const form = ref(createForm())
   const confirming = ref(false)
   const attachments = useAttachments({
@@ -25,7 +25,7 @@ export function usePolicyForm(confirm = confirmPolicyAction) {
     canEdit: () => !confirming.value && !persistence.locked.value,
   })
   const { files, attachmentNotice, attachmentsFailed } = attachments
-  const persistence = usePolicyDraft(form, confirming, attachments)
+  const persistence = usePolicyDraft(form, confirming, attachments, refreshPlatforms)
   const blocked = () => confirming.value || persistence.locked.value
   const { notice, noticeType } = persistence
   let revision = 0
@@ -41,11 +41,28 @@ export function usePolicyForm(confirm = confirmPolicyAction) {
       confirming.value = false
     }
   }
-  const platforms = computed(() =>
-    form.value.channel === 'RETAIL' ? RETAIL_PLATFORMS : BILLION_PLATFORMS,
+  const platforms = computed(() => {
+    const options = form.value.channel === 'RETAIL' ? RETAIL_PLATFORMS : BILLION_PLATFORMS
+    return options.filter(([code]) =>
+      assigned.value?.some(
+        (scope) => scope.perspective === form.value.channel && scope.platformCode === code,
+      ),
+    )
+  })
+  const removedPlatforms = computed(() =>
+    assigned.value
+      ? form.value.platforms.filter(
+          (code) => !platforms.value.some(([allowed]) => allowed === code),
+        )
+      : [],
   )
   const selectedPlatforms = computed(() =>
-    platforms.value.filter(([code]) => form.value.platforms.includes(code)),
+    (persistence.readOnly.value
+      ? form.value.channel === 'RETAIL'
+        ? RETAIL_PLATFORMS
+        : BILLION_PLATFORMS
+      : platforms.value
+    ).filter(([code]) => form.value.platforms.includes(code)),
   )
 
   async function switchChannel(channel) {
@@ -452,6 +469,7 @@ export function usePolicyForm(confirm = confirmPolicyAction) {
     },
     platforms,
     selectedPlatforms,
+    removedPlatforms,
     switchChannel,
     togglePlatform,
     selectAll,

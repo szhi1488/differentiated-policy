@@ -1,9 +1,9 @@
 <script setup>
 import './policy-form.css'
-import { computed, inject, nextTick, ref, watch } from 'vue'
+import { computed, inject, nextTick, ref, watch, onMounted, onScopeDispose } from 'vue'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import { POLICY_STATUS_LABELS } from '../../constants/policy'
 import { occupiedCommonConfigurations } from '../../utils/policy-form'
@@ -13,7 +13,10 @@ import PolicyBasicSection from './components/PolicyBasicSection.vue'
 import PolicyTimeSection from './components/PolicyTimeSection.vue'
 import PolicyAttachmentsSection from './components/PolicyAttachmentsSection.vue'
 import PolicyRejectionNotice from './components/PolicyRejectionNotice.vue'
+import PolicySubmissionCoverage from './components/PolicySubmissionCoverage.vue'
 const {
+  submissionPreview,
+  confirmSubmission,
   form,
   files,
   attachmentNotice,
@@ -33,6 +36,7 @@ const {
   saveDraft: persistDraft,
   platforms,
   selectedPlatforms,
+  removedPlatforms,
   switchChannel,
   togglePlatform,
   selectAll,
@@ -52,8 +56,26 @@ const {
   removeModel,
   removeGoods,
 } = inject('policyForm')
+const { data: assigned, error: platformError, refreshPlatforms } = inject('platformPermissions')
+function onVisible() {
+  if (!document.hidden) {
+    void refreshPlatforms()
+  }
+}
+onMounted(() => {
+  void refreshPlatforms()
+  window.addEventListener('focus', onVisible)
+  document.addEventListener('visibilitychange', onVisible)
+})
+onScopeDispose(() => {
+  window.removeEventListener('focus', onVisible)
+  document.removeEventListener('visibilitychange', onVisible)
+})
+const platformBlocked = computed(() => !assigned.value || removedPlatforms.value.length > 0)
 const route = useRoute()
 const router = useRouter()
+// 确认窗口和提交后的清理归属于当前申请页。
+onBeforeRouteLeave(() => writing.value !== 'submit')
 const goodsPicker = ref(null)
 const specifiedIds = computed(() =>
   form.value.cards.flatMap(({ id }) => (id === undefined ? [] : [id])),
@@ -146,12 +168,15 @@ async function resetForm() {
 }
 
 async function saveDraft() {
-  if (await persistDraft()) {
+  if (!platformBlocked.value && (await persistDraft())) {
     ElMessage.success('草稿保存成功')
   }
 }
 
 async function submitForm() {
+  if (platformBlocked.value || !platforms.value.length) {
+    return
+  }
   if (await submit()) {
     // 先移除原申请地址，再清理缓存，避免路由监听重新回填已提交申请。
     await router.replace({ name: 'apply' })
@@ -214,6 +239,11 @@ function updateTime(value) {
       <PolicyBasicSection
         :form="form"
         :platforms="platforms"
+        :assigned="assigned"
+        :platform-error="platformError"
+        :removed-platforms="removedPlatforms"
+        :read-only="readOnly"
+        @retry-platforms="refreshPlatforms"
         @update-field="updateField"
         @switch-channel="switchChannel"
         @toggle-platform="togglePlatform"
@@ -301,7 +331,7 @@ function updateTime(value) {
         </el-button>
         <el-button
           v-if="!readOnly"
-          :disabled="confirming || conflict"
+          :disabled="confirming || conflict || platformBlocked"
           :loading="writing === 'save'"
           @click="saveDraft"
         >
@@ -311,7 +341,7 @@ function updateTime(value) {
           v-if="!readOnly"
           native-type="submit"
           type="primary"
-          :disabled="confirming || conflict"
+          :disabled="confirming || conflict || platformBlocked || !platforms.length"
           :loading="writing === 'submit'"
         >
           提交申请
@@ -319,6 +349,29 @@ function updateTime(value) {
         </el-button>
       </footer>
     </el-form>
+    <el-dialog
+      v-if="submissionPreview"
+      :model-value="true"
+      title="确认政策适用范围"
+      class="submission-coverage-dialog"
+      width="min(1200px, calc(100% - 24px))"
+      align-center
+      :close-on-click-modal="false"
+      @update:model-value="confirmSubmission(false)"
+    >
+      <el-alert
+        v-if="submissionPreview.changed"
+        title="商品或本人历史政策已变化，请重新核对整单范围。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <PolicySubmissionCoverage :detail="submissionPreview" />
+      <template #footer>
+        <el-button @click="confirmSubmission(false)">返回编辑</el-button>
+        <el-button type="primary" @click="confirmSubmission(true)">确认整单并提交</el-button>
+      </template>
+    </el-dialog>
     <div v-if="loadError || conflict || readOnly" class="form-actions">
       <el-button v-if="loadError || conflict" :disabled="busy || confirming" @click="reload">
         读取服务端版本

@@ -4,7 +4,7 @@
 
 申请页已接入在售目录。「选择手机型号」每次确认新建一张普通卡，普通卡可通过「编辑」追加配置。「指定适用机型」每次选一个具体商品并单独成卡，数量按平台选填。政策接口按已确认三表设计。[动态表单与实单](../business/perspective-rules.md)
 
-更新日期：2026-11-17。已实现草稿创建、继续保存、提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
+更新日期 2026-11-20。已实现本人负责平台查询、草稿创建、继续保存、提交前覆盖确认、正式提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
 
 ## 公共约定
 
@@ -22,9 +22,11 @@
 
 | 方法 | 路径 | 用途 | 成功 |
 | --- | --- | --- | --- |
+| GET | `/api/policies/platforms` | 本人当前负责的渠道平台组合 | 200 |
 | POST | `/api/policies/drafts` | 首次保存，可携带当前可不完整的整单表单 | 201 |
 | PUT | `/api/policies/{id}/draft` | 整体保存本人草稿/已拒绝申请 | 200 |
 | DELETE | `/api/policies/{id}/draft?recordVersion={version}` | 物理删除本人未提交草稿 | 204 |
+| GET | `/api/policies/{id}/submission-preview?recordVersion={version}` | 核对本人拟提交的整单覆盖范围 | 200 |
 | POST | `/api/policies/{id}/submit` | `DRAFT` 提交或 `REJECTED` 重提 | 200 |
 | GET | `/api/policies/mine` | 「我的提交」分页查询本人的草稿和提交记录 | 200 |
 | GET | `/api/policies/{id}` | 草稿和驳回继续编辑时返回当前表单，待审或已通过时返回对应轮次快照 | 200 |
@@ -32,6 +34,8 @@
 | GET | `/api/policies/{id}/audit-logs/{logId}` | 本人申请某轮提交快照及该轮审核结果 | 200 |
 
 首提与重提共用同一个申请 ID 和提交接口，每次成功新增一个提交轮次。不开放待审撤回、通过后修改或删除。
+
+前后端须配套发布。旧版页面只发送记录版本，缺少确认标识的正式提交会被拒绝。已有草稿与已驳回申请可刷新页面后继续，历史提交沿用原快照。
 
 ## 删除未提交草稿
 
@@ -109,13 +113,15 @@
 
 创建或保存返回至少 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`。其中 `policyCode` 由已有申请 ID 格式化为 `ZC-` 加最少六位数字，重提时保持不变；`submissionVersion` 映射 `current_version`，仅供并发和后台日志使用，申请人页面不展示。`policy_no` 沿用内部创建幂等标识，不调整表结构或改写既有数据。新旧申请、管理员列表、详情、覆盖引用和快照响应统一返回短单号；旧快照仅在读取响应时适配编号，原始快照保持不变。详情还返回 `applicantName`、`form` 和目录展示用的 `goods`。草稿和已驳回申请从 `#/apply?policyId=<id>` 回填当前表单。待审及已通过内容读取当前轮次快照，页面按只读展示。
 
-提交请求：
+提交前，使用保存返回的版本请求 `submission-preview`。仅本人可访问，适用 `DRAFT` 和 `REJECTED`。响应的 `snapshot` 是当前保存版本的拟提交内容，`coverage.items` 按已鉴权申请的申请人 ID、渠道、平台及具体商品查询，只返回本人在对照时点已通过且满足开始时间的最新一轮政策单号及其补贴。本人无匹配时，该项为 NEW，winner 与 existingSubsidy 均为 null。他人政策的变更不影响本次确认标识。`confirmationToken` 标识读到的整单范围。预览为只读，退出窗口保留已保存的内容。
+
+申请人确认后发送以下请求，`confirmationToken` 使用本次预览实际返回的值。
 
 ```json
-{ "recordVersion": 3 }
+{ "recordVersion": 3, "confirmationToken": "<预览返回的确认标识>" }
 ```
 
-点击「提交申请」时，页面先创建或更新草稿，再用保存返回的 `recordVersion` 提交。提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照及商品适用明细，并转 PENDING；示例响应：
+点击「提交申请」时，页面先创建或更新草稿，再读取适用范围。只有点击「确认整单并提交」才发送正式提交请求。提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照及商品适用明细，并转 PENDING；示例响应：
 
 ```json
 {
@@ -163,12 +169,18 @@
 | --- | --- | --- |
 | 400 | POLICY_VALIDATION_FAILED | 枚举、字段组合、精度或正式提交不完整 |
 | 401 | LOGIN_REQUIRED | 未登录或会话到期，沿用现有代码 |
+| 403 | POLICY_PLATFORM_FORBIDDEN | 所选渠道平台已移交或未分配给本人，刷新分工、调整所选平台后重新保存与预览 |
 | 403 | POLICY_ACCESS_DENIED | 当前账号不是本公司有效申请人 |
 | 404 | POLICY_NOT_FOUND | 不存在、已删除或非本人申请 |
 | 404 | POLICY_AUDIT_NOT_FOUND | 该申请下不存在指定审核记录 |
+| 409 | POLICY_COVERAGE_CHANGED | 本人历史政策对照或所选商品资料变化，重新获取整单预览并确认 |
 | 409 | POLICY_VERSION_CONFLICT / POLICY_STATE_CONFLICT | 版本过期、重复提交、不允许状态 |
 | 409 | POLICY_GOODS_CHANGED | 选中商品下架、删除或配置变化 |
 | 409 | POLICY_CREATE_CONFLICT | 首次保存标识已用于其他内容或申请已变化 |
 | 503 | POLICY_STORAGE_UNAVAILABLE | 存储不可用，不显示假成功 |
 
 事务与历史遵循 [状态机](../business/status-machine.md)，字段枚举见 [数据字典](../sql/database-design.md)。已实现接口可通过 Knife4j 查看。
+
+## 申请人负责平台
+
+`GET /api/policies/platforms` 返回当前有效申请人的 `[{perspective, platformCode}]`，尚未分配返回空数组。新建、保存草稿、驳回重提的覆盖预览和正式提交均校验整单所选平台归属，卡片平台须属于整单。初次提交同样经过预览及正式提交复核。未授权的平台返回 403 `POLICY_PLATFORM_FORBIDDEN`。平台移交与草稿、提交写入共用申请人行锁；确认后失去权限不能写入审核记录。空平台草稿可保存，正式提交要求至少一个平台。历史查询、快照和本人覆盖对照继续按原申请人及渠道读取。

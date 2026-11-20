@@ -26,7 +26,7 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
     if (path.startsWith('/api/admin/policies/5/audit-logs?')) {
       return Response.json({ items: auditLogs, total: 2 })
     }
-    if (path === '/api/admin/policies/5') {
+    if (path === '/api/admin/policies/5?includeCoverage=false') {
       return Response.json(detail)
     }
     return Response.json({

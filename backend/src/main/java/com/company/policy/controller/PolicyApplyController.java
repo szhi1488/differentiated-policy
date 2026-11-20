@@ -1,6 +1,7 @@
 package com.company.policy.controller;
 
 import com.company.policy.common.api.ApiError;
+import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.Submission;
 import com.company.policy.dto.PolicyListQuery;
@@ -17,6 +18,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
@@ -42,7 +44,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 @Tag(name = "提交政策", description = "仅本公司有效申请人可读写本人申请")
 @ApiResponse(responseCode = "400", description = "请求格式、表单枚举、字段组合或完整性有误")
 @ApiResponse(responseCode = "401", description = "会话无效")
-@ApiResponse(responseCode = "403", description = "身份或请求来源不符合要求")
+@ApiResponse(responseCode = "403", description = "身份、请求来源无效或所选渠道平台未分给本人（POLICY_PLATFORM_FORBIDDEN）")
 @ApiResponse(responseCode = "404", description = "申请不存在或不属于当前申请人")
 @ApiResponse(responseCode = "409", description = "版本、状态、商品在售配置或首次保存标识冲突")
 @ApiResponse(responseCode = "503", description = "政策存储不可用")
@@ -53,6 +55,12 @@ public class PolicyApplyController {
     public PolicyApplyController(PolicyApplyService policies, LoginSessionService sessions) {
         this.policies = policies;
         this.sessions = sessions;
+    }
+
+    @GetMapping("/platforms")
+    @Operation(summary = "读取本人可以提交政策的渠道及平台")
+    public List<ChannelPlatform> assignedPlatforms(HttpServletRequest request) {
+        return policies.assignedPlatforms(sessions.requireLogin(request).user());
     }
 
     @PostMapping(path = "/drafts", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -92,13 +100,29 @@ public class PolicyApplyController {
         policies.deleteDraft(sessions.requireLogin(request).user(), id, recordVersion);
     }
 
+    @GetMapping("/{id}/submission-preview")
+    @Operation(
+            summary = "申请人确认提交范围",
+            description = "校验本人草稿或已驳回申请及记录版本，按本人、渠道、平台及商品对照预计生效时点已通过的本人历史政策。")
+    public PolicyResponse.SubmissionPreview preview(
+            @PathVariable long id,
+            @RequestParam Integer recordVersion,
+            HttpServletRequest request) {
+        return policies.preview(sessions.requireLogin(request).user(), id, recordVersion);
+    }
+
     @PostMapping(path = "/{id}/submit", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
             summary = "提交已保存的申请",
-            description = "仅提交 recordVersion。后端读取已保存表单并复核商品，原单转 PENDING 且新增本轮快照和平台明细。")
+            description =
+                    "须提交 recordVersion 和申请人核对的 confirmationToken。商品或本人政策对照结果变化返回 409，须重新预览。后端读取已保存表单并复核商品，原单转 PENDING 且新增本轮快照和平台明细。")
     public PolicyResponse submit(
             @PathVariable long id, @RequestBody Submission body, HttpServletRequest request) {
-        return policies.submit(sessions.requireLogin(request).user(), id, body.recordVersion());
+        return policies.submit(
+                sessions.requireLogin(request).user(),
+                id,
+                body.recordVersion(),
+                body.confirmationToken());
     }
 
     @GetMapping("/{id}")

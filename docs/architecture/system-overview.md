@@ -1,6 +1,6 @@
 # 系统整体架构
 
-更新日期：2026-11-18。源码现状与已确认但未实现能力分别标注。
+更新日期 2026-11-20。源码现状与已确认但未实现能力分别标注。
 
 2026-11-15 用户确认源商品与标准商品一对一：清洗或人工审核通过后，`goods.sku_id` 延续该来源的原始 SKU，不同源 SKU 的相同配置颜色不再归并；无来源手工商品 SKU 为空。用户确认删除旧表后重建，执行顺序见 [Navicat 重建步骤](../sql/database-design.md#1-在-navicat-建表)。目标库调整由用户在 Navicat 执行。
 
@@ -26,13 +26,13 @@ flowchart LR
     S --> L[飞书鉴权 API]
 ```
 
-十四表基线包含用户、源商品导入、手动清洗、商品审核、标准目录和政策三表。申请人政策接口已接入，商品中心按政策明细检查商品和机型引用。目标 MySQL 待联调。
+十五表基线包含用户、申请人平台分工、源商品导入、手动清洗、商品审核、标准目录和政策三表。申请人政策接口已接入，商品中心按政策明细检查商品和机型引用。目标 MySQL 待联调。
 
 现有后端为 11 张用户及商品相关表提供实体映射。清洗通过 `Brand`、`Series`、`Spu`、`ColorDict` 读取或写入标准目录，导入任务操作和来源变更通过 `CatalogOperationLog` 保存。政策明细当前用于检查商品和配置是否已被引用，政策实体随对应业务接入。
 
 吉客云只读服务独立于页面和数据库写入。服务端按 `brandName` 请求单页，校验返回品牌和游标顺序，向后续同步任务提供 SKU 原文、分类路径、修改时间、状态和下一页游标。[单页查询联调](catalog-admin-design.md#单页查询联调)
 
-管理员从「系统管理 → 用户管理」进入 `#/admin/users`。页面已接入用户列表、独立全量统计、详情、角色调整及账号启停，服务端实时核验本公司有效管理员。角色及启停写入校验最新详情中的旧值，成功后重读列表、统计和已打开的详情。[页面规则](admin-workspace.md#用户管理) · [用户接口](../api/user-api.md)
+管理员从「系统管理 → 用户管理」进入 `#/admin/users`。页面已接入用户列表、独立全量统计、详情、角色调整、账号启停及渠道平台分工，服务端实时核验本公司有效管理员。角色及启停写入校验最新详情中的旧值，成功后重读列表、统计和已打开的详情。[页面规则](admin-workspace.md#用户管理) · [用户接口](../api/user-api.md)
 
 ## 实际技术栈
 
@@ -51,6 +51,8 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 已提供静态预览。`AdminModelSubsidiesPage.vue` 组织紧凑筛选及补贴明细，`PolicySubsidyTimeline.vue` 通过 ECharts 6.1.0 自定义图与 SVGRenderer 上下展示零售、百亿区间；`useSubsidyTimelineNavigation` 共用指针和缩放状态，示例集中在 `mocks/fixtures/model-subsidies.js`。比例显示计算基数，支持当前标记、独立商品、色块点击和右侧时点查询；悬停保持底色、移开恢复边框，移动指针不重建图表。「当前时间」读取浏览器时钟，按北京时间将查询日期范围带到今天，恢复完整缩放并同步两图指针和右侧时点结果。机型摘要、独立指针操作栏、冗余说明及明细下拉框已移除。查询条件下方说明数据来自内置示例。页面不调用商品或政策业务接口；真实已通过政策历史计算及申请人端未接入，无后端或数据库调整。[页面规则](admin-workspace.md#机型补贴查询静态预览) · [既往验证](frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)
 
 管理员五页及申请人提交政策、我的提交已统一侧栏、标题横幅和主内容区视觉：`workspace-sidebar-waves.png` 维护侧栏贴底波浪，`workspace-page-banner.png` 维护标题背景，`workspace-content-background.png` 在两角色布局的顶部导航下铺满正文区域。标题通过 `WorkspacePageHeading.vue` 复用 `AppIcon` SVG 线性图标，移除说明小字；共用 104px 横幅基准高度、桌面 22px／手机 20px 标题和 48px 图标底座。资源归属、裁切及响应式间距见[两角色工作台视觉](frontend-development.md#两角色工作台视觉)，各轮本地检查与模拟预览已记录，飞书真机仍待复测。
+
+2026-11-20 覆盖确认移至申请人正式提交前。管理员直接审核申请快照。以下 11 月 16 日的批准确认与管理员覆盖区记录为历史实现。[当前覆盖确认规则](../business/override-engine.md#4-申请人提交前确认覆盖范围)
 
 2026-11-16 管理员批准前增加整单确认：`AdminPolicyApprovalDialog.vue` 通过 `useAdminPolicyApproval` 复用详情接口核对当前版本、提交轮次、待审状态、权限及覆盖结果，`utils/policy-approval.js` 比较覆盖的业务变化。变化时展示最新预览并要求勾选已核对，仅点击「确认通过」才发送审核请求，取消保留原审核上下文。通过不填写意见，已通过内容的空意见项隐藏，历史列表显示「—」。沿用原审核接口和覆盖算法；复核不锁定其他申请。已完成的检查及模拟预览见[批准确认验证](frontend-development.md#2026-11-16-审核通过前复核与确认)。
 
@@ -71,7 +73,7 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 | `components/WorkspacePageHeading.vue`、`layouts/components/PolicyBanner.vue`、`assets/styles/brand.css` | 两角色共用标题、SVG 图标和横幅尺寸；侧栏、横幅、正文分别使用各自背景资源，正文背景由两角色布局共用容器铺满 |
 | `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
 | `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 管理员侧栏依次为系统管理、商品、政策管理；默认进入源商品库，支持分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
-| `views/admin/users/AdminUsersPage.vue`、`UserDetailDrawer.vue`、`UserAccountAction.vue`、`composables/useUserManagement.js` | 管理员用户查询、角色调整和账号启停，五个接口经 `api/admin-users.js` 调用 |
+| `views/admin/users/AdminUsersPage.vue`、`UserDetailDrawer.vue`、`UserAccountAction.vue`、`UserPlatformDialog.vue`、`composables/useUserManagement.js` | 管理员用户查询、角色调整、启停及分工，七个接口经 `api/admin-users.js` 调用 |
 | `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和任务结果统计 |
 | `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、编辑、删除和字典维护 |
 | `views/admin/policies/AdminPoliciesPage.vue`、`AdminPolicyDetail.vue` | 政策状态页签、两行分区筛选、同尺寸查看和审核窗口、驳回原因小窗。筛选控件为 32px，标签位于上方；详情右侧将备注、附件及审核信息分区。普通机型可展开已选颜色，指定机型按平台显示颜色、数量和补贴 |
@@ -104,7 +106,7 @@ frontend/src/
     components/                基础、时间、明细和附件表单区块
   views/admin/catalog/         源商品库、商品清洗与识别、商品中心
   views/admin/policies/        差异化政策审核及机型补贴静态预览
-  views/admin/users/           用户管理、详情抽屉及角色和启停确认弹窗
+  views/admin/users/           用户管理、详情抽屉、分工弹窗及角色和启停确认弹窗
 
 backend/src/main/java/com/company/policy/
   controller/                  请求、校验与接口说明
@@ -127,7 +129,7 @@ backend/src/main/java/com/company/policy/
 
 ## 数据与安全边界
 
-- 十四表空库基线包括用户和政策核心四表、标准商品目录五表，以及 SKU 来源、导入任务、清洗任务与明细、商品导入记录。标准目录由公司共用，清洗仅保存处理结果和进度。`skuId` 兼作续拉位置和账套内来源身份，提交时的历史快照保留。[数据字典](../sql/database-design.md)
+- 十五表空库基线包括申请人平台分工、用户和政策核心四表、标准商品目录五表，以及 SKU 来源、导入任务、清洗任务与明细、商品导入记录。标准目录由公司共用，清洗仅保存处理结果和进度。`skuId` 兼作续拉位置和账套内来源身份，提交时的历史快照保留。[数据字典](../sql/database-design.md)
 - 第一开发阶段允许重新设计项目内所有表，每次开始前须再次取得用户明确确认。[项目约定第 13 条](../../AGENTS.md#3-核心技术规则与边界)
 - `policy_apply` 保存申请状态、整单字段及当前商品卡；`policy_audit_log` 保留各轮完整快照及审核结果；`policy_goods_detail` 保存各轮每个平台实际选中的商品 ID 及所属配置。补贴和数量从该轮快照读取。
 - 提交事务写入主表、快照和明细。审核事务更新主表及当前轮次审核结果。条件更新校验状态和版本。
@@ -179,17 +181,17 @@ backend/src/main/java/com/company/policy/
 | 普通浏览器扫码、网页授权与回调 | 已实现，已看到真实二维码并验证模拟扫码回调。真实手机确认后的登录待联调。[飞书登录验证记录](feishu-auth-flow.md#验证记录) |
 | 会话恢复、退出、来源保护 | 已实现。角色调整后的旧会话分流已通过 Chrome 与隔离 H2 验证。真实飞书账号重新进入工作台和退出重登待复测。[验证记录](feishu-auth-flow.md#验证记录) |
 | 渠道显隐、平台独立明细、补贴切换 | 已实现前端交互 |
-| 草稿保存、回填、正式提交 | 已接入本人草稿保存和回填、提交快照和商品明细 |
+| 草稿保存、回填、正式提交 | 按最新分工校验所选平台；提交人先保存并确认整单覆盖范围，正式提交时生成该轮快照和商品明细 |
 | 我的提交与申请详情 | 已接入本人分页列表、当前申请详情及驳回原因，界面不展示提交轮次和历轮审核；后台保留日志和快照。草稿及已驳回申请可继续编辑，本人未提交草稿可物理删除。商品及补贴通过 `PolicySubmissionGoods.vue` 按机型、配置汇总颜色，直接对应平台与方案，指定卡按平台显示数量 |
 | 选品、共享补贴、上传 | 已接入在售选品、平台方案分配、文件上传和政策附件绑定 |
 | 吉客云货品读取 | 已实测两品牌查询和续拉。服务端支持全量、按建档日和按修改日，同 SKU 更新原行 |
 | 管理员源商品库 | 导入弹窗支持全量和按建档日，提供续跑、建档日查看和组合筛选分页 |
 | 管理员商品中心 | 已接入列表、详情、统计、三级分类、即时筛选、手工新增、编辑、删除及字典维护。标准商品批量导入待接入 |
 | 管理员商品清洗 | 已接入手动清洗、SKU 预览、跨品牌结果、审核、重试和任务统计 |
-| 管理员用户管理 | 后端列表、独立统计、详情、角色调整及启停均已实现，复用现有用户表。前端已接入。目标 MySQL 并发和真实会话待联调。[接口及验证](../api/user-api.md) |
+| 管理员用户管理 | 用户资料由 `user_info` 保存，各渠道平台的负责人由 `user_platform_assignment` 保存。页面已接入分工、角色和启停等七个用户管理接口。目标 MySQL 并发和真实会话待联调。[接口及验证](../api/user-api.md) |
 | 审核、覆盖计算和生效 | 已接入审核、覆盖预览和有效政策查询。每份申请按自己的开始时间与通过时间确定生效条件，按提交顺序选最新。[覆盖规则](../business/override-engine.md) |
 
-项目未启用 Flyway 或自动建表。由用户在 Navicat 对空库执行十四表基线。商品中心的政策引用检查已使用 `policy_goods_detail`，目标库需具备该基线结构才能联调。目标库结构和实际导入结果以用户提供的 Navicat 或运行页面结果为准。[数据库设计与字段字典](../sql/database-design.md)
+项目未启用 Flyway 或自动建表。由用户在 Navicat 对空库执行十五表基线。商品中心的政策引用检查已使用 `policy_goods_detail`，目标库需具备该基线结构才能联调。目标库结构和实际导入结果以用户提供的 Navicat 或运行页面结果为准。[数据库设计与字段字典](../sql/database-design.md)
 
 此前 2026-11-10 代码检查记录：前端 27 项测试及 lint、格式、构建通过；后端 40 项常规测试及打包、Spotless 通过，1 项真实 MySQL 专项当轮跳过。更早真实 MySQL 回滚及独立 HTTP 检查通过。这些是既往记录，本次文档整理不代表重新运行。命令及验证范围见 [项目 README](../../README.md)。
 

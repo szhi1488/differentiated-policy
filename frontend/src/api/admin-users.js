@@ -57,3 +57,11 @@ export function updateUserStatus(user, status, signal) {
     signal,
   )
 }
+
+export function readPlatformOwners(signal) {
+  return request(usersPath + '/platform-assignments', { signal })
+}
+
+export function updateUserPlatforms(id, platforms, expectedPlatforms, signal) {
+  return patchUser(userPath(id) + '/platforms', { platforms, expectedPlatforms }, signal)
+}

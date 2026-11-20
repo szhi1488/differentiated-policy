@@ -8,6 +8,7 @@ import { authSession } from '../../../composables/useAuthSession'
 import { useUserManagement } from '../../../composables/useUserManagement'
 import { USER_ROLE_LABELS, USER_STATUS_LABELS } from '../../../constants/users'
 import UserAccountAction from './UserAccountAction.vue'
+import UserPlatformDialog from './UserPlatformDialog.vue'
 import UserDetailDrawer from './UserDetailDrawer.vue'
 import './admin-users.css'
 
@@ -41,6 +42,7 @@ const metrics = [
 ]
 const currentId = computed(() => authSession.user.value?.id)
 const action = ref(null)
+const platformUser = ref(null)
 function restriction(user) {
   return user?.id === currentId.value ? '不能调整本人角色或停用本人账号' : ''
 }
@@ -53,6 +55,10 @@ function showAction(user, kind) {
     kind,
     targetStatus: user.status === 'ENABLED' ? 'DISABLED' : 'ENABLED',
   }
+}
+function platformsSaved() {
+  platformUser.value = null
+  saved('负责平台已更新')
 }
 function saved(message) {
   action.value = null
@@ -208,7 +214,7 @@ function saved(message) {
             </template>
           </el-table-column>
           <el-table-column prop="createdAt" label="加入时间" min-width="170" />
-          <el-table-column label="操作" width="190" fixed="right" :resizable="false">
+          <el-table-column label="操作" width="238" fixed="right" :resizable="false">
             <template #default="{ row }">
               <el-button
                 link
@@ -217,6 +223,15 @@ function saved(message) {
                 @click="detailId = row.id"
               >
                 查看
+              </el-button>
+              <el-button
+                v-if="row.roleType === 'APPLICANT' && row.status === 'ENABLED'"
+                link
+                type="primary"
+                :aria-label="'负责平台 ' + row.name"
+                @click="platformUser = row"
+              >
+                负责平台
               </el-button>
               <el-button
                 link
@@ -285,6 +300,12 @@ function saved(message) {
       @status="showAction($event, 'status')"
     />
 
+    <UserPlatformDialog
+      v-if="platformUser"
+      :user="platformUser"
+      @close="platformUser = null"
+      @saved="platformsSaved"
+    />
     <UserAccountAction
       v-if="action"
       v-bind="action"

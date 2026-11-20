@@ -14,7 +14,7 @@ export function listAdminPolicies(filters, signal) {
 }
 
 export function readAdminPolicy(id, signal) {
-  return request(policyPath(id), { signal })
+  return request(policyPath(id) + '?includeCoverage=false', { signal })
 }
 
 export function listAdminPolicyAuditLogs(id, { page, pageSize }, signal) {
