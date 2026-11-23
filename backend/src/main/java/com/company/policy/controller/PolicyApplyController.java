@@ -185,7 +185,7 @@ public class PolicyApplyController {
     @Operation(
             summary = "提交已保存的申请",
             description =
-                    "没有交叉且没有整单调整时直提只需 recordVersion；有交叉或整单调整时须带回 confirmationToken、各段 decisions 及相同的 endAdjustments。零售每段提交 SELECT 和 selectedPolicyIds，完整场景组合与核销类型相同的政策最多选一张。选择缺失、无效或范围变化返回 409。成功转 PENDING 并保存本轮快照和明细。")
+                    "没有交叉且没有整单调整时直提只需 recordVersion；有交叉或整单调整时须带回 confirmationToken、各段 decisions 及相同的 endAdjustments。零售每段提交 SELECT 和 selectedPolicyIds，完整场景组合与核销类型相同的政策最多选一张。选择缺失、无效或范围变化返回 409。成功转 PENDING 并保存本轮快照和明细。启用工作流的新轮返回 reviewStage（PRODUCT_REVIEW 或 PURCHASE_REVIEW）；所需名单缺失时返回 409。")
     public PolicyResponse submit(
             @PathVariable long id, @RequestBody Submission body, HttpServletRequest request) {
         return policies.submit(sessions.requireLogin(request).user(), id, body);

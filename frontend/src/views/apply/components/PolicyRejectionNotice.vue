@@ -1,6 +1,7 @@
 <script setup>
 import { usePolicyRejection } from '../../../composables/usePolicySubmissions'
 import { policyTime } from '../../../utils/policy-adapter'
+import { REVIEW_STAGE_LABELS } from '../../../constants/review-workflow'
 
 const props = defineProps({ policy: { type: Object, required: true } })
 const { data: audit, loading, error, refresh } = usePolicyRejection(() => props.policy)
@@ -21,6 +22,7 @@ const { data: audit, loading, error, refresh } = usePolicyRejection(() => props.
       <el-button link type="primary" @click="refresh">重试读取驳回原因</el-button>
     </template>
     <template v-else-if="audit">
+      <p>退回环节：{{ REVIEW_STAGE_LABELS[audit.rejectedAtStage] ?? '未记录' }}</p>
       <p class="policy-rejection-comment">
         {{ audit.auditComment?.trim() ? audit.auditComment : '审核人未填写驳回原因。' }}
       </p>

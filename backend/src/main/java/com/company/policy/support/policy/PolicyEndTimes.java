@@ -24,14 +24,19 @@ public final class PolicyEndTimes {
         cutoffs.merge(auditLogId, through, (a, b) -> a.isBefore(b) ? a : b);
     }
 
+    LocalDateTime through(String auditLogId, LocalDateTime original) {
+        var cap = cutoffs.get(auditLogId);
+        return cap != null && cap.isBefore(original) ? cap : original;
+    }
+
     List<Round> apply(List<Round> rounds) {
         if (cutoffs.isEmpty()) return rounds;
         return rounds.stream()
                 .map(
                         r -> {
                             if (r.policy().proposed()) return r;
-                            var end = cutoffs.get(r.policy().auditLogId());
-                            if (end == null || !end.isBefore(r.window().through())) return r;
+                            var end = through(r.policy().auditLogId(), r.window().through());
+                            if (end.equals(r.window().through())) return r;
                             var p = r.policy();
                             var adjusted =
                                     new Policy(
@@ -59,6 +64,7 @@ public final class PolicyEndTimes {
                                     r.submittedAt(),
                                     r.auditOrder(),
                                     r.legacy(),
+                                    r.missingConsent(),
                                     r.decisions(),
                                     r.batchKey());
                         })

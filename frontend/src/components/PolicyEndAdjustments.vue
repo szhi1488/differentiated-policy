@@ -9,6 +9,7 @@ const props = defineProps({
   approvedEnd: Object,
   policyId: String,
   logId: String,
+  attachmentUrl: Function,
   admin: Boolean,
 })
 const time = (t) => policyTime(t).replace('T', ' ')
@@ -41,10 +42,14 @@ const adjustments = computed(() => {
         }}
         {{ time(change.endTime) }}
       </p>
-      <p>调整原因：{{ change.reason }}</p>
+      <p>调整原因：{{ change.reason || '未记录' }}</p>
       <div v-for="file in change.attachmentInfo ?? []" :key="file.id">
         <AttachmentDownload
-          :url="policyAttachmentDownloadUrl(policyId, file.id, logId, admin)"
+          :url="
+            attachmentUrl
+              ? attachmentUrl(file.id)
+              : policyAttachmentDownloadUrl(policyId, file.id, logId, admin)
+          "
           :filename="file.originalName"
         />
       </div>

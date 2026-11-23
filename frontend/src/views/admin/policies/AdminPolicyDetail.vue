@@ -4,7 +4,9 @@ import { computed } from 'vue'
 import PolicyEndAdjustments from '../../../components/PolicyEndAdjustments.vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import AttachmentDownload from '../../../components/AttachmentDownload.vue'
+import PolicyReviewMembers from '../../../components/PolicyReviewMembers.vue'
 import { CHANNEL_LABELS, PLATFORM_LABELS, VERIFY_LABELS } from '../../../constants/policy'
+import { REVIEW_STAGE_LABELS } from '../../../constants/review-workflow'
 import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 import { subsidyText } from '../../../utils/policy-coverage'
@@ -89,6 +91,9 @@ function platformNames(codes) {
 const basicFields = computed(() => {
   const { perspective, selectedPlatforms, verifyType, estimated, startTime, endTime } = form.value
   return [
+    ...(policy.value.reviewStage
+      ? [['当前阶段', REVIEW_STAGE_LABELS[policy.value.reviewStage]]]
+      : []),
     ...(props.detail.snapshot.sourcePolicyCode
       ? [['延期原单', props.detail.snapshot.sourcePolicyCode]]
       : []),
@@ -227,4 +232,8 @@ const basicFields = computed(() => {
       </section>
     </section>
   </div>
+  <section v-if="detail.round" class="admin-policy-detail-section">
+    <PolicyReviewMembers :round="detail.round" />
+    <slot name="member-actions" />
+  </section>
 </template>

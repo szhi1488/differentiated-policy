@@ -85,9 +85,9 @@
 
 查库、变更和验证所需 SQL 保存为 `docs/sql/` 下的 `.sql` 文件，由用户在 Navicat 执行。
 
-平台分工升级保留已有分工。脚本结束后核对末行 `upgrade_result` 为「完成」、升级前后分工数相同。首次建表时两者均为 0。新空库直接使用十五表基线。2026-11-15 的十四表重建属于原始 SKU 调整的历史记录。[现有库升级步骤](sql/database-design.md#已有库升级申请人平台分工) · [空库建表步骤](sql/database-design.md#1-在-navicat-建表)
+平台分工升级保留已有分工。脚本结束后核对末行 `upgrade_result` 为「完成」、升级前后分工数相同。首次建表时两者均为 0。新空库直接使用二十二表基线。2026-11-15 的十四表重建属于原始 SKU 调整的历史记录。[现有库升级步骤](sql/database-design.md#已有库升级申请人平台分工) · [空库建表步骤](sql/database-design.md#1-在-navicat-建表)
 
-本项目是嵌入飞书的公司内部 ERP，所有有效管理员共用同一套商品数据。十五表空库基线使用 `brand`、`series`、`spu`、`color_dict` 和 `goods` 保存公司共用标准目录。每条通过的来源一对一映射标准商品并继承自身原始 SKU，不同来源的相同规格颜色分别建档；政策以实际选中的商品 ID 确定适用商品，机型加 RAM、ROM 用于配置查询。商品目录、导入、源商品、清洗及政策明细均省去租户标识。源商品仅按吉客云 SKU ID 唯一匹配，源内容未变时保留原商品和清洗结果。空库使用最新十五表建表脚本中的一份。已采用原始 SKU 一对一基线的现有库按增量升级，保留已有商品与政策历史。目标 MySQL 待用户在 Navicat 执行并联调。[数据字典](sql/database-design.md)
+本项目是嵌入飞书的公司内部 ERP，所有有效管理员共用同一套商品数据。二十二表空库基线使用 `brand`、`series`、`spu`、`color_dict` 和 `goods` 保存公司共用标准目录。每条通过的来源一对一映射标准商品并继承自身原始 SKU，不同来源的相同规格颜色分别建档；政策以实际选中的商品 ID 确定适用商品，机型加 RAM、ROM 用于配置查询。商品目录、导入、源商品、清洗及政策明细均省去租户标识。源商品仅按吉客云 SKU ID 唯一匹配，源内容未变时保留原商品和清洗结果。空库使用最新二十二表建表脚本中的一份。已采用原始 SKU 一对一基线的现有库按增量升级，保留已有商品与政策历史。目标 MySQL 待用户在 Navicat 执行并联调。[数据字典](sql/database-design.md)
 
 来源保留原始七字段、SKU ID、完整分类路径、两种修改时间和状态标记。建档日取自按日导入命中或可追溯的旧任务。原文先入库，再经管理员确认后按当前代码识别系列、型号、配置和颜色，明确结果自动入标准库。清洗和审核通过写入或复用该来源自身的 `goods`，同时回填来源映射。候选、证据和当前映射保存在来源表，独立清洗任务固定本轮 SKU 和结果。商品导入记录继续支撑建档日查询，新基线不保存清洗日志。[商品表关联示例](sql/database-design.md#商品表关联示例) · [商品同步方案](architecture/catalog-admin-design.md) · [商品清洗细则](business/catalog-cleaning.md)
 
@@ -97,9 +97,9 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [政策审核与飞书通知技术设计书（开发版）](architecture/policy-workflow-feishu-technical-design.md) | 产品运营与采购审核、逐段分流、群内 @、待办、临期及改派、接口和验收 | 业务方案已确认，新增能力待开发及目标企业联调 |
+| [政策审核与飞书通知技术设计书（开发版）](architecture/policy-workflow-feishu-technical-design.md) | 申请人逐段确认、运营初审和采购终审、群通知、待办与改派 | 已交付 [A 阶段分流](architecture/policy-workflow-phase-a.md)、[B 阶段后端基础](architecture/policy-workflow-phase-b.md)、[C 阶段站内审核 API](architecture/policy-workflow-phase-c.md) 和 [D 阶段工作台及按轮回跳](architecture/policy-workflow-phase-d.md)。E 阶段从直提与确认整单的分流对齐开始，飞书私聊卡和结果群通知见[后续开发提示词 P23–P26](architecture/policy-workflow-development-prompts.md) |
 | [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、[服务接口与注释](architecture/ai-development.md#服务接口与注释)、Vue/Java 代码写法、API 兼容、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
-| [整体架构](architecture/system-overview.md) | 技术栈、[服务层整理记录](architecture/system-overview.md#2026-11-17-服务层整理)、源码进度、十五表设计边界 | 实现与设计分别标注 |
+| [整体架构](architecture/system-overview.md) | 技术栈、[服务层整理记录](architecture/system-overview.md#2026-11-17-服务层整理)、源码进度、二十二表基线 | 实现与设计分别标注 |
 | [环境配置、部署与后台任务](architecture/environment-configuration.md) | 配置文件分工、完整参数、测试转正式、监听地址、调度开关及关闭客户端后的执行条件 | 配置已接入；实际部署和关闭客户端的完整流程待现场核对 |
 | [前端架构与开发规范](architecture/frontend-development.md) | 目录职责、数据流、接口适配、会话路由、样式、AI 开发验收与整改清单 | 已接入商品、申请、当前详情及管理员审核，含菜单和筛选排版验证 |
 | [两角色工作台视觉](architecture/frontend-development.md#两角色工作台视觉) | 侧栏、标题横幅、主内容区三套背景，统一尺寸、标题及 SVG 图标 | 两角色共用；标题说明小字、旧清洗图及右侧插画已移除 |
@@ -114,15 +114,15 @@
 | [状态机](business/status-machine.md) | 草稿、提交、审核、重提、历史 | 申请和审核已接入 |
 | [适用范围决策表与验收案例](business/override-engine.md#6-决策表与验收案例) | 零售按完整场景组合与核销类型逐段选单，百亿按配置叠加或选一。可对照[京东三单两段的全部选法与截图](business/override-engine.md#京东-reno17-pro-逐段选单示例) | 已接入提交预览、正式提交、审核、管理员预览和实际查询。[前端、后端及三种尺寸验证记录](architecture/frontend-development.md#零售按完整场景组合逐段勾选政策) |
 | [整单提前结束只读查询](sql/query_policy_end_adjustments.sql) | 按发起申请或目标旧单查看各轮原截止、新截止、原因及审核状态 | 在 Navicat 填入本企业和查询单号，执行后每张目标旧单每轮一行。[参数和示例](sql/database-design.md#在-navicat-核对整单提前结束记录) |
-| [重建前删表](sql/drop_all_tables.sql) | 永久删除十五张项目表及表内数据 | 停止后端，在 Navicat 选中目标库后执行 |
-| [重新验证前清空政策提交](sql/clear_policy_submissions.sql) | 清空所有申请人的政策三表，保留账号、分工和商品目录 | 在原事务窗口核对余量并手动提交，再从新窗口复查。[操作步骤](sql/database-design.md#清空政策提交后重新验证) |
+| [重建前删表](sql/drop_all_tables.sql) | 永久删除二十二张项目表及表内数据 | 停止后端，在 Navicat 选中目标库后执行 |
+| [重新验证前清空政策提交](sql/clear_policy_submissions.sql) | 清空政策和按轮工作流记录，保留账号、审核设置、分工和商品目录 | 在原事务窗口核对余量并手动提交，再从新窗口复查。[操作步骤](sql/database-design.md#清空政策提交后重新验证) |
 | [局域网客户端打不开登录页](architecture/environment-configuration.md#局域网申请人打不开登录页) | 服务机可访问、申请人电脑收到空响应 | 从申请人电脑核对前端地址、出站网卡及 TUN 路由 |
 | [平台分工统一升级](sql/upgrade_user_platform_assignments.sql) | 新建分工表或升级旧唯一索引，自动识别现状 | 已有项目库在 Navicat 整份运行 |
-| [完整建表 SQL](sql/schema.sql) | MySQL 8.0.16+ 十五表 DDL | 空库首次执行，用户自行建表 |
+| [完整建表 SQL](sql/schema.sql) | MySQL 8.0.16+ 二十二表 DDL | 空库首次执行，用户自行建表 |
 | [V1 同内容版本](sql/V1__create_policy_tables.sql) | 与 schema.sql 完全一致 | 二选一，不执行两遍 |
 | [已有库商品名称与政策名升级](sql/upgrade_goods_source_names.sql) | 扩展商品名称、新增政策名并回填已关联商品 | 在 Navicat 核对缺失原名清单和两个回填差异数 |
 | [已有库清洗自动排除升级](sql/upgrade_catalog_direct_exclusions.sql) | 更新来源排除和任务结果的两处约束 | 在 Navicat 核对两处约束，再发起清洗 |
-| [数据库字典](sql/database-design.md) | 十五表关联、全部字段、SQL/SVC 约束边界和 Navicat 步骤 | 与 SQL 对应 |
+| [数据库字典](sql/database-design.md) | 二十二表关联、全部字段、SQL/SVC 约束边界和 Navicat 步骤 | 与 SQL 对应 |
 | [商品管理接口](api/catalog-api.md) | 来源、导入清洗、标准商品及字典维护 | 标准商品批量导入待接入 |
 | [页面接口总览](api/page-api-plan.md) | 申请、本人当前详情、管理员政策及用户管理页面的接口与后续事项 | 政策页面已接入，用户管理七个接口已接入 |
 | [机型补贴查询接口](api/page-api-plan.md#机型补贴查询) | 机型配置选项、两渠道原单、实际采用历史及后续计划 | 管理员切换菜单后按上次条件重新查询。本机飞书已核对拼多多百亿单 ZC-000008，正式环境的历史数据和查询计划待联调。[飞书实查记录](architecture/frontend-development.md#查询尚未生效的已通过原单) |

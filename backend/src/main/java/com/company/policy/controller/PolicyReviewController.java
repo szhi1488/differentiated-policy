@@ -57,11 +57,12 @@ public class PolicyReviewController {
     @Operation(
             summary = "分页查看已提交的政策",
             description =
-                    "业务字段展示和筛选以最近正式提交快照为准，驳回后暂存修改在重提成功后更新。按本轮提交时间倒序。状态可选 PENDING、APPROVED 或 REJECTED。提交日期按北京时间筛选。")
+                    "按最近提交快照筛选，按本轮提交时间倒序。reviewStage 可选 PRODUCT_REVIEW 或 PURCHASE_REVIEW，仅匹配对应的待审轮。提交日期按北京时间筛选。")
     public Page list(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String reviewStage,
             @RequestParam(required = false) String perspective,
             @RequestParam(required = false) String platformCode,
             @RequestParam(required = false) String verifyType,
@@ -79,6 +80,7 @@ public class PolicyReviewController {
                         page,
                         pageSize,
                         status,
+                        reviewStage,
                         perspective,
                         platformCode,
                         verifyType,

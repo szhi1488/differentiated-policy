@@ -2,6 +2,7 @@ package com.company.policy.support.policy;
 
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
+import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.PolicyConsent.Decision;
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.entity.PolicyConsent.Target;
@@ -62,7 +63,10 @@ public final class PolicyApplicabilityEvaluator {
     }
 
     public static LocalDateTime originalThrough(String endTime, String sourcePolicyCode) {
-        var end = PolicyFormValidation.time(endTime);
+        return originalThrough(PolicyFormValidation.time(endTime), sourcePolicyCode);
+    }
+
+    public static LocalDateTime originalThrough(LocalDateTime end, String sourcePolicyCode) {
         return sourcePolicyCode != null ? end : end.toLocalDate().atTime(23, 59, 59);
     }
 
@@ -74,6 +78,7 @@ public final class PolicyApplicabilityEvaluator {
             LocalDateTime submittedAt,
             long auditOrder,
             boolean legacy,
+            boolean missingConsent,
             List<Decision> decisions,
             String batchKey) {
         String id() {
@@ -255,7 +260,25 @@ public final class PolicyApplicabilityEvaluator {
         }
     }
 
-    private void addSelections(
+    /** 索引已按明细命中本轮范围。若已获批原文在相交时段却无法还原任何对应商品，分流须重新核对。 */
+    public void includeWorkflow(
+            Snapshot historical,
+            long auditId,
+            LocalDateTime submittedAt,
+            LocalDateTime approvedAt,
+            boolean legacy) {
+        var window = Window.of(historical, approvedAt);
+        var actual =
+                new Window(
+                        window.from(),
+                        approvedRules.through(Long.toString(auditId), window.through()));
+        if (!requested.intersect(actual).expired()
+                && !addSelections(
+                        historical, auditId, submittedAt, approvedAt, window, auditId, legacy))
+            throw PolicyWorkflowReplay.uncertain();
+    }
+
+    private boolean addSelections(
             Snapshot snapshot,
             Long auditId,
             LocalDateTime submittedAt,
@@ -335,12 +358,14 @@ public final class PolicyApplicabilityEvaluator {
                             submittedAt,
                             auditOrder,
                             legacy,
+                            !proposed && !legacy && snapshot.consent() == null,
                             decisionsByScope.getOrDefault(group.getKey(), List.of()),
                             snapshot.consent() == null
                                     ? null
                                     : snapshot.consent().batchPolicyKey());
             rounds.computeIfAbsent(group.getKey(), ignored -> new ArrayList<>()).add(round);
         }
+        return !selections.isEmpty();
     }
 
     private Scope scope(String platform, PolicyDraftRequest.Target target) {
@@ -371,6 +396,31 @@ public final class PolicyApplicabilityEvaluator {
 
     public PolicyApplicability result() {
         return result(Map.of());
+    }
+
+    /** 将已批准的实际、未来安排与本轮已确认的逐段选择对齐，供整单审核分流使用。 */
+    public List<PolicyExecutionChange> workflowSegments(
+            PolicyConsent confirmed, Map<Target, AdjustmentOption> options) {
+        var adjusted = approvedRules.withProposals(proposedCuts, options);
+        var byScope = new HashMap<Scope, List<Decision>>();
+        for (var decision : confirmed.decisions()) {
+            byScope.computeIfAbsent(decision.scope(), unused -> new ArrayList<>()).add(decision);
+        }
+        var changes = new ArrayList<PolicyExecutionChange>();
+        for (var item : rounds.entrySet()) {
+            var scope = item.getKey();
+            PolicyWorkflowReplay.compare(
+                    retail,
+                    scope,
+                    requested,
+                    approvedRules.apply(item.getValue()).stream()
+                            .filter(round -> !round.policy().proposed())
+                            .toList(),
+                    adjusted.apply(item.getValue()),
+                    byScope.getOrDefault(scope, List.of()),
+                    changes);
+        }
+        return List.copyOf(changes);
     }
 
     public PolicyApplicability result(Map<Target, AdjustmentOption> options) {

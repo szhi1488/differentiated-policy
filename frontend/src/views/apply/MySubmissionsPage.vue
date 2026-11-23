@@ -13,6 +13,7 @@ import {
   PLATFORM_LABELS,
   POLICY_STATUS_LABELS,
   POLICY_STATUS_TYPES,
+  policyStatusLabel,
   policyIsEditable,
 } from '../../constants/policy'
 import { policyTime } from '../../utils/policy-adapter'
@@ -187,10 +188,10 @@ async function removeDraft(row) {
             <div v-else-if="row.adjustmentOnly">提前结束申请</div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
             <el-tag :type="POLICY_STATUS_TYPES[row.status]">
-              {{ POLICY_STATUS_LABELS[row.status] }}
+              {{ policyStatusLabel(row) }}
             </el-tag>
           </template>
         </el-table-column>

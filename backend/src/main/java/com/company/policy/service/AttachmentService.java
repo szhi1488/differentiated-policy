@@ -32,6 +32,10 @@ public interface AttachmentService {
     Download downloadAdminHistory(
             long policyId, long logId, String attachmentId, CurrentUserResponse user);
 
+    /** 按审核详情的轮次授权下载该轮实际引用的文件。 */
+    Download downloadReviewRound(
+            long policyId, int version, String attachmentId, CurrentUserResponse user);
+
     /** 删除本人上传且未被政策表单或历史快照引用的附件。 */
     void delete(String id, CurrentUserResponse user);
 

@@ -33,11 +33,13 @@ class LocalConfigLoadingTest {
                     Map.entry("FEISHU_APP_SECRET", "feishu.app-secret"),
                     Map.entry("FEISHU_TENANT_KEY", "feishu.tenant-key"),
                     Map.entry("FEISHU_ALLOWED_ORIGINS", "feishu.allowed-origins"),
+                    Map.entry("FEISHU_POLICY_CHAT_ID", "feishu.policy-chat-id"),
                     Map.entry("DB_URL", "spring.datasource.url"),
                     Map.entry("SERVER_ADDRESS", "server.address"),
                     Map.entry("SERVER_PORT", "server.port"),
                     Map.entry("POLICY_STORAGE_ROOT", "policy.storage.root"),
                     Map.entry("POLICY_APPLICABILITY_CUTOVER_AT", "policy.applicability-cutover-at"),
+                    Map.entry("POLICY_REVIEW_WORKFLOW_ENABLED", "policy.review-workflow-enabled"),
                     Map.entry(
                             "HTTP_CONNECT_TIMEOUT_SECONDS",
                             "external.http.connect-timeout-seconds"),
@@ -84,6 +86,7 @@ class LocalConfigLoadingTest {
                 Map.ofEntries(
                         Map.entry("FEISHU_TENANT_KEY", "environment-test-tenant"),
                         Map.entry("FEISHU_ALLOWED_ORIGINS", "https://environment.example.test"),
+                        Map.entry("FEISHU_POLICY_CHAT_ID", "oc_environment_test_policy_group"),
                         Map.entry(
                                 "DB_URL", "jdbc:mysql://environment.example.test:3306/config_test"),
                         Map.entry("SERVER_ADDRESS", "127.0.0.3"),
@@ -102,6 +105,15 @@ class LocalConfigLoadingTest {
                         Map.entry("JACKYUN_IMPORT_POLL_INTERVAL_MS", "5000"),
                         Map.entry("JACKYUN_CLEAN_POLL_INTERVAL_MS", "6000"));
         verifyStartup(backend, settings, environment);
+    }
+
+    @Test
+    void policyChatIdIsOptionalForConfiguredLogin() throws Exception {
+        Path backend = Files.createDirectories(workspace.resolve("backend"));
+        var settings = sampleSettings();
+        settings.remove("FEISHU_POLICY_CHAT_ID");
+        writePrivateConfiguration(backend, settings);
+        verifyStartup(backend, settings, Map.of());
     }
 
     @Test
@@ -140,10 +152,12 @@ class LocalConfigLoadingTest {
         settings.put("FEISHU_APP_SECRET", "fake-config-test-secret");
         settings.put("FEISHU_TENANT_KEY", "local-config-test-tenant");
         settings.put("FEISHU_ALLOWED_ORIGINS", "https://app.example.test");
+        settings.put("FEISHU_POLICY_CHAT_ID", "oc_local_test_policy_group");
         settings.put("DB_URL", "jdbc:mysql://database.example.test:3306/config_test");
         settings.put("SERVER_ADDRESS", "127.0.0.2");
         settings.put("SERVER_PORT", "18080");
         settings.put("POLICY_APPLICABILITY_CUTOVER_AT", "2026-01-01T00:00:00+08:00");
+        settings.put("POLICY_REVIEW_WORKFLOW_ENABLED", "true");
         settings.put(
                 "POLICY_STORAGE_ROOT",
                 workspace.resolve("storage with spaces").toString().replace('\\', '/'));
@@ -232,6 +246,11 @@ class LocalConfigLoadingTest {
                 var feishu = context.getBean(FeishuProperties.class);
                 assertThat(feishu.getTenantKey()).isEqualTo(env.getProperty("feishu.tenant-key"));
                 assertThat(feishu.hasCompanyTenant()).isEqualTo(!feishu.getTenantKey().isBlank());
+                assertThat(feishu.getPolicyChatId())
+                        .isEqualTo(env.getProperty("feishu.policy-chat-id"));
+                assertThat(feishu.isConfigured())
+                        .isEqualTo(
+                                !feishu.getAppId().isBlank() && !feishu.getAppSecret().isBlank());
                 assertThat(feishu.getRequestTimeoutSeconds())
                         .isEqualTo(
                                 env.getProperty("feishu.request-timeout-seconds", Integer.class));

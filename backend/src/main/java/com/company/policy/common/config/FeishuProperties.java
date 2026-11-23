@@ -18,6 +18,7 @@ public class FeishuProperties {
     private String appId = "";
     private String appSecret = "";
     private List<String> allowedOrigins = new ArrayList<>();
+    private String policyChatId = "";
 
     @Min(1)
     @Max(60)

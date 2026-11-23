@@ -326,6 +326,104 @@ async function openMenu(router, label) {
 }
 
 describe('申请人工作台组件协作', () => {
+  it('重试同轮修改任务保留输入与暂存附件，遇到新服务端版本仅在确认后替换', async () => {
+    savedStatus = 'REJECTED'
+    submissionVersion = 2
+    draft = {
+      perspective: 'RETAIL',
+      selectedPlatforms: ['JD'],
+      specialRemark: '已保存内容',
+      attachmentInfo: [],
+      goodsForm: { cards: [] },
+    }
+    const revision = '/apply?policyId=321&round=2'
+    const router = await render(revision)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const remark = () => wrapper.get('[aria-label="特别备注"]')
+    await remark().setValue('本地修改')
+    const upload = wrapper.get('input[type="file"]')
+    Object.defineProperty(upload.element, 'files', { value: [new File(['proof'], '暂存证明.pdf')] })
+    await upload.trigger('change')
+    await flushPromises()
+    await router.push('/apply/submissions')
+    const handle = fetchMock.getMockImplementation()
+    let unavailable = true
+    fetchMock.mockImplementation((path, init) =>
+      path === '/api/policies/321' && unavailable
+        ? reply({ message: '暂时读不到本轮' }, 503)
+        : handle(path, init),
+    )
+    await router.push(revision)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('暂时读不到本轮'))
+    unavailable = false
+    await button('重新核对本轮').trigger('click')
+    await vi.waitFor(() => expect(remark().element.value).toBe('本地修改'))
+    expect(wrapper.text()).toContain('暂存证明.pdf')
+    expect(confirm).not.toHaveBeenCalled()
+
+    await router.push('/apply?policyId=888&round=2')
+    expect(router.currentRoute.value.fullPath).toBe(revision)
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/policies/888')).toBe(false)
+    expect(remark().element.value).toBe('本地修改')
+    confirm.mockClear()
+
+    await router.push('/apply/submissions')
+    version++
+    draft.specialRemark = '服务端最新内容'
+    await router.push(revision)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('服务端版本需重新核对'))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(remark().element.value).toBe('本地修改')
+    expect(wrapper.text()).toContain('暂存证明.pdf')
+    expect(button('保存草稿').element.disabled).toBe(true)
+    const reads = () => fetchMock.mock.calls.filter(([path]) => path === '/api/policies/321').length
+    const before = reads()
+    await button('读取服务端版本').trigger('click')
+    await vi.waitFor(() => expect(remark().element.value).toBe('本地修改'))
+    expect(reads()).toBe(before)
+    expect(wrapper.text()).toContain('暂存证明.pdf')
+    confirm.mockResolvedValueOnce('confirm')
+    await button('读取服务端版本').trigger('click')
+    await vi.waitFor(() => expect(remark().element.value).toBe('服务端最新内容'))
+    expect(reads()).toBe(before + 1)
+    expect(wrapper.text()).not.toContain('暂存证明.pdf')
+  })
+
+  it('退回链接只打开本人当前驳回轮，取消替换保留输入且不读目标', async () => {
+    const router = await render()
+    await wrapper.get('[aria-label="特别备注"]').setValue('本地输入')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    await router.push('/apply?policyId=321&round=1')
+    expect(router.currentRoute.value.fullPath).toBe('/apply')
+    expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('本地输入')
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/policies/321')).toBe(false)
+    confirm.mockResolvedValue('confirm')
+    savedStatus = 'REJECTED'
+    submissionVersion = 2
+    draft = {
+      perspective: 'RETAIL',
+      selectedPlatforms: ['JD'],
+      specialRemark: '本轮可修改内容',
+      attachmentInfo: [],
+      goodsForm: { cards: [] },
+    }
+    await router.push('/apply?policyId=321&round=1')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('轮次已变更'))
+    expect(wrapper.find('form').exists()).toBe(false)
+    await router.push('/apply?policyId=321&round=2')
+    await vi.waitFor(() =>
+      expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('本轮可修改内容'),
+    )
+    savedStatus = 'PENDING'
+    await router.push('/apply/submissions')
+    await router.push('/apply?policyId=321&round=2')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('当前没有退回修改任务'))
+    expect(wrapper.find('form').exists()).toBe(false)
+    draft = null
+    await button('重新核对本轮').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('未找到此申请'))
+    expect(wrapper.find('form').exists()).toBe(false)
+  })
   it(
     '从申请表查负责的渠道平台，返回保留草稿，再进入时按最新分工查询',
     { timeout: 15000 },

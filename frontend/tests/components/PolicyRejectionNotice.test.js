@@ -9,6 +9,7 @@ const audit = {
   id: '3',
   submissionVersion: 2,
   auditStatus: 'REJECTED',
+  rejectedAtStage: 'PURCHASE_REVIEW',
   auditComment: '请核对补贴金额。\n补充活动说明后重新提交。',
   auditorName: '采购审核人',
   auditTime: '2026-11-15T16:05:51+08:00',
@@ -33,6 +34,7 @@ it('直接展示驳回原因、审核人及北京时间，保留换行并隐藏�
   )
   expect(wrapper.text()).not.toContain('第 2 轮')
   expect(wrapper.text()).toContain('采购审核人')
+  expect(wrapper.text()).toContain('退回环节：采购终审')
   expect(wrapper.text()).toContain('2026-11-15 16:05:51')
   expect(wrapper.text()).not.toContain('未填写')
 })
@@ -91,7 +93,13 @@ it('切换申请时中止旧读取，迟到的上一份原因不覆盖新申请'
     .fn()
     .mockImplementationOnce(() => new Promise((done) => (resolve = done)))
     .mockResolvedValueOnce(
-      history({ ...audit, submissionVersion: 3, auditComment: '新申请的原因' }),
+      history({
+        ...audit,
+        submissionVersion: 3,
+        rejectedAtStage: 'PRODUCT_REVIEW',
+        auditorName: '当前产品运营',
+        auditComment: '新申请的原因',
+      }),
     )
   vi.stubGlobal('fetch', fetch)
   wrapper = mount(PolicyRejectionNotice, { props: { policy } })
@@ -100,6 +108,8 @@ it('切换申请时中止旧读取，迟到的上一份原因不覆盖新申请'
   await flushPromises()
   expect(fetch.mock.calls[0][1].signal.aborted).toBe(true)
   expect(wrapper.text()).toContain('新申请的原因')
+  expect(wrapper.text()).toContain('退回环节：产品运营初审')
+  expect(wrapper.text()).toContain('当前产品运营')
   resolve(history())
   await flushPromises()
   expect(wrapper.text()).toContain('新申请的原因')

@@ -30,10 +30,15 @@ provide('modelSubsidyPreferences', { lastQuery: ref(null), showIndependent: ref(
 // 在地址变更前确认，取消导航时保留原地址、表单和附件；加载由申请页负责。
 const removePolicyGuard = router.beforeEach((to) => {
   const id = to.query.policyId
+  if (to.name === 'apply' && to.query.round && (state.busy.value || state.confirming.value)) {
+    return false
+  }
   if (
     to.name === 'apply' &&
     typeof id === 'string' &&
-    (id !== state.record.value?.id || state.loading.value)
+    (id !== state.record.value?.id ||
+      state.loading.value ||
+      (to.query.round && Number(to.query.round) !== state.record.value?.submissionVersion))
   ) {
     return state.confirmPolicyReplacement()
   }
@@ -83,8 +88,8 @@ onScopeDispose(state.clear)
             v-for="link in APPLICANT_NAV_GROUPS[0].links"
             :key="link.name"
             class="nav-item workspace-nav-item"
-            :class="{ 'is-active': route.name === link.name }"
-            :aria-current="route.name === link.name ? 'page' : undefined"
+            :class="{ 'is-active': (route.meta.menu || route.name) === link.name }"
+            :aria-current="(route.meta.menu || route.name) === link.name ? 'page' : undefined"
             @click="router.push(link.name === 'apply' ? applicationRoute : { name: link.name })"
           >
             {{ link.label }}
@@ -104,7 +109,7 @@ onScopeDispose(state.clear)
       />
       <div class="workspace-content-background">
         <main class="workspace-main">
-          <PolicyBanner v-if="route.name !== 'applicant-model-subsidies'" />
+          <PolicyBanner v-if="route.name === 'apply' || route.name === 'submissions'" />
           <router-view />
         </main>
       </div>

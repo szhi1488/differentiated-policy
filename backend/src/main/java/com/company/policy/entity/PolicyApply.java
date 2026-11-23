@@ -23,6 +23,9 @@ public class PolicyApply {
     private String goodsFormJson;
     private String attachmentUrls;
     private String status;
+    private String reviewStage;
+    private String productReviewerName;
+    private LocalDateTime productReviewedAt;
     private int currentVersion;
     private int recordVersion;
     private LocalDateTime createdAt;

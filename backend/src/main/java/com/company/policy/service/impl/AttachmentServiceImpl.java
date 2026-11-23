@@ -236,6 +236,21 @@ public class AttachmentServiceImpl implements AttachmentService {
         return historicalContent(id, admin.getTenantKey(), membership);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Download downloadReviewRound(
+            long policyId, int version, String id, CurrentUserResponse session) {
+        var user = access.requireActive(session);
+        if (version < 1)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "提交轮次须为正整数。");
+        var membership =
+                policies.reviewRound(
+                        user.getTenantKey(), user.getId(), policyId, version, fileReference(id));
+        if (membership == null)
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到可查看的提交轮次。");
+        return historicalContent(id, user.getTenantKey(), membership);
+    }
+
     private Download historicalContent(String id, String tenantKey, Membership membership) {
         if (membership.auditId() == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");

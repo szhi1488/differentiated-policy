@@ -24,6 +24,9 @@ public interface PolicyReviewService {
     /** 核对记录版本和提交轮次后，通过或驳回待审申请。 */
     Review review(CurrentUserResponse session, long id, PolicyReviewRequest request);
 
+    /** 核验本轮产品运营指派，记录实际初审决定并转采购或退回原申请人。 */
+    Review productReview(CurrentUserResponse session, long id, PolicyReviewRequest request);
+
     /** 预览当前待审轮次在此刻获批时对同渠道、同平台商品政策的覆盖结果。 */
     OverridePreview preview(
             CurrentUserResponse session, long id, int recordVersion, int submissionVersion);

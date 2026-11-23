@@ -23,7 +23,10 @@ public final class PolicyReviewResponse {
             String status,
             int recordVersion,
             int submissionVersion,
-            boolean reviewable) {}
+            boolean reviewable,
+            String reviewStage,
+            String productReviewerName,
+            String productReviewedAt) {}
 
     public record Page(
             List<Summary> items, long total, int page, int pageSize, Map<String, Long> counts) {}
@@ -40,7 +43,8 @@ public final class PolicyReviewResponse {
             String status,
             int recordVersion,
             int submissionVersion,
-            String reviewTime) {}
+            String reviewTime,
+            String reviewStage) {}
 
     public record Coverage(String at, String effectiveFrom, List<CoverageItem> items) {}
 

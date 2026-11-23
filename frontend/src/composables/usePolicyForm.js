@@ -24,7 +24,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     },
     canEdit: () => !confirming.value && !persistence.locked.value,
   })
-  const { files, attachmentNotice, attachmentsFailed } = attachments
+  const { files, attachmentNotice } = attachments
   const adjustmentUploads = useAttachments({
     discardUnboundOnRestore: true,
     onChange: (values) => {
@@ -408,9 +408,10 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     }
   }
 
-  async function reloadDraft(id, force = true) {
+  async function reloadDraft(id, force = true, revisionRound, signal) {
     if (
       persistence.conflict.value &&
+      (!revisionRound || force) &&
       !(await confirmed(() =>
         confirm('读取服务端版本会替换当前填写内容，是否继续？', {
           confirmButtonText: '读取服务端版本',
@@ -420,7 +421,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     ) {
       return
     }
-    await persistence.load(id, force)
+    return persistence.load(id, force, revisionRound, signal)
   }
 
   async function preparePolicyEdit(id, recordVersion) {
@@ -448,9 +449,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       return false
     }
     if (
-      (persistence.hasUnsavedChanges() ||
-        attachmentsFailed.value ||
-        adjustmentUploads.attachmentsFailed.value) &&
+      persistence.hasUnsavedChanges() &&
       !(await confirmed(() =>
         confirm('打开该申请会替换当前未保存的内容，是否继续？', {
           confirmButtonText: '打开申请',

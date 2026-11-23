@@ -5,6 +5,9 @@ import com.company.policy.vo.CurrentUserResponse;
 
 /** 根据当前账号和公司归属校验操作权限，返回已核验的用户。 */
 public interface CatalogAccess {
+    /** 核验本企业启用账号，具体审核权限由轮次和成员指派决定。 */
+    UserInfo requireActive(CurrentUserResponse session);
+
     /** 校验当前账号是否为本公司有效申请人，并返回该用户。 */
     UserInfo requireApplicant(CurrentUserResponse session);
 

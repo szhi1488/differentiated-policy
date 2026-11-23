@@ -24,6 +24,7 @@ import com.company.policy.service.AttachmentService;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyApplyService;
 import com.company.policy.service.PolicyCoverageService;
+import com.company.policy.service.PolicyReviewWorkflow;
 import com.company.policy.support.policy.PolicyApplicabilityEvaluator;
 import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyFormValidation;
@@ -71,6 +72,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private static final Set<String> STATUSES = Set.of("DRAFT", "PENDING", "APPROVED", "REJECTED");
     private static final Set<String> PERSPECTIVES = Set.of("RETAIL", "BILLION");
     private final PolicyCoverageService coverage;
+    private final PolicyReviewWorkflow workflow;
     private final CatalogAccess access;
     private final UserPlatformMapper platforms;
     private final PolicyApplyMapper policies;
@@ -87,8 +89,10 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             CatalogGoodsMapper catalog,
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
-            AttachmentService attachments) {
+            AttachmentService attachments,
+            PolicyReviewWorkflow workflow) {
         this.coverage = coverage;
+        this.workflow = workflow;
         this.access = access;
         this.platforms = platforms;
         this.policies = policies;
@@ -403,6 +407,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         var owner = access.requireApplicant(session);
         var entry = owned(owner, id);
         checkEditable(entry, recordVersion);
+        int workflowVersion = workflow.lockForSubmission(entry);
         var prepared = prepareSubmission(owner, entry, request.endAdjustments(), true);
         var now = now();
         var proposal = withAdjustments(prepared.snapshot(), request.endAdjustments(), session);
@@ -437,7 +442,12 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         checkUpdated(policies.markSubmitted(entry, now));
         checkUpdated(
                 policies.insertAudit(
-                        id, entry.getTenantKey(), version, snapshots.write(snapshot), now));
+                        id,
+                        entry.getTenantKey(),
+                        version,
+                        snapshots.write(snapshot),
+                        now,
+                        workflowVersion));
         // 分批写入同一事务，避免单条 SQL 的参数数随商品数和平台数相乘。
         for (int offset = 0; offset < lines.size(); offset += 500) {
             var batch = lines.subList(offset, Math.min(offset + 500, lines.size()));
@@ -445,10 +455,11 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 throw new IllegalStateException("政策商品明细写入数量不一致");
             }
         }
+        var stage = workflow.submitted(entry, snapshot, now);
         entry.setStatus("PENDING");
         entry.setRecordVersion(entry.getRecordVersion() + 1);
         entry.setCurrentVersion(version);
-        return response(entry);
+        return response(entry, stage);
     }
 
     @Override
@@ -680,7 +691,8 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 "APPROVED".equals(entry.getStatus())
                         ? coverage.approvedEnds(entry.getTenantKey(), now()).get(Long.toString(id))
                         : null,
-                currentSourceEnd);
+                currentSourceEnd,
+                entry.getReviewStage());
     }
 
     @Override
@@ -777,7 +789,8 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 entry.isAdjustmentOnly(),
                 option == null ? null : option.earliestEnd(),
                 option != null && option.canExtend(),
-                option != null && option.canShorten());
+                option != null && option.canShorten(),
+                entry.getReviewStage());
     }
 
     static AuditSummary auditSummary(PolicyAuditLog log) {
@@ -788,7 +801,9 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 log.getAuditorName(),
                 log.getAuditComment(),
                 formatTime(log.getAuditTime()),
-                formatTime(log.getCreatedAt()));
+                formatTime(log.getCreatedAt()),
+                log.getWorkflowVersion(),
+                log.getRejectedAtStage());
     }
 
     static long offset(int page, int pageSize) {
@@ -959,12 +974,17 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     }
 
     private static PolicyResponse response(PolicyApply entry) {
+        return response(entry, null);
+    }
+
+    private static PolicyResponse response(PolicyApply entry, String reviewStage) {
         return new PolicyResponse(
                 entry.getId().toString(),
                 policyNumber(entry.getId()),
                 entry.getStatus(),
                 entry.getRecordVersion(),
-                entry.getCurrentVersion());
+                entry.getCurrentVersion(),
+                reviewStage);
     }
 
     private static void checkUpdated(int rows) {

@@ -267,6 +267,11 @@ public final class PolicyFormValidation {
         }
     }
 
+    /** 审核意见和改派原因统一清理首尾的 Unicode 空白，保留正文换行。 */
+    public static String trimReviewText(String value) {
+        return value == null ? "" : value.replaceAll("(?U)^\\s+|\\s+$", "");
+    }
+
     private static String text(String value) {
         require(
                 value == null

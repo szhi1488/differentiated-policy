@@ -54,7 +54,7 @@
 
 .admin-policy-filter-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -122,6 +122,11 @@
 
 .admin-policy-table .el-button + .el-button {
   margin-left: 8px;
+}
+
+.admin-policy-signed-at {
+  display: block;
+  color: var(--policy-muted);
 }
 
 .admin-policy-footer {

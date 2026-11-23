@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
-import { POLICY_STATUS_LABELS } from '../../constants/policy'
+import { policyStatusLabel } from '../../constants/policy'
 import { occupiedCommonConfigurations } from '../../utils/policy-form'
 import PolicyGoodsPicker from './components/PolicyGoodsPicker.vue'
 import PolicyModelCard from './components/PolicyModelCard.vue'
@@ -119,6 +119,43 @@ const submissionDisabled = computed(
 )
 const route = useRoute()
 const router = useRouter()
+const revisionRound = computed(() =>
+  route.name === 'apply' && route.query.round ? Number(route.query.round) : null,
+)
+const revisionReady = ref(false)
+const revisionError = ref('')
+let revisionRequest
+async function checkRevision(id, round, force = false) {
+  revisionRequest?.abort()
+  revisionRequest = new AbortController()
+  const { signal } = revisionRequest
+  const previouslyReady = revisionReady.value
+  revisionReady.value = false
+  revisionError.value = ''
+  try {
+    const loaded = await reloadDraft(id, force, round, signal)
+    if (!signal.aborted) {
+      revisionReady.value = loaded || (force && previouslyReady)
+      if (!revisionReady.value) {
+        revisionError.value = '当前填写内容已保留，可重新核对退回修改任务。'
+      }
+    }
+  } catch (cause) {
+    if (!signal.aborted) {
+      revisionError.value = cause.message
+    }
+  }
+}
+watch(
+  () => [route.query.policyId, revisionRound.value],
+  ([id, round], previous, onCleanup) => {
+    if (round) {
+      void checkRevision(id, round)
+    }
+    onCleanup(() => revisionRequest?.abort())
+  },
+  { immediate: true },
+)
 // 确认窗口和提交后的清理归属于当前申请页。
 onBeforeRouteLeave(() => !['submit', 'adjust'].includes(writing.value))
 const goodsPicker = ref(null)
@@ -148,10 +185,11 @@ const initialGoods = computed(
     editingCard.value?.goods.filter(({ spuId }) => spuId === goodsPicker.value.initialSpuId) ?? [],
 )
 watch(
-  () => [route.query.policyId, writing.value],
+  () => [route.query.policyId, writing.value, revisionRound.value],
   ([id, writingAction]) => {
     if (
       route.name === 'apply' &&
+      !revisionRound.value &&
       typeof id === 'string' &&
       !writingAction &&
       (id !== record.value?.id || loadError.value)
@@ -234,7 +272,11 @@ async function submitForm(withEndAdjustment = false) {
 function reload() {
   const id = route.query.policyId ?? record.value?.id
   if (typeof id === 'string') {
-    void reloadDraft(id)
+    if (revisionRound.value) {
+      void checkRevision(id, revisionRound.value, true)
+    } else {
+      void reloadDraft(id)
+    }
   }
 }
 
@@ -269,7 +311,15 @@ function updateTime(value) {
 </script>
 <template>
   <div class="policy-application-page">
+    <section v-if="revisionRound && !revisionReady" class="form-section" aria-live="polite">
+      <p>{{ revisionError || '正在核对本轮退回修改任务…' }}</p>
+      <el-button v-if="!loading" @click="checkRevision(route.query.policyId, revisionRound)">
+        重新核对本轮
+      </el-button>
+      <el-button @click="router.push({ name: 'submissions' })">我的提交</el-button>
+    </section>
     <el-form
+      v-else
       class="policy-form"
       :model="form"
       :disabled="locked"
@@ -277,9 +327,16 @@ function updateTime(value) {
       @submit.prevent="submitForm()"
     >
       <p v-if="record" class="policy-record-summary">
-        申请单号 {{ record.policyCode }} · {{ POLICY_STATUS_LABELS[record.status] }}
+        申请单号 {{ record.policyCode }} · {{ policyStatusLabel(record) }}
       </p>
       <p v-else-if="loading" class="policy-record-summary" role="status">正在读取申请…</p>
+      <el-alert
+        v-if="revisionRound && conflict"
+        title="服务端版本需重新核对。本地修改和附件已保留，确认读取服务端版本后再继续办理。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
       <PolicyRejectionNotice v-if="record" :policy="record" />
       <section v-if="timeDraft" class="form-section" aria-label="调整政策时间">
         <h2>
@@ -453,7 +510,10 @@ function updateTime(value) {
       @confirm="confirmSubmission"
       @edit="confirmSubmission()"
     />
-    <div v-if="loadError || conflict || readOnly" class="form-actions">
+    <div
+      v-if="(!revisionRound || revisionReady) && (loadError || conflict || readOnly)"
+      class="form-actions"
+    >
       <el-button v-if="loadError || conflict" :disabled="busy || confirming" @click="reload">
         读取服务端版本
       </el-button>

@@ -3,6 +3,7 @@ package com.company.policy.service.impl;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.formatTime;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.now;
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.policyNumber;
+import static com.company.policy.support.policy.PolicyWorkflowProposals.onlyShortens;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.ChannelPlatform;
@@ -21,10 +22,14 @@ import com.company.policy.mapper.UserPlatformMapper;
 import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.support.policy.PolicyApplicabilityEvaluator;
 import com.company.policy.support.policy.PolicyBatchExtensions;
+import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyEndTimes;
+import com.company.policy.support.policy.PolicyExecutionChange;
 import com.company.policy.support.policy.PolicyFormValidation;
+import com.company.policy.support.policy.PolicyRouteSummary;
 import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.support.policy.PolicyTimelineBuilder;
+import com.company.policy.support.policy.PolicyWorkflowProposals;
 import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyApplicability.AdjustmentOption;
 import com.company.policy.vo.PolicyResponse.ApprovedEnd;
@@ -39,6 +44,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -48,6 +54,8 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 class PolicyCoverageServiceImpl implements PolicyCoverageService {
@@ -59,6 +67,7 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
 
     private enum DateBasis {
         SNAPSHOT,
+        WORKFLOW,
         BEFORE_CUTOVER,
         UNKNOWN_CUTOVER
     }
@@ -151,6 +160,46 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
             LocalDateTime asOf,
             LocalDateTime submittedAt,
             long auditId) {
+        return compareProposals(entry, snapshot, asOf, submittedAt, auditId, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public PolicyRouteSummary workflowRoute(
+            PolicyApply entry, Snapshot confirmed, LocalDateTime asOf) {
+        var consent = confirmed.consent();
+        if (!String.valueOf(entry.getId()).equals(confirmed.id())
+                || !String.valueOf(entry.getApplicantId()).equals(confirmed.applicantId())
+                || consent == null
+                || !consent.supported()
+                || consent.decisions() == null
+                || consent.comparedRounds() == null) throw reconfirmWorkflow();
+        var changes = new ArrayList<PolicyExecutionChange>();
+        var current = compareProposals(entry, confirmed, asOf, asOf, Long.MAX_VALUE, changes);
+        if (current.status() == PolicyApplicability.Status.NO_EFFECTIVE_PERIOD) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT, "POLICY_NO_EFFECTIVE_PERIOD", "已无可生效时段，请调整截止时间后重新核对。");
+        }
+        if (PolicyConfirmation.requiresResubmission(consent, current)
+                || !new HashSet<>(consent.comparedRounds())
+                        .containsAll(PolicyConfirmation.comparedRounds(current)))
+            throw reconfirmWorkflow();
+        return PolicyRouteSummary.from(changes, PolicyWorkflowProposals.adjustments(confirmed));
+    }
+
+    private static ApiException reconfirmWorkflow() {
+        return new ApiException(
+                HttpStatus.CONFLICT, "POLICY_RECONFIRM_REQUIRED", "无法还原本轮确认依据，请重新核对政策范围、时段和执行名单。");
+    }
+
+    // 提交预览只需候选范围。分流额外在相同的历史快照和机型范围上比较原、拟执行名单。
+    private PolicyApplicability compareProposals(
+            PolicyApply entry,
+            Snapshot snapshot,
+            LocalDateTime asOf,
+            LocalDateTime submittedAt,
+            long auditId,
+            List<PolicyExecutionChange> workflowChanges) {
         var ends = approvedEnds(entry.getTenantKey(), asOf);
         var options = adjustmentOptions(entry, asOf, ends);
         var changes =
@@ -211,11 +260,10 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         "延期原单实际截止或负责平台已变化，请重新核对。");
             }
         }
-        var proposed = new ArrayList<Snapshot>();
-        proposed.add(snapshot);
         var extra = extensions.proposals(entry, snapshot);
         extensions.verifyGoods(extra);
-        proposed.addAll(extra);
+        var groups = PolicyWorkflowProposals.groups(snapshot, extra);
+        var proposed = groups.stream().flatMap(List::stream).toList();
         var scopes = new ArrayList<PolicyApplicability.ScopeResult>();
         var status = PolicyApplicability.Status.DIRECT;
         var first =
@@ -229,14 +277,7 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         .map(PolicyApplicabilityEvaluator::originalThrough)
                         .max(LocalDateTime::compareTo)
                         .orElseThrow();
-        for (var group :
-                proposed.stream()
-                        .collect(
-                                Collectors.groupingBy(
-                                        p -> p.form().perspective(),
-                                        LinkedHashMap::new,
-                                        Collectors.toList()))
-                        .values()) {
+        for (var group : groups) {
             var evaluator = new PolicyApplicabilityEvaluator(group, asOf, submittedAt, auditId);
             includeHistory(
                     entry.getTenantKey(),
@@ -244,9 +285,12 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                     group.get(0).form().perspective(),
                     asOf,
                     evaluator,
-                    DateBasis.SNAPSHOT,
+                    workflowChanges == null ? DateBasis.SNAPSHOT : DateBasis.WORKFLOW,
                     ends);
             scopes.addAll(evaluator.result(options).scopes());
+            if (workflowChanges != null) {
+                workflowChanges.addAll(evaluator.workflowSegments(snapshot.consent(), options));
+            }
         }
         if (!scopes.isEmpty()) status = PolicyApplicability.Status.NEEDS_CONFIRMATION;
         if (proposed.stream()
@@ -272,11 +316,6 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         .toList());
     }
 
-    private static boolean onlyShortens(Snapshot snapshot) {
-        return snapshot.sourcePolicyCode() == null
-                && snapshot.form().goodsForm().timeAdjustment() != null;
-    }
-
     @Override
     public List<AdjustmentOption> adjustableFor(
             PolicyApply applicant, LocalDateTime asOf, Map<String, ApprovedEnd> ends) {
@@ -293,13 +332,13 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         entry.getApplicantId(),
                         asOf,
                         asOf.toLocalDate().toString())) {
-            var start = PolicyFormValidation.time(old.startTime());
+            var start = approvedTime(old.startTime());
             if (start.isBefore(old.auditTime())) start = old.auditTime();
             var id = Long.toString(old.policyId());
             var auditId = Long.toString(old.auditId());
             var through =
                     PolicyApplicabilityEvaluator.originalThrough(
-                            old.endTime(), old.sourcePolicyCode());
+                            approvedTime(old.endTime()), old.sourcePolicyCode());
             var cap = ends.get(id);
             if (cap != null && auditId.equals(cap.targetAuditId())) {
                 var actualEnd = PolicyFormValidation.time(cap.actualEnd());
@@ -336,7 +375,9 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
     private boolean allPlatformsAssigned(
             PolicyReviewMapper.AdjustmentCandidate old, List<ChannelPlatform> assigned) {
         try {
+            if (old.platforms() == null) throw reconfirmWorkflow();
             var codes = json.readValue(old.platforms(), String[].class);
+            if (codes == null) throw reconfirmWorkflow();
             return codes.length > 0
                     && java.util.Arrays.stream(codes)
                             .allMatch(
@@ -344,7 +385,16 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                                             assigned.contains(
                                                     new ChannelPlatform(old.perspective(), code)));
         } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
-            throw new IllegalStateException("无法读取政策平台。", error);
+            throw reconfirmWorkflow();
+        }
+    }
+
+    private static LocalDateTime approvedTime(String value) {
+        if (value == null) throw reconfirmWorkflow();
+        try {
+            return PolicyFormValidation.time(value);
+        } catch (ApiException invalidTime) {
+            throw reconfirmWorkflow();
         }
     }
 
@@ -352,9 +402,21 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
     public Map<String, ApprovedEnd> approvedEnds(String tenant, LocalDateTime asOf) {
         var ends = new HashMap<String, ApprovedEnd>();
         for (var row : reviews.approvedChanges(tenant, asOf)) {
-            for (var change : snapshots.readEndAdjustments(row.changes())) {
+            List<EndAdjustment> adjustments;
+            try {
+                adjustments = snapshots.readEndAdjustments(row.changes());
+            } catch (IllegalStateException invalidHistory) {
+                throw reconfirmWorkflow();
+            }
+            if (adjustments == null) throw reconfirmWorkflow();
+            for (var change : adjustments) {
+                if (change == null
+                        || change.target() == null
+                        || change.target().policyId() == null
+                        || change.target().auditLogId() == null
+                        || change.target().previousEnd() == null) throw reconfirmWorkflow();
+                var end = approvedTime(change.endTime());
                 if (PolicyEndTimes.isExtension(change)) continue;
-                var end = PolicyFormValidation.time(change.endTime());
                 // 已经过了拟定截止秒才批准时，保留通过时刻之前的实际历史。
                 if (end.isBefore(row.auditTime())) end = row.auditTime().minusSeconds(1);
                 var approved =
@@ -597,23 +659,48 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                             evaluator.firstDate(),
                             evaluator.lastDate(),
                             scopes.subList(offset, Math.min(offset + 500, scopes.size())),
-                            basis != DateBasis.SNAPSHOT));
+                            basis == DateBasis.BEFORE_CUTOVER || basis == DateBasis.UNKNOWN_CUTOVER,
+                            basis == DateBasis.WORKFLOW));
         }
         // 一个历史轮次可命中多项配置和多批范围。快照只读取、解析一次。
         var ids = List.copyOf(auditIds);
         for (int offset = 0; offset < ids.size(); offset += 500) {
             var batch = ids.subList(offset, Math.min(offset + 500, ids.size()));
-            for (var log : reviews.coverageSnapshots(tenant, batch)) {
-                var prior =
-                        PolicyApplyServiceImpl.displaySnapshot(
-                                snapshots.read(log.getSnapshotData()));
+            var logs = reviews.coverageSnapshots(tenant, batch);
+            if (basis == DateBasis.WORKFLOW && logs.size() != batch.size())
+                throw reconfirmWorkflow();
+            for (var log : logs) {
+                var prior = replayHistory(log, channel, basis, evaluator);
                 history.put(prior.id(), prior);
-                if (basis == DateBasis.UNKNOWN_CUTOVER && prior.consent() == null) {
-                    throw PolicyTimelineBuilder.unknownCutover();
-                }
-                boolean legacy =
-                        prior.consent() == null
-                                && (cutover == null || log.getAuditTime().isBefore(cutover));
+            }
+        }
+        return history;
+    }
+
+    private Snapshot replayHistory(
+            PolicyAuditLog log,
+            String channel,
+            DateBasis basis,
+            PolicyApplicabilityEvaluator evaluator) {
+        try {
+            var prior =
+                    PolicyApplyServiceImpl.displaySnapshot(snapshots.read(log.getSnapshotData()));
+            if (basis == DateBasis.WORKFLOW) {
+                if (!prior.id().equals(String.valueOf(log.getPolicyId()))
+                        || prior.submissionVersion() != log.getVersion()
+                        || !channel.equals(prior.form().perspective())) throw reconfirmWorkflow();
+                PolicySnapshotCodec.requireReplayableCards(prior);
+            }
+            if (basis == DateBasis.UNKNOWN_CUTOVER && prior.consent() == null) {
+                throw PolicyTimelineBuilder.unknownCutover();
+            }
+            boolean legacy =
+                    prior.consent() == null
+                            && (cutover == null || log.getAuditTime().isBefore(cutover));
+            if (basis == DateBasis.WORKFLOW) {
+                evaluator.includeWorkflow(
+                        prior, log.getId(), log.getCreatedAt(), log.getAuditTime(), legacy);
+            } else {
                 evaluator.include(
                         prior,
                         log.getId(),
@@ -622,8 +709,16 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         legacy,
                         basis == DateBasis.BEFORE_CUTOVER);
             }
+            return prior;
+        } catch (IllegalStateException | IllegalArgumentException | NullPointerException error) {
+            if (basis == DateBasis.WORKFLOW) throw reconfirmWorkflow();
+            throw error;
+        } catch (ApiException error) {
+            // 快照中的非法时间来自已批准记录，不能让调用方误以为是当前表单填写错误。
+            if (basis == DateBasis.WORKFLOW && error.getStatus() == HttpStatus.BAD_REQUEST)
+                throw reconfirmWorkflow();
+            throw error;
         }
-        return history;
     }
 
     private Coverage assemble(

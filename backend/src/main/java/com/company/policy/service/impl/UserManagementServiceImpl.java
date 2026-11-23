@@ -14,6 +14,7 @@ import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.UserManagementService;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
+import com.company.policy.vo.PolicyReviewerCandidate;
 import com.company.policy.vo.UserDetailResponse;
 import com.company.policy.vo.UserPlatformOwner;
 import com.company.policy.vo.UserStatsResponse;
@@ -58,18 +59,11 @@ public class UserManagementServiceImpl implements UserManagementService {
     public PageResponse<UserSummaryResponse> list(
             CurrentUserResponse session, UserListQuery query) {
         var admin = access.requireUserAdmin(session);
-        if (query.page() < 1 || query.pageSize() < 1 || query.pageSize() > 100) {
-            throw invalid("页码须从 1 开始，每页条数须在 1 至 100 之间。");
-        }
-        String keyword = optional(query.keyword());
-        if (keyword != null && keyword.codePointCount(0, keyword.length()) > 128) {
-            throw invalid("关键词最多 128 个字符。");
-        }
+        long offset = offset(query.page(), query.pageSize());
+        String keyword = searchPattern(query.keyword());
         String role = filter(query.roleType(), ROLES, "系统角色");
         String status = filter(query.status(), STATUSES, "账号状态");
-        var filters =
-                new UserListQuery(query.page(), query.pageSize(), like(keyword), role, status);
-        long offset = (query.page() - 1L) * query.pageSize();
+        var filters = new UserListQuery(query.page(), query.pageSize(), keyword, role, status);
         long total = users.count(admin.getTenantKey(), filters);
         var items =
                 offset >= total
@@ -87,6 +81,44 @@ public class UserManagementServiceImpl implements UserManagementService {
                                                         user.createdAt().format(TIME)))
                                 .toList();
         return new PageResponse<>(items, total);
+    }
+
+    @Override
+    public PageResponse<PolicyReviewerCandidate> reviewCandidates(
+            CurrentUserResponse session,
+            String reviewGroup,
+            String name,
+            String department,
+            int page,
+            int pageSize) {
+        var admin = access.requireUserAdmin(session);
+        String role;
+        if ("PURCHASE".equals(reviewGroup)) role = "ADMIN";
+        else if ("PRODUCT".equals(reviewGroup)) role = null;
+        else throw invalid("审核岗位须为 PRODUCT（产品运营）或 PURCHASE（采购）。");
+        long offset = offset(page, pageSize);
+        // 岗位资格由服务端固定，与普通用户列表可查看停用账号的规则分别处理。
+        var filters =
+                new UserListQuery(
+                        page,
+                        pageSize,
+                        null,
+                        role,
+                        "ENABLED",
+                        searchPattern(name),
+                        searchPattern(department));
+        long total = users.count(admin.getTenantKey(), filters);
+        return new PageResponse<>(
+                offset >= total
+                        ? List.of()
+                        : users.reviewCandidates(admin.getTenantKey(), filters, offset),
+                total);
+    }
+
+    private static long offset(int page, int pageSize) {
+        if (page < 1 || pageSize < 1 || pageSize > 100)
+            throw invalid("页码须从 1 开始，每页条数须在 1 至 100 之间。");
+        return (page - 1L) * pageSize;
     }
 
     @Override
@@ -323,7 +355,10 @@ public class UserManagementServiceImpl implements UserManagementService {
         return normalized;
     }
 
-    private static String like(String keyword) {
+    private static String searchPattern(String value) {
+        String keyword = optional(value);
+        if (keyword != null && keyword.codePointCount(0, keyword.length()) > 128)
+            throw invalid("关键词最多 128 个字符。");
         return keyword == null
                 ? null
                 : "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";

@@ -52,6 +52,7 @@ describe('工作台顶部栏', () => {
       'apply',
       'submissions',
       'applicant-model-subsidies',
+      'review-inbox',
     ])
     search.props('fetchSuggestions')('补贴', (items) => (results = items))
     expect(results.map(({ name }) => name)).toEqual(['applicant-model-subsidies'])

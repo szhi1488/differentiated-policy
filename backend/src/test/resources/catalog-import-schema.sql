@@ -1,4 +1,4 @@
--- 十四表基线的商品相关表，仅供隔离 H2 验证。保留键与状态约束，JSON 以文本保存。
+-- 二十二表基线中的商品、政策与按轮审核表，用于隔离 H2 验证。账号与审核名单见 user-info-schema.sql。
 
 CREATE TABLE `brand` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -137,6 +137,7 @@ CREATE TABLE `policy_audit_log` (
   `tenant_key` VARCHAR(64) NOT NULL,
   `version` INT NOT NULL,
   `snapshot_data` TEXT NOT NULL,
+  `workflow_version` TINYINT NOT NULL DEFAULT 1 CHECK (workflow_version IN (0,1)),
   `audit_status` VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED',
   `auditor_id` BIGINT DEFAULT NULL,
   `auditor_name` VARCHAR(64) DEFAULT NULL,
@@ -362,4 +363,120 @@ CREATE TABLE `catalog_operation_log` (
   ),
   CONSTRAINT `ck_catalog_log_before` CHECK (`before_data` IS NULL OR `before_data` IS JSON OBJECT),
   CONSTRAINT `ck_catalog_log_after` CHECK (`after_data` IS NULL OR `after_data` IS JSON OBJECT)
+);
+
+CREATE TABLE policy_review_round (
+  policy_id BIGINT NOT NULL,
+  version INT NOT NULL,
+  tenant_key VARCHAR(64) NOT NULL,
+  settings_version INT NOT NULL,
+  stage VARCHAR(24) NOT NULL,
+  route_json VARCHAR NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (policy_id, version),
+  UNIQUE KEY uk_review_round_tenant (policy_id, version, tenant_key),
+  KEY idx_review_round_stage (tenant_key, stage, created_at),
+  CONSTRAINT ck_review_round_settings CHECK (settings_version > 0),
+  CONSTRAINT ck_review_round_stage CHECK (stage IN ('PRODUCT_REVIEW','PURCHASE_REVIEW','FINISHED')),
+  CONSTRAINT ck_review_round_route CHECK (route_json IS JSON OBJECT),
+  CONSTRAINT fk_review_round_audit FOREIGN KEY (policy_id, version) REFERENCES policy_audit_log (policy_id, version),
+  CONSTRAINT fk_review_round_tenant FOREIGN KEY (policy_id, tenant_key) REFERENCES policy_apply (id, tenant_key)
+);
+
+CREATE TABLE policy_review_member (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  policy_id BIGINT NOT NULL,
+  version INT NOT NULL,
+  tenant_key VARCHAR(64) NOT NULL,
+  group_code VARCHAR(16) NOT NULL,
+  user_id BIGINT NOT NULL,
+  display_name VARCHAR(64) NOT NULL,
+  department VARCHAR(128) DEFAULT NULL,
+  assignment_no INT NOT NULL DEFAULT 1,
+  member_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+  task_guid VARCHAR(128) DEFAULT NULL,
+  active_user_id BIGINT GENERATED ALWAYS AS (CASE WHEN member_status = 'ACTIVE' THEN user_id ELSE NULL END),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_review_member_assignment (policy_id, version, group_code, user_id, assignment_no),
+  UNIQUE KEY uk_review_member_active (policy_id, version, group_code, active_user_id),
+  UNIQUE KEY uk_review_member_group (id, policy_id, version, tenant_key, group_code),
+  UNIQUE KEY uk_review_member_round (id, policy_id, version, tenant_key),
+  UNIQUE KEY uk_review_member_task (tenant_key, task_guid),
+  KEY idx_review_person_work (tenant_key, user_id, member_status, group_code, policy_id, version),
+  CONSTRAINT ck_review_member_group CHECK (group_code IN ('PRODUCT','PURCHASE','REVISION')),
+  CONSTRAINT ck_review_member_status CHECK (member_status IN ('ACTIVE','REMOVED','HANDLED','PEER_HANDLED')),
+  CONSTRAINT ck_review_member_sequence CHECK (assignment_no > 0),
+  CONSTRAINT fk_review_member_round FOREIGN KEY (policy_id, version, tenant_key) REFERENCES policy_review_round (policy_id, version, tenant_key),
+  CONSTRAINT fk_review_member_user FOREIGN KEY (user_id, tenant_key) REFERENCES user_info (id, tenant_key)
+);
+
+CREATE TABLE policy_review_decision (
+  policy_id BIGINT NOT NULL,
+  version INT NOT NULL,
+  group_code VARCHAR(16) NOT NULL,
+  tenant_key VARCHAR(64) NOT NULL,
+  member_id BIGINT NOT NULL,
+  decision VARCHAR(16) NOT NULL,
+  reason VARCHAR(512) DEFAULT NULL,
+  decided_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (policy_id, version, group_code),
+  CONSTRAINT ck_review_decision_group CHECK (group_code IN ('PRODUCT','PURCHASE')),
+  CONSTRAINT ck_review_decision CHECK (decision IN ('APPROVE','REJECT')),
+  CONSTRAINT ck_review_rejection_reason CHECK (group_code <> 'PRODUCT' OR decision <> 'REJECT'
+    OR (reason IS NOT NULL AND CHAR_LENGTH(TRIM(reason)) > 0)),
+  CONSTRAINT fk_review_decision_member FOREIGN KEY (member_id, policy_id, version, tenant_key, group_code)
+    REFERENCES policy_review_member (id, policy_id, version, tenant_key, group_code)
+);
+
+CREATE TABLE policy_review_reassignment (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  policy_id BIGINT NOT NULL,
+  version INT NOT NULL,
+  tenant_key VARCHAR(64) NOT NULL,
+  group_code VARCHAR(16) NOT NULL,
+  operator_id BIGINT NOT NULL,
+  reason VARCHAR(512) NOT NULL,
+  before_members VARCHAR NOT NULL,
+  after_members VARCHAR NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_review_reassign_round (policy_id, version, tenant_key, group_code, id),
+  CONSTRAINT fk_review_reassign_round FOREIGN KEY (policy_id, version, tenant_key) REFERENCES policy_review_round (policy_id, version, tenant_key),
+  CONSTRAINT fk_review_reassign_operator FOREIGN KEY (operator_id, tenant_key) REFERENCES user_info (id, tenant_key),
+  CONSTRAINT ck_review_reassign_group CHECK (group_code IN ('PRODUCT','PURCHASE')),
+  CONSTRAINT ck_review_reassign_reason CHECK (CHAR_LENGTH(TRIM(reason)) > 0),
+  CONSTRAINT ck_review_reassign_members CHECK (before_members IS JSON ARRAY AND after_members IS JSON ARRAY)
+);
+
+CREATE TABLE policy_review_delivery (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  tenant_key VARCHAR(64) NOT NULL,
+  policy_id BIGINT NOT NULL,
+  version INT NOT NULL,
+  event_key VARCHAR(128) NOT NULL,
+  action_type VARCHAR(16) NOT NULL,
+  recipient_key BIGINT NOT NULL,
+  recipient_member_id BIGINT GENERATED ALWAYS AS (NULLIF(recipient_key, 0)),
+  payload_json VARCHAR NOT NULL,
+  delivery_status VARCHAR(24) NOT NULL DEFAULT 'PENDING',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at DATETIME DEFAULT NULL,
+  lease_owner VARCHAR(128) DEFAULT NULL,
+  lease_until DATETIME DEFAULT NULL,
+  receipt_id VARCHAR(128) DEFAULT NULL,
+  delivered_at DATETIME DEFAULT NULL,
+  last_error VARCHAR(512) DEFAULT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_review_delivery_event (tenant_key, policy_id, version, event_key, action_type, recipient_key),
+  KEY idx_review_delivery_due (delivery_status, next_attempt_at, lease_until, id),
+  CONSTRAINT fk_review_delivery_round FOREIGN KEY (policy_id, version, tenant_key) REFERENCES policy_review_round (policy_id, version, tenant_key),
+  CONSTRAINT fk_review_delivery_member FOREIGN KEY (recipient_member_id, policy_id, version, tenant_key)
+    REFERENCES policy_review_member (id, policy_id, version, tenant_key),
+  CONSTRAINT ck_review_delivery_event CHECK (CHAR_LENGTH(TRIM(event_key)) > 0),
+  CONSTRAINT ck_review_delivery_recipient CHECK ((action_type = 'GROUP_MESSAGE' AND recipient_key = 0)
+    OR (action_type IN ('CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
+  CONSTRAINT ck_review_delivery_status CHECK (delivery_status IN ('PENDING','SENDING','SENT','RETRY','UNKNOWN','FAILED','CANCELLED')),
+  CONSTRAINT ck_review_delivery_attempts CHECK (attempts >= 0),
+  CONSTRAINT ck_review_delivery_payload CHECK (payload_json IS JSON OBJECT)
 );

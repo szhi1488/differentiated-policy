@@ -9,6 +9,7 @@ const emptyFilters = () => ({
   platformCode: '',
   verifyType: '',
   sceneType: '',
+  reviewStage: '',
   applicant: '',
   submittedDates: null,
   keyword: '',

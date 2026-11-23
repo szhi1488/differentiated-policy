@@ -64,6 +64,14 @@ public interface PolicyAttachmentMapper {
             """)
     Membership adminHistory(long policyId, long logId, String tenantKey, FileReference reference);
 
+    @Select(
+            "SELECT p.status, a.id AS audit_id, "
+                    + HISTORICAL_FILE
+                    + " AS attached "
+                    + PolicyReviewInboxMapper.VISIBLE_ROUND)
+    Membership reviewRound(
+            String tenant, long userId, long id, int version, FileReference reference);
+
     record Membership(String status, Long auditId, boolean attached) {}
 
     // 已删除申请和历轮快照仍保留附件引用，物理删除必须同时排除两类引用。

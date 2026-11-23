@@ -6,6 +6,7 @@ public record PolicyReviewQuery(
         int page,
         int pageSize,
         String status,
+        String reviewStage,
         String perspective,
         String platformCode,
         String verifyType,

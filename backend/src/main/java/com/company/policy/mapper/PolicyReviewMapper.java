@@ -18,7 +18,7 @@ public interface PolicyReviewMapper {
     String FROM =
             """
         FROM policy_apply p JOIN (
-          SELECT id, policy_id, tenant_key, version, created_at, snapshot_data,
+          SELECT id, policy_id, tenant_key, version, created_at, snapshot_data, audit_status, workflow_version,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.applicantName')), 'null') AS applicant_name,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.perspective')), 'null') AS channel_type,
             JSON_EXTRACT(snapshot_data, '$.form.selectedPlatforms') AS platforms,
@@ -28,20 +28,34 @@ public interface PolicyReviewMapper {
           FROM policy_audit_log
         ) a
           ON a.policy_id = p.id AND a.tenant_key = p.tenant_key AND a.version = p.current_version
-        """;
+        """
+                    + PolicyReviewWorkflowMapper.ROUND_JOIN;
+    String PRODUCT_SIGNER =
+            """
+            LEFT JOIN policy_review_decision d ON d.policy_id=r.policy_id AND d.version=r.version
+              AND d.tenant_key=r.tenant_key AND d.group_code='PRODUCT'
+            LEFT JOIN policy_review_member signer ON signer.id=d.member_id AND signer.tenant_key=d.tenant_key
+              AND signer.policy_id=d.policy_id AND signer.version=d.version AND signer.group_code=d.group_code
+            """;
     String COLUMNS =
             """
         p.id, p.policy_no, p.tenant_key, p.applicant_id, a.applicant_name,
         a.channel_type, a.platforms, a.write_off_type, a.scene_types,
-        p.status, p.record_version, p.current_version, a.created_at AS created_at
-        """;
+        p.status, p.record_version, p.current_version, a.created_at AS created_at,
+        signer.display_name AS product_reviewer_name, d.decided_at AS product_reviewed_at,
+        """
+                    + PolicyReviewWorkflowMapper.CURRENT_STAGE
+                    + " AS review_stage ";
     String SUBMITTED =
             """
         WHERE p.tenant_key = #{tenantKey} AND p.is_deleted = 0
           AND p.status IN ('PENDING', 'APPROVED', 'REJECTED')
         """;
     String FILTERS =
-            """
+            "<if test='q.reviewStage != null'>AND p.status='PENDING' AND "
+                    + PolicyReviewWorkflowMapper.CURRENT_STAGE
+                    + " = #{q.reviewStage}</if>"
+                    + """
         <if test="q.perspective != null">AND a.channel_type = #{q.perspective}</if>
         <if test="q.platformCode != null">AND JSON_CONTAINS(a.platforms, JSON_QUOTE(#{q.platformCode}))</if>
         <if test="q.verifyType != null">AND a.write_off_type = #{q.verifyType}</if>
@@ -71,26 +85,35 @@ public interface PolicyReviewMapper {
             "<script>SELECT "
                     + COLUMNS
                     + FROM
+                    + PRODUCT_SIGNER
                     + SUBMITTED
                     + FILTERS
                     + "<if test='q.status != null'> AND p.status = #{q.status}</if>"
                     + " ORDER BY a.created_at DESC, a.id DESC LIMIT #{q.pageSize} OFFSET #{offset}</script>")
     List<PolicyApply> list(String tenantKey, PolicyReviewQuery q, long offset);
 
-    @Select("SELECT " + COLUMNS + ", p.start_time " + FROM + SUBMITTED + " AND p.id = #{id}")
+    @Select(
+            "SELECT "
+                    + COLUMNS
+                    + ", p.start_time, p.extension_source_id "
+                    + FROM
+                    + PRODUCT_SIGNER
+                    + SUBMITTED
+                    + " AND p.id = #{id}")
     PolicyApply find(long id, String tenantKey);
 
     @Select(
-            """
-        SELECT id, version, audit_status, auditor_name, audit_comment, audit_time, created_at, snapshot_data
-        FROM policy_audit_log WHERE policy_id = #{id} AND tenant_key = #{tenantKey} AND version = #{version}
-        """)
+            "SELECT "
+                    + PolicyApplyMapper.AUDIT_COLUMNS
+                    + ", a.snapshot_data FROM policy_audit_log a WHERE "
+                    + PolicyApplyMapper.AUDIT_SCOPE
+                    + " AND a.version=#{version}")
     PolicyAuditLog current(long id, String tenantKey, int version);
 
     @Select(
             """
         <script>
-        SELECT a.id, a.snapshot_data, a.created_at, a.audit_time
+        SELECT a.id, a.policy_id, a.version, a.snapshot_data, a.created_at, a.audit_time
         FROM policy_audit_log a
         JOIN policy_apply p ON p.id = a.policy_id AND p.tenant_key = a.tenant_key
         WHERE p.tenant_key = #{tenantKey} AND p.is_deleted = 0
@@ -200,9 +223,13 @@ public interface PolicyReviewMapper {
         WHERE p.tenant_key = #{tenantKey} AND p.channel_type = #{channel} AND p.is_deleted = 0
           AND p.id != #{draftId} AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
           AND a.audit_time &lt;= #{asOf}
-          AND LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
+          AND ((LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
           AND (<if test="includeExpiredLegacy">JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL OR </if>
-                 LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
+                 LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate}))
+          <if test="workflow">
+              OR ((p.start_time IS NULL OR LEFT(p.start_time, 10) &lt;= #{lastDate})
+                  AND (p.end_time IS NULL OR LEFT(p.end_time, 10) &gt;= #{firstDate}))
+          </if>)
         <choose>
           <when test="channel == 'RETAIL'">
             AND (d.goods_id, d.platform_code) IN
@@ -223,7 +250,8 @@ public interface PolicyReviewMapper {
             String firstDate,
             String lastDate,
             List<Scope> scopes,
-            boolean includeExpiredLegacy);
+            boolean includeExpiredLegacy,
+            boolean workflow);
 
     @Select(
             """

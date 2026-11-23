@@ -20,6 +20,17 @@ export const POLICY_STATUS_LABELS = {
   APPROVED: '已通过',
   REJECTED: '已驳回',
 }
+export function policyStatusLabel({ status, reviewStage }) {
+  if (status === 'PENDING') {
+    if (reviewStage === 'PRODUCT_REVIEW') {
+      return '待产品运营确认'
+    }
+    if (reviewStage === 'PURCHASE_REVIEW') {
+      return '待采购终审'
+    }
+  }
+  return POLICY_STATUS_LABELS[status]
+}
 export const POLICY_STATUS_TYPES = {
   DRAFT: 'info',
   PENDING: 'warning',

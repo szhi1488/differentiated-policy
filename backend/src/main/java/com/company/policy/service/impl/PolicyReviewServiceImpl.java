@@ -18,9 +18,17 @@ import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyApplyMapper;
+import com.company.policy.mapper.PolicyPurchaseReviewMapper;
+import com.company.policy.mapper.PolicyPurchaseReviewMapper.Permission;
+import com.company.policy.mapper.PolicyReviewInboxMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
+import com.company.policy.mapper.PolicyReviewSettingsMapper;
+import com.company.policy.mapper.PolicyReviewWorkflowMapper;
+import com.company.policy.mapper.PolicyReviewWorkflowMapper.Member;
+import com.company.policy.mapper.UserManagementMapper;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyCoverageService;
+import com.company.policy.service.PolicyReviewNotifications;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyFormValidation;
@@ -44,7 +52,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -59,6 +69,12 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private final PolicyCoverageService coverage;
     private final CatalogAccess access;
     private final PolicyReviewMapper reviews;
+    private final PolicyPurchaseReviewMapper purchase;
+    private final PolicyReviewInboxMapper inbox;
+    private final PolicyReviewWorkflowMapper workflow;
+    private final PolicyReviewSettingsMapper settings;
+    private final UserManagementMapper users;
+    private final PolicyReviewNotifications notifications;
     private final PolicyApplyMapper policies;
     private final ObjectMapper json;
     private final PolicySnapshotCodec snapshots;
@@ -68,6 +84,12 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             PolicyCoverageService coverage,
             CatalogAccess access,
             PolicyReviewMapper reviews,
+            PolicyPurchaseReviewMapper purchase,
+            PolicyReviewInboxMapper inbox,
+            PolicyReviewWorkflowMapper workflow,
+            PolicyReviewSettingsMapper settings,
+            UserManagementMapper users,
+            PolicyReviewNotifications notifications,
             PolicyApplyMapper policies,
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
@@ -75,6 +97,12 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         this.coverage = coverage;
         this.access = access;
         this.reviews = reviews;
+        this.purchase = purchase;
+        this.inbox = inbox;
+        this.workflow = workflow;
+        this.settings = settings;
+        this.users = users;
+        this.notifications = notifications;
         this.policies = policies;
         this.json = json;
         this.snapshots = snapshots;
@@ -86,6 +114,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var admin = access.requirePolicyAdmin(session);
         long start = offset(query.page(), query.pageSize());
         validateFilter(query.status(), STATUSES, "审核状态");
+        validateFilter(query.reviewStage(), Set.of("PRODUCT_REVIEW", "PURCHASE_REVIEW"), "审核阶段");
         validateFilter(query.perspective(), CHANNELS, "渠道");
         validateFilter(query.platformCode(), PolicyFormValidation.RETAIL, "平台");
         validateFilter(query.verifyType(), PolicyFormValidation.VERIFY_TYPES, "核销类型");
@@ -100,6 +129,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                         query.page(),
                         query.pageSize(),
                         query.status(),
+                        query.reviewStage(),
                         query.perspective(),
                         query.platformCode(),
                         query.verifyType(),
@@ -118,12 +148,30 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 query.status() == null
                         ? counts.values().stream().mapToLong(Long::longValue).sum()
                         : counts.getOrDefault(query.status(), 0L);
-        var items =
+        var entries =
                 start >= total
-                        ? List.<Summary>of()
-                        : reviews.list(admin.getTenantKey(), filters, start).stream()
-                                .map(entry -> summary(entry, entry.getCreatedAt(), admin))
-                                .toList();
+                        ? List.<PolicyApply>of()
+                        : reviews.list(admin.getTenantKey(), filters, start);
+        var ids =
+                entries.stream()
+                        .filter(entry -> "PENDING".equals(entry.getStatus()))
+                        .map(PolicyApply::getId)
+                        .toList();
+        var allowed =
+                ids.isEmpty()
+                        ? Set.<Long>of()
+                        : purchase.permissions(admin.getTenantKey(), admin.getId(), ids).stream()
+                                .map(Permission::policyId)
+                                .collect(Collectors.toSet());
+        var items =
+                entries.stream()
+                        .map(
+                                entry ->
+                                        summary(
+                                                entry,
+                                                entry.getCreatedAt(),
+                                                allowed.contains(entry.getId())))
+                        .toList();
         return new Page(items, total, query.page(), query.pageSize(), counts);
     }
 
@@ -134,7 +182,10 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var log = current(entry);
         var snapshot = snapshot(log);
         return new Detail(
-                summary(entry, log.getCreatedAt(), admin),
+                summary(
+                        entry,
+                        log.getCreatedAt(),
+                        "PENDING".equals(entry.getStatus()) && permission(entry, admin) != null),
                 snapshot,
                 auditSummary(log),
                 !includeCoverage || "REJECTED".equals(entry.getStatus())
@@ -151,27 +202,30 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var admin = access.requirePolicyAdmin(session);
         var entry = find(admin, id);
         checkPending(entry, request.recordVersion(), request.submissionVersion());
-        if (!reviewable(entry, admin)) {
+        if (entry.getApplicantId().equals(admin.getId())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "POLICY_SELF_REVIEW", "申请人须由其他管理员审核。");
         }
-        String status =
-                switch (request.decision() == null ? "" : request.decision()) {
-                    case "APPROVE" -> "APPROVED";
-                    case "REJECT" -> "REJECTED";
-                    default -> throw invalid("请选择通过或驳回。");
-                };
-        String remark = request.reviewRemark() == null ? null : request.reviewRemark().strip();
-        if (remark != null && remark.codePointCount(0, remark.length()) > 512) {
-            throw invalid("审核意见最多 512 字。");
-        }
-        if ("APPROVED".equals(status)) {
-            var log = current(entry);
-            var snapshot = snapshot(log);
+        requirePermission(entry, admin);
+        boolean approve = approving(request);
+        String status = approve ? "APPROVED" : "REJECTED";
+        String remark = remark(request, false);
+        lockUsers(entry, admin);
+        var log = approve ? current(entry) : null;
+        var snapshot = approve ? snapshot(log) : null;
+        if (approve) {
             coverage.lockScope(
                     entry,
                     snapshot.form(),
                     snapshot.consent() == null ? List.of() : snapshot.consent().endAdjustments());
-            var time = now();
+        }
+        var tenant = admin.getTenantKey();
+        var round = entry.getCurrentVersion();
+        if (purchase.lockPending(tenant, id, round, entry.getRecordVersion()) == null)
+            throw versionConflict();
+        purchase.lockStage(tenant, id, round);
+        var allowed = requirePermission(entry, admin);
+        var time = now();
+        if (approve) {
             var preview = preview(entry, log, snapshot, time);
             if (preview.requiresResubmission()) {
                 boolean expired =
@@ -184,33 +238,196 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                                 ? "该轮已无可生效时段，请驳回，由原申请人调整日期后重提。"
                                 : "当前组合与申请人确认范围不同，请查看覆盖预览并驳回，由原申请人重新确认后提交。");
             }
-            var result = finishReview(entry, admin, status, remark, time);
-            extensions.approve(entry, snapshot, admin, log.getCreatedAt(), time);
-            return result;
         }
-        return finishReview(entry, admin, status, remark, now());
+        var result = updatePolicy(entry, admin, status, remark, time, null);
+        if (approve) extensions.approve(entry, snapshot, admin, log.getCreatedAt(), time);
+        if (allowed.memberId() != null) {
+            decide(
+                    entry,
+                    admin,
+                    "PURCHASE",
+                    allowed.memberId(),
+                    request.decision(),
+                    remark,
+                    "FINISHED",
+                    time);
+        }
+        return result;
     }
 
-    private Review finishReview(
-            PolicyApply entry, UserInfo admin, String status, String remark, LocalDateTime time) {
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Review productReview(CurrentUserResponse session, long id, PolicyReviewRequest request) {
+        var actor = access.requireActive(session);
+        var tenant = actor.getTenantKey();
+        validateVersions(request.recordVersion(), request.submissionVersion());
+        int round = request.submissionVersion();
+        if (inbox.visibleCount(tenant, actor.getId(), id, round) == 0)
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到可办理的政策。");
+        var entry = find(actor, id);
+        checkPending(entry, request.recordVersion(), round);
+        boolean approve = approving(request);
+        String reason = remark(request, !approve);
+        // 先核对请求版本再读成员，锁住主单时再次核对，排除两次读取间已提交的改派。
+        var members = approve ? workflow.members(tenant, id, round) : List.<Member>of();
+        var buyers =
+                members.stream()
+                        .filter(
+                                m ->
+                                        "PURCHASE".equals(m.groupCode())
+                                                && "ACTIVE".equals(m.memberStatus()))
+                        .toList();
+        var ids = new TreeSet<Long>();
+        ids.add(actor.getId());
+        ids.add(entry.getApplicantId());
+        buyers.forEach(m -> ids.add(m.userId()));
+        var accounts = PolicyReviewAccounts.lockUsers(settings, tenant, ids);
+        if (purchase.lockPending(tenant, id, round, request.recordVersion()) == null)
+            throw versionConflict();
+        purchase.lockStage(tenant, id, round);
+        var memberId = inbox.productPermission(tenant, actor.getId(), id, round);
+        if (memberId == null)
+            throw new ApiException(
+                    HttpStatus.FORBIDDEN, "POLICY_REVIEW_FORBIDDEN", "当前用户无权办理本轮产品运营初审。");
+        if (approve) prepareBuyers(entry, actor.getId(), buyers, accounts);
+        var next = approve ? "PURCHASE_REVIEW" : null;
+        var time = now();
+        var signer = accounts.get(actor.getId());
+        var result =
+                updatePolicy(entry, signer, approve ? "PENDING" : "REJECTED", reason, time, next);
+        decide(
+                entry,
+                signer,
+                "PRODUCT",
+                memberId,
+                request.decision(),
+                reason,
+                approve ? next : "FINISHED",
+                time);
+        return result;
+    }
+
+    // 转采购前按本次实际签署人和已锁定的账号复核。此时采购成员尚无待办。
+    private void prepareBuyers(
+            PolicyApply entry, long actorId, List<Member> buyers, Map<Long, UserInfo> accounts) {
+        var ineligible =
+                buyers.stream()
+                        .filter(
+                                m ->
+                                        m.userId() == actorId
+                                                || m.userId() == entry.getApplicantId()
+                                                || !PolicyReviewAccounts.eligible(
+                                                        accounts.get(m.userId()), "PURCHASE"))
+                        .toList();
+        if (buyers.size() == ineligible.size())
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "POLICY_REVIEW_ASSIGNEES_MISSING",
+                    "当前无其他合格的采购审核人，请管理员改派后再转采购。");
+        for (var member : ineligible) {
+            if (purchase.removeIneligibleBuyer(
+                            entry.getTenantKey(),
+                            entry.getId(),
+                            entry.getCurrentVersion(),
+                            member.id())
+                    != 1) throw versionConflict();
+        }
+    }
+
+    private static boolean approving(PolicyReviewRequest request) {
+        return switch (request.decision() == null ? "" : request.decision()) {
+            case "APPROVE" -> true;
+            case "REJECT" -> false;
+            default -> throw invalid("请选择通过或驳回。");
+        };
+    }
+
+    private static String remark(PolicyReviewRequest request, boolean required) {
+        String value = PolicyFormValidation.trimReviewText(request.reviewRemark());
+        if (required && value.isEmpty()) throw invalid("请填写初审退回原因。");
+        if (value.codePointCount(0, value.length()) > 512) throw invalid("审核意见最多 512 字。");
+        return value.isEmpty() ? null : value;
+    }
+
+    private void decide(
+            PolicyApply entry,
+            UserInfo actor,
+            String group,
+            long memberId,
+            String decision,
+            String reason,
+            String nextStage,
+            LocalDateTime time) {
+        var tenant = entry.getTenantKey();
+        int round = entry.getCurrentVersion();
         long id = entry.getId();
-        var tenant = admin.getTenantKey();
+        if (purchase.decide(tenant, id, round, group, memberId, decision, reason, time) != 1
+                || purchase.closeMembers(tenant, id, round, group, memberId) < 1
+                || purchase.advance(tenant, id, round, group + "_REVIEW", nextStage) != 1)
+            throw versionConflict();
+        if ("REJECT".equals(decision) && purchase.assignRevision(tenant, id, round) != 1)
+            throw versionConflict();
+        notifications.decided(tenant, id, round, group, actor.getId(), decision, reason, time);
+    }
+
+    // 与分工变更、提交冻结一致，先按用户 ID 升序持锁，随后才锁机型、商品、申请和本轮节点。
+    private void lockUsers(PolicyApply entry, UserInfo admin) {
+        long actor = admin.getId();
+        long applicant = entry.getApplicantId();
+        var first = users.lockUser(admin.getTenantKey(), Math.min(actor, applicant));
+        var last = users.lockUser(admin.getTenantKey(), Math.max(actor, applicant));
+        var reviewer = actor < applicant ? first : last;
+        if (reviewer == null || reviewer.isDeleted() != 0 || !"ADMIN".equals(reviewer.roleType()))
+            throw new ApiException(HttpStatus.FORBIDDEN, "POLICY_ADMIN_REQUIRED", "只有有效管理员可以审核政策。");
+        admin.setName(reviewer.name());
+    }
+
+    private Permission permission(PolicyApply entry, UserInfo admin) {
+        var found =
+                purchase.permissions(admin.getTenantKey(), admin.getId(), List.of(entry.getId()));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    private Permission requirePermission(PolicyApply entry, UserInfo admin) {
+        var permission = permission(entry, admin);
+        if (permission == null) {
+            // 初读与资格查询之间也可能已有同组成员办结，沿用版本冲突让客户端刷新结果。
+            checkPending(
+                    find(admin, entry.getId()),
+                    entry.getRecordVersion(),
+                    entry.getCurrentVersion());
+            throw new ApiException(
+                    HttpStatus.FORBIDDEN, "POLICY_REVIEW_FORBIDDEN", "当前用户无权办理本轮采购终审，请刷新后查看。");
+        }
+        return permission;
+    }
+
+    private Review updatePolicy(
+            PolicyApply entry,
+            UserInfo signer,
+            String status,
+            String remark,
+            LocalDateTime time,
+            String stage) {
+        long id = entry.getId();
+        var tenant = signer.getTenantKey();
         int version = entry.getCurrentVersion();
         int record = entry.getRecordVersion();
         if (reviews.review(id, tenant, record, version, status, time) != 1
-                || reviews.reviewAudit(
-                                id,
-                                tenant,
-                                version,
-                                status,
-                                admin.getId(),
-                                admin.getName(),
-                                remark == null || remark.isEmpty() ? null : remark,
-                                time)
-                        != 1) {
+                || (!"PENDING".equals(status)
+                        && reviews.reviewAudit(
+                                        id,
+                                        tenant,
+                                        version,
+                                        status,
+                                        signer.getId(),
+                                        signer.getName(),
+                                        remark,
+                                        time)
+                                != 1)) {
             throw versionConflict();
         }
-        return new Review(Long.toString(id), status, record + 1, version, formatTime(time));
+        return new Review(Long.toString(id), status, record + 1, version, formatTime(time), stage);
     }
 
     @Override
@@ -335,7 +552,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         return reviews.current(entry.getId(), entry.getTenantKey(), entry.getCurrentVersion());
     }
 
-    private Summary summary(PolicyApply entry, LocalDateTime submittedAt, UserInfo admin) {
+    private Summary summary(PolicyApply entry, LocalDateTime submittedAt, boolean reviewable) {
         var scenes = PolicyScenes.read(json, entry.getSceneTypes());
         return new Summary(
                 entry.getId().toString(),
@@ -350,7 +567,10 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 entry.getStatus(),
                 entry.getRecordVersion(),
                 entry.getCurrentVersion(),
-                reviewable(entry, admin));
+                reviewable,
+                entry.getReviewStage(),
+                entry.getProductReviewerName(),
+                formatTime(entry.getProductReviewedAt()));
     }
 
     private Snapshot snapshot(PolicyAuditLog log) {
@@ -368,14 +588,14 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         }
     }
 
-    private static boolean reviewable(PolicyApply entry, UserInfo admin) {
-        return "PENDING".equals(entry.getStatus()) && !entry.getApplicantId().equals(admin.getId());
-    }
-
-    private static void checkPending(PolicyApply entry, Integer record, Integer round) {
+    private static void validateVersions(Integer record, Integer round) {
         if (record == null || record < 1 || round == null || round < 1) {
             throw invalid("请提供有效的记录版本和提交轮次。");
         }
+    }
+
+    private static void checkPending(PolicyApply entry, Integer record, Integer round) {
+        validateVersions(record, round);
         if (!"PENDING".equals(entry.getStatus())
                 || entry.getRecordVersion() != record
                 || entry.getCurrentVersion() != round) {

@@ -10,6 +10,7 @@ import PolicySubmissionGoods from './PolicySubmissionGoods.vue'
 const props = defineProps({
   detail: { type: Object, required: true },
   logId: { type: String, default: null },
+  attachmentUrl: Function,
   editingTime: Boolean,
 })
 const form = computed(() => props.detail.form)
@@ -59,7 +60,11 @@ const time = (value) => policyTime(value).replace('T', ' ')
         <div v-for="attachment in form.attachmentInfo" :key="attachment.id ?? attachment.url">
           <AttachmentDownload
             v-if="attachment.type === 'FILE'"
-            :url="policyAttachmentDownloadUrl(detail.id, attachment.id, logId)"
+            :url="
+              attachmentUrl
+                ? attachmentUrl(attachment.id)
+                : policyAttachmentDownloadUrl(detail.id, attachment.id, logId)
+            "
             :filename="attachment.originalName"
           />
           <span v-else>{{ attachment.url }}</span>
@@ -73,6 +78,7 @@ const time = (value) => policyTime(value).replace('T', ' ')
       :approved-end="detail.approvedEnd"
       :policy-id="detail.id"
       :log-id="logId"
+      :attachment-url="attachmentUrl"
     />
     <PolicySubmissionGoods :cards="form.goodsForm.cards" :goods="detail.goods" />
   </div>

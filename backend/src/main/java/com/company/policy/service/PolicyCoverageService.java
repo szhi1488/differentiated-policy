@@ -6,6 +6,7 @@ import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.mapper.PolicyApplyMapper.DetailLine;
+import com.company.policy.support.policy.PolicyRouteSummary;
 import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.company.policy.vo.PolicyReviewResponse.Coverage;
@@ -33,6 +34,9 @@ public interface PolicyCoverageService {
             LocalDateTime asOf,
             LocalDateTime submittedAt,
             long auditId);
+
+    /** 按已鉴权申请、本次提交时点及服务端已确认的整轮快照计算分流理由和摘要。 */
+    PolicyRouteSummary workflowRoute(PolicyApply entry, Snapshot confirmed, LocalDateTime asOf);
 
     /** 在写事务中按相同顺序锁定选中机型，覆盖同配置不同颜色及多实例并发。 */
     void lockScope(

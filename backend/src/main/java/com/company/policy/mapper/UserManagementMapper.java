@@ -1,6 +1,7 @@
 package com.company.policy.mapper;
 
 import com.company.policy.dto.UserListQuery;
+import com.company.policy.vo.PolicyReviewerCandidate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
@@ -19,6 +20,8 @@ public interface UserManagementMapper {
         <if test="q.roleType != null">AND u.role_type = #{q.roleType}</if>
         <if test="q.status == 'ENABLED'">AND u.is_deleted = 0</if>
         <if test="q.status == 'DISABLED'">AND u.is_deleted = 1</if>
+        <if test="q.name != null">AND LOWER(u.name) LIKE LOWER(#{q.name}) ESCAPE '!'</if>
+        <if test="q.department != null">AND LOWER(u.department) LIKE LOWER(#{q.department}) ESCAPE '!'</if>
         <if test="q.keyword != null">
           AND (LOWER(u.name) LIKE LOWER(#{q.keyword}) ESCAPE '!'
             OR LOWER(u.department) LIKE LOWER(#{q.keyword}) ESCAPE '!')
@@ -51,6 +54,15 @@ public interface UserManagementMapper {
         WHERE tenant_key = #{tenantKey} AND id = #{id} AND is_deleted IN (0, 1)
         """)
     DetailRow detail(@Param("tenantKey") String tenantKey, @Param("id") long id);
+
+    @Select(
+            "<script>SELECT u.id, u.name, u.department "
+                    + FILTERS
+                    + " ORDER BY u.created_at DESC, u.id DESC LIMIT #{q.pageSize} OFFSET #{offset}</script>")
+    List<PolicyReviewerCandidate> reviewCandidates(
+            @Param("tenantKey") String tenantKey,
+            @Param("q") UserListQuery query,
+            @Param("offset") long offset);
 
     // 锁定读取不可复用缓存；操作人与目标用户由服务按 ID 升序锁定。
     @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)

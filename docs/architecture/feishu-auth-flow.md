@@ -8,6 +8,8 @@
 
 ## 普通浏览器登录
 
+从政策办理链接发起授权时，扫码和网页授权均在当前标签页将受限的站内目标与本次 state 绑定；固定回调恢复该目标，业务页面用新会话重新核验所查轮次及可执行操作。客户端免登直接沿用原 Hash。[政策办理链接及验证](policy-workflow-phase-d.md#办理链接约定)
+
 1. 页面首先处理 OAuth 回调。无回调时通过 `GET /api/auth/session` 恢复会话。未登录时显示「显示飞书二维码」和「飞书网页授权登录」。
 2. 用户选择方式后，`POST /api/auth/feishu/browser/authorize` 使用可信 `Origin` 和 `X-Policy-Request: 1`。服务端从白名单 Origin 生成站点根地址（如 `http://127.0.0.1:5173/`），将该地址和随机 state 绑定当前 Cookie 会话。state 3 分钟内一次有效，重新生成后旧回调返回 401，新 state 仍可使用。
 3. 「飞书网页授权登录」直接跳转到 `https://accounts.feishu.cn/open-apis/authen/v1/authorize`。该链接包含 `client_id`、`response_type=code`、`redirect_uri`、`state`。用户选择「显示飞书二维码」时，按需加载飞书官方二维码 SDK `1.0.2`，将相同的参数用于 `https://passport.feishu.cn/suite/passport/oauth/authorize`。仅接收当前 iframe 从 Passport 域发回的临时票据 `tmp_code`，随后跳转该 Passport 授权地址完成 OAuth。扫码加载失败、超时或过期时可刷新二维码，也可切换网页授权。普通浏览器不调用客户端免登 JS-SDK。

@@ -10,6 +10,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -54,5 +55,20 @@ public class PolicyAttachmentController {
         var user = sessions.requireLogin(request).user();
         return AttachmentController.content(
                 attachments.downloadAdminHistory(id, logId, attachmentId, user));
+    }
+
+    @GetMapping("/api/policy-reviews/{id}/attachments/{attachmentId}/content")
+    @Operation(summary = "下载审核详情中指定轮次的附件", description = "submissionVersion 为提交轮次，文件须被本轮快照引用。")
+    public ResponseEntity<Resource> reviewRound(
+            @PathVariable long id,
+            @PathVariable String attachmentId,
+            @RequestParam int submissionVersion,
+            HttpServletRequest request) {
+        return AttachmentController.content(
+                attachments.downloadReviewRound(
+                        id,
+                        submissionVersion,
+                        attachmentId,
+                        sessions.requireLogin(request).user()));
     }
 }

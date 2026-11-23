@@ -15,9 +15,13 @@
 
 ## 列表与详情
 
+需要查看某轮初审和终审人员、办理情况、退回来源及允许操作时，读取 `GET /api/policy-reviews/{id}?submissionVersion=轮次`。初审同意转采购时主表仍为 `PENDING`。改派与终审都校验轮次和记录版本。[站内节点接口](../architecture/policy-workflow-phase-c.md#api-与字段)
+
 `page` 默认 1，`pageSize` 默认 20，范围 1 至 100。支持 `status`（PENDING、APPROVED、REJECTED）、`perspective`、`platformCode`（整单平台）、`verifyType`、`sceneType`、`applicant`、`submittedFrom`、`submittedTo`、`keyword`。提交日期为北京时间 `YYYY-MM-DD`，含所选的首尾日期。关键词匹配单号、申请人和快照机型名。列表按本轮提交时间、提交日志 ID 倒序。`counts` 返回其他筛选条件下各状态的数量，`total` 为当前状态筛选后的行数。
 
 详情的 `policy` 提供记录版本、提交轮次、审核状态和 `reviewable`；`snapshot` 保存本轮提交内容；`audit` 保存当前审核结果。省略 `includeCoverage` 时兼容旧客户端，待审核和已通过详情包含 `coverage`。
+
+列表可按 `reviewStage=PRODUCT_REVIEW` 或 `PURCHASE_REVIEW` 查询当前待审环节，状态计数与分页使用相同条件。旧待审归入采购终审，终态的阶段为空。列表及详情摘要返回 `reviewStage`、`productReviewerName` 和 `productReviewedAt`。初审姓名和北京时间来自该轮实际签署的指派与决定，尚无决定时两项均为空。
 
 管理员列表、筛选、状态数量统计及详情的 `policy` 摘要统一按 `current_version` 关联最近正式提交快照，读取其中的申请人、渠道、整单平台、核销类型及场景。驳回后申请人保存编辑内容只影响本人可回填的主表，管理员继续展示和筛选原提交内容；重提事务成功后才切换到新轮次。状态、并发版本、归属和审核权限仍按有效主表判断。快照中的可空核销类型和场景返回 null，不将 JSON null 显示为字符串。接口路径及响应字段保持兼容。
 
@@ -30,6 +34,8 @@
 「差异化政策」页面默认传 `pageSize=10`。查看和审核共用详情接口，传 `includeCoverage=false` 跳过覆盖计算，响应的 `coverage` 为 null。普通机型的已选颜色、指定机型的平台及数量均从该轮快照读取。单独的覆盖预览、有效政策查询和历轮审核接口可独立调用。[管理员工作台](../architecture/admin-workspace.md#差异化政策)
 
 ## 审核
+
+`workflow_version=0` 的旧待审沿用本公司有效管理员、禁止自审的规则。版本 1 还须为本轮当前采购节点的有效指派成员；需要初审的轮次须已由其他人完成产品运营同意。列表及详情的 `reviewable` 和直接调用通过、驳回使用同一资格。缺节点、未指派或已移出返回 403 `POLICY_REVIEW_FORBIDDEN`；已失效的记录或轮次版本返回 409。新轮终审成功在同一事务记录实际签署人、节点决定及同组其余任务的「同组他人已处理」。[本轮指派和采购门控](../architecture/policy-workflow-phase-b.md)
 
 请求体示例：
 
@@ -46,11 +52,13 @@
 
 管理页点击「通过」发送 `APPROVE`，`reviewRemark` 为 null。服务端核验权限、状态、版本、轮次，并在机型锁内复核批准时仍有效的组合。结果相同可继续通过；组合或时间调整目标需要重新确认时返回 `POLICY_RECONFIRM_REQUIRED`，本申请已无可生效时段时返回 `POLICY_NO_EFFECTIVE_PERIOD`，两者均保留待审状态。管理员可沿用驳回，由原申请人处理。[复核与生效查询](#覆盖预览与有效政策)
 
+工作台收到 409 后重新读取当前列表和详情。如果同组采购已经办理，详情显示实际签署结果并关闭终审入口。如果本轮仍可办理，保留已输入的采购意见，由经办人核对后重新决定。
+
 ## 历轮审核
 
 列表接口支持 `page` 和 `pageSize`，默认分别为 1 和 20，每页最多 100 条，按提交轮次倒序。条目中的 `id` 为审核日志 ID，用作单轮接口的 `logId`。单轮接口返回 `log` 和该轮的 `snapshot`，并核对审核日志属于路径中的申请。
 
-管理员详情和审核窗口已接入「审核记录」页签，列表传 `pageSize=10`。条目展示 `submissionVersion`、`submittedAt`、`auditStatus`、`auditorName`、`auditTime`、`auditComment`；「查看内容」按条目的 `id` 请求单轮接口。历史展示只使用该响应的 `snapshot` 和 `log`，不混入当前主表内容、审核权限或覆盖状态，文件下载使用该轮 `log.id`。接口权限及数据库结构沿用现有实现。
+管理员详情和审核窗口的「审核记录」以 `pageSize=10` 分页。条目展示提交轮次、时间、结果、审核人、审核时间和意见。「查看内容」按该条目的 `id` 读取快照，附件下载使用对应的 `log.id`。新流程日志的 `workflowVersion` 为 1，工作台按同一轮次追加读取产品运营及采购成员、实际签署人和结办状态，历史详情为只读。旧流程日志的标记为 0，可继续查看原快照与审核人。
 
 `auditStatus` 使用审核日志枚举：`SUBMITTED` 对应页面「待审核」（申请主表状态为 `PENDING`），`APPROVED` 对应「已通过」，`REJECTED` 对应「已驳回」。待审核的意见显示「待审核」；已通过无需填写意见，空值在列表显示「—」，详情隐藏该项并保留审核人和时间；已驳回且意见为空时显示「未填写审核意见」。历史非空意见继续展示，接口及保存逻辑不变。
 

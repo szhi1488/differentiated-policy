@@ -20,7 +20,7 @@ watch(
 )
 
 watch(
-  () => route.name,
+  () => route.meta.menu || route.name,
   (name) => {
     const group = navGroups.find(({ links }) => links.some((link) => link.name === name))
     if (group) {
@@ -70,7 +70,7 @@ watch(
               :key="link.name"
               :to="{ name: link.name }"
               class="workspace-nav-item"
-              :class="{ 'is-active': route.name === link.name }"
+              :class="{ 'is-active': (route.meta.menu || route.name) === link.name }"
               @click="menuOpen = false"
             >
               {{ link.label }}

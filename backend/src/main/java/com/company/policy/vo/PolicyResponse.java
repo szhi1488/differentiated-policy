@@ -6,7 +6,12 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
 public record PolicyResponse(
-        String id, String policyCode, String status, int recordVersion, int submissionVersion) {
+        String id,
+        String policyCode,
+        String status,
+        int recordVersion,
+        int submissionVersion,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String reviewStage) {
     public record Page<T>(List<T> items, long total, int page, int pageSize) {}
 
     public record Summary(
@@ -24,7 +29,8 @@ public record PolicyResponse(
             boolean adjustmentOnly,
             String earliestEnd,
             boolean canExtend,
-            boolean canShorten) {}
+            boolean canShorten,
+            String reviewStage) {}
 
     public record Detail(
             String id,
@@ -38,7 +44,8 @@ public record PolicyResponse(
             String sourcePolicyCode,
             List<PolicyConsent.EndAdjustment> endAdjustments,
             ApprovedEnd approvedEnd,
-            String adjustmentSourceEnd) {}
+            String adjustmentSourceEnd,
+            String reviewStage) {}
 
     public record ApprovedEnd(
             String requestPolicyCode,
@@ -125,7 +132,9 @@ public record PolicyResponse(
             String auditorName,
             String auditComment,
             String auditTime,
-            String submittedAt) {}
+            String submittedAt,
+            int workflowVersion,
+            String rejectedAtStage) {}
 
     public record AuditDetail(AuditSummary log, Snapshot snapshot) {}
 }

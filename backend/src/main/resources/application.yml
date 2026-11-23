@@ -46,6 +46,7 @@ feishu:
   app-id: ${FEISHU_APP_ID:}
   app-secret: ${FEISHU_APP_SECRET:}
   allowed-origins: ${FEISHU_ALLOWED_ORIGINS:}
+  policy-chat-id: ${FEISHU_POLICY_CHAT_ID:}
   request-timeout-seconds: ${FEISHU_REQUEST_TIMEOUT_SECONDS:10}
 jackyun:
   app-key: ${JACKYUN_APP_KEY:}
@@ -60,6 +61,7 @@ jackyun:
   clean-poll-interval-ms: ${JACKYUN_CLEAN_POLL_INTERVAL_MS:2000}
   request-timeout-seconds: ${JACKYUN_REQUEST_TIMEOUT_SECONDS:20}
 policy:
+  review-workflow-enabled: ${POLICY_REVIEW_WORKFLOW_ENABLED:false}
   applicability-cutover-at: ${POLICY_APPLICABILITY_CUTOVER_AT:}
   storage:
     root: ${POLICY_STORAGE_ROOT:}

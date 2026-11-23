@@ -57,6 +57,7 @@ export function useAdminPolicyHistory(policyId) {
       snapshot: result.snapshot,
       audit: result.log,
       coverage: null,
+      round: result.round,
     }
   })
 

@@ -32,7 +32,7 @@ export function createAuthSession() {
     setLogin(null)
     message.value = '会话已失效，请重新登录。'
   }
-  async function connect(startAuthorization = false) {
+  async function connect(startAuthorization = false, restoreTarget) {
     if (pending) {
       return pending
     }
@@ -44,7 +44,7 @@ export function createAuthSession() {
     const task = (async () => {
       try {
         const restored =
-          (!login.value && (await completeBrowserLogin())) || (await getLoginSession())
+          (!login.value && (await completeBrowserLogin(restoreTarget))) || (await getLoginSession())
         if (current !== generation) {
           return
         }

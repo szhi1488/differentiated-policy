@@ -34,10 +34,10 @@ beforeEach(() => {
   completeBrowserLogin.mockResolvedValue(null)
 })
 
-function render() {
+function render(router = createWorkspaceRouter(createMemoryHistory())) {
   return mount(App, {
     global: {
-      plugins: [createWorkspaceRouter(createMemoryHistory())],
+      plugins: [router],
       stubs: {
         ApplicantLayout: { template: '<div>申请人工作台<input /></div>' },
         AdminLayout: { template: '<div>管理员工作台</div>' },
@@ -45,6 +45,40 @@ function render() {
     },
   })
 }
+
+it.each(['端内免登', '网页回调'])(
+  '%s 后恢复原轮和节点，会话过期后重新按当前账号读取',
+  async (method) => {
+    const router = createWorkspaceRouter(createMemoryHistory())
+    const target = '/reviews/57?round=1&node=PRODUCT_REVIEW'
+    const firstUser = { user: { id: '21', roleType: 'APPLICANT' } }
+    if (method === '端内免登') {
+      await router.push(target)
+      isFeishuClient.mockReturnValue(true)
+      loginWithFeishu.mockResolvedValue(firstUser)
+    } else {
+      await router.push('/')
+      completeBrowserLogin.mockImplementationOnce(async (restore) => {
+        await restore(target)
+        return firstUser
+      })
+    }
+    const wrapper = render(router)
+    try {
+      await vi.waitFor(() => expect(wrapper.text()).toContain('申请人工作台'))
+      expect(router.currentRoute.value.fullPath).toBe(target)
+      authSession.invalidate()
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('申请人工作台')
+      getLoginSession.mockResolvedValue({ user: { id: '22', roleType: 'ADMIN' } })
+      await authSession.connect()
+      await vi.waitFor(() => expect(wrapper.text()).toContain('管理员工作台'))
+      expect(router.currentRoute.value.fullPath).toBe(target)
+    } finally {
+      wrapper.unmount()
+    }
+  },
+)
 
 it('offers browser authorization and starts it on click without using the SDK', async () => {
   const wrapper = render()

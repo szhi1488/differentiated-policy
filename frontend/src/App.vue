@@ -9,7 +9,9 @@ import FeishuLoginPage from './views/auth/FeishuLoginPage.vue'
 const ApplicantLayout = defineAsyncComponent(() => import('./layouts/ApplicantLayout.vue'))
 const AdminLayout = defineAsyncComponent(() => import('./layouts/AdminLayout.vue'))
 const router = useRouter()
-const { login, status, message, connect, revision } = authSession
+const { login, status, message, revision } = authSession
+const connect = (authorize = false) =>
+  authSession.connect(authorize, (target) => router.replace(target))
 const client = isFeishuClient()
 const loginPageKey = ref(0)
 const routeMatchesUser = computed(

@@ -1,10 +1,11 @@
 <script setup>
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
 import PolicyBanner from '../../../layouts/components/PolicyBanner.vue'
 import { readAdminPolicy, reviewAdminPolicy } from '../../../api/admin-policies'
+import { REVIEW_STAGE_LABELS } from '../../../constants/review-workflow'
 import { useAdminPolicies } from '../../../composables/useAdminPolicies'
 import { useLatestQuery } from '../../../composables/useLatestQuery'
 import {
@@ -15,9 +16,10 @@ import {
   SCENE_LABELS,
   VERIFY_LABELS,
 } from '../../../constants/policy'
-import { policySceneLabel } from '../../../utils/policy-adapter'
+import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 import AdminPolicyHistory from './AdminPolicyHistory.vue'
+import PolicyReviewReassignment from '../review-settings/PolicyReviewReassignment.vue'
 import './admin-policies.css'
 
 const {
@@ -39,17 +41,39 @@ const filterFields = [
   { key: 'platformCode', label: '平台', options: PLATFORM_LABELS },
   { key: 'verifyType', label: '核销类型', options: VERIFY_LABELS },
   { key: 'sceneType', label: '涉及场景', options: SCENE_LABELS },
+  { key: 'reviewStage', label: '审核阶段', options: REVIEW_STAGE_LABELS },
 ]
 const detailOpen = ref(false)
 const detailTab = ref('current')
-const dialogMode = ref('view')
+// 办理目标取自用户点击的列表行。重新聚焦、并发读取或失败重试均不可把它换成新轮。
+const reviewTarget = ref(null)
 const selectedId = ref('')
 const { data: detail, error: detailError, loading: detailBusy, run: runDetail } = useLatestQuery()
 const selectedPolicy = computed(() => detail.value?.policy)
+const roundChanged = computed(() => {
+  const target = reviewTarget.value
+  const policy = selectedPolicy.value
+  return Boolean(
+    target && policy && (policy.id !== target.id || policy.submissionVersion !== target.version),
+  )
+})
+const canReview = computed(() => {
+  const round = detail.value?.round
+  return (
+    reviewTarget.value?.active &&
+    !roundChanged.value &&
+    selectedPolicy.value?.reviewable &&
+    (!round ||
+      (round.reviewStage === 'PURCHASE_REVIEW' &&
+        round.allowedActions.includes('APPROVE') &&
+        round.allowedActions.includes('REJECT')))
+  )
+})
 const rejectionOpen = ref(false)
 const rejectionReason = ref('')
 const rejectionInput = ref(null)
 const reviewBusy = ref(false)
+const reassignBusy = ref(false)
 const reviewError = ref(null)
 const reviewNeedsReload = computed(
   () =>
@@ -58,15 +82,41 @@ const reviewNeedsReload = computed(
     ['network', 'timeout', 'parse'].includes(reviewError.value?.kind),
 )
 let reviewRequest
-onScopeDispose(() => reviewRequest?.abort())
+watch(
+  detail,
+  (latest) => {
+    if (latest && reviewTarget.value?.active && !canReview.value) {
+      rejectionOpen.value = false
+      reviewTarget.value.active = false
+    }
+  },
+  { flush: 'sync' },
+)
+onMounted(() => window.addEventListener('focus', refreshOnReturn))
+onScopeDispose(() => {
+  reviewRequest?.abort()
+  window.removeEventListener('focus', refreshOnReturn)
+})
 
-function showDetail(id, mode = 'view') {
-  if (reviewBusy.value) {
+function refreshOnReturn() {
+  if (reviewBusy.value || reassignBusy.value) {
     return
   }
-  selectedId.value = id
+  void reload()
+  if (detailOpen.value) {
+    void loadDetail()
+  }
+}
+
+function showDetail(row, mode = 'view') {
+  if (reviewBusy.value || reassignBusy.value) {
+    return
+  }
+  selectedId.value = row.id
   detailTab.value = 'current'
-  dialogMode.value = mode
+  reviewTarget.value =
+    mode === 'review' ? { id: row.id, version: row.submissionVersion, active: true } : null
+  rejectionOpen.value = false
   rejectionReason.value = ''
   reviewError.value = null
   detailOpen.value = true
@@ -79,7 +129,13 @@ function loadDetail() {
 
 async function submitReview(decision) {
   const policy = selectedPolicy.value
-  if (reviewBusy.value || reviewNeedsReload.value || !policy?.reviewable) {
+  if (
+    !detailOpen.value ||
+    reviewBusy.value ||
+    reassignBusy.value ||
+    reviewNeedsReload.value ||
+    !canReview.value
+  ) {
     return
   }
   reviewBusy.value = true
@@ -100,13 +156,17 @@ async function submitReview(decision) {
     if (!controller.signal.aborted) {
       ElMessage.success(decision === 'APPROVE' ? '政策已通过' : '政策已驳回')
       rejectionOpen.value = false
-      dialogMode.value = 'view'
+      reviewTarget.value.active = false
       void reload()
       await loadDetail()
     }
   } catch (error) {
     if (!controller.signal.aborted) {
       reviewError.value = error
+      if (error.status === 409) {
+        await loadDetail()
+        void reload()
+      }
     }
   } finally {
     reviewBusy.value = false
@@ -117,6 +177,11 @@ function reloadReview() {
   rejectionOpen.value = false
   reviewError.value = null
   void loadDetail()
+  void reload()
+}
+
+function returnToList() {
+  detailOpen.value = false
   void reload()
 }
 </script>
@@ -243,13 +308,29 @@ function reloadReview() {
               </el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="当前阶段" min-width="110">
+            <template #default="{ row }">
+              {{ REVIEW_STAGE_LABELS[row.reviewStage] ?? '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="初审办理人" min-width="168">
+            <template #default="{ row }">
+              <template v-if="row.productReviewerName">
+                {{ row.productReviewerName }}
+                <small class="admin-policy-signed-at">
+                  {{ policyTime(row.productReviewedAt).replace('T', ' ') }}
+                </small>
+              </template>
+              <span v-else>—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="104" fixed="right" :resizable="false">
             <template #default="{ row }">
               <el-button
                 link
                 type="primary"
                 :aria-label="`查看政策 ${row.policyCode}`"
-                @click="showDetail(row.id)"
+                @click="showDetail(row)"
               >
                 查看
               </el-button>
@@ -258,7 +339,7 @@ function reloadReview() {
                 link
                 type="primary"
                 :aria-label="`审核政策 ${row.policyCode}`"
-                @click="showDetail(row.id, 'review')"
+                @click="showDetail(row, 'review')"
               >
                 审核
               </el-button>
@@ -293,15 +374,15 @@ function reloadReview() {
       width="min(1280px, calc(100% - 24px))"
       align-center
       destroy-on-close
-      :close-on-click-modal="!reviewBusy"
-      :close-on-press-escape="!reviewBusy"
-      :show-close="!reviewBusy"
+      :close-on-click-modal="!reviewBusy && !reassignBusy"
+      :close-on-press-escape="!reviewBusy && !reassignBusy"
+      :show-close="!reviewBusy && !reassignBusy"
     >
       <template #header="{ titleId, titleClass }">
         <div class="admin-policy-detail-header">
           <AppIcon name="document" :size="20" />
           <h2 :id="titleId" :class="titleClass">
-            {{ dialogMode === 'review' ? '政策审核' : '政策详情' }}
+            {{ reviewTarget?.active ? '政策审核' : '政策详情' }}
           </h2>
           <span class="admin-policy-detail-code">{{ selectedPolicy?.policyCode }}</span>
         </div>
@@ -326,24 +407,48 @@ function reloadReview() {
           >
             重新读取政策
           </el-button>
+          <p
+            v-if="reviewError && rejectionReason.trim() && !rejectionOpen"
+            class="admin-policy-note"
+          >
+            本次填写的意见：{{ rejectionReason }}
+          </p>
         </el-alert>
       </div>
-      <div v-if="detail">
+      <el-alert
+        v-if="roundChanged"
+        title="所选提交轮次已变化，请从最新列表重新打开政策。"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <p v-if="rejectionReason.trim() && !reviewError" class="admin-policy-note">
+          本次填写的意见：{{ rejectionReason }}
+        </p>
+        <el-button link type="primary" @click="returnToList">返回列表并刷新</el-button>
+      </el-alert>
+      <div v-else-if="detail">
         <el-tabs v-model="detailTab" class="admin-policy-detail-tabs" aria-label="政策详情内容">
           <el-tab-pane label="当前申请" name="current" />
           <el-tab-pane label="审核记录" name="history" />
         </el-tabs>
-        <AdminPolicyDetail :key="selectedId" v-if="detailTab === 'current'" :detail="detail" />
+        <AdminPolicyDetail :key="selectedId" v-if="detailTab === 'current'" :detail="detail">
+          <template #member-actions>
+            <PolicyReviewReassignment
+              :round="detail.round"
+              :disabled="reviewBusy || detailBusy || rejectionOpen || reviewNeedsReload"
+              @busy="reassignBusy = $event"
+              @reload="reloadReview"
+            />
+          </template>
+        </AdminPolicyDetail>
         <AdminPolicyHistory v-else-if="detailOpen" :key="selectedId" :policy-id="selectedId" />
       </div>
-      <template
-        v-if="detailTab === 'current' && dialogMode === 'review' && selectedPolicy?.reviewable"
-        #footer
-      >
+      <template v-if="detailTab === 'current' && canReview" #footer>
         <el-button
           type="danger"
           plain
-          :disabled="reviewBusy || reviewNeedsReload"
+          :disabled="reviewBusy || reassignBusy || reviewNeedsReload"
           @click="rejectionOpen = true"
         >
           驳回
@@ -351,7 +456,7 @@ function reloadReview() {
         <el-button
           type="primary"
           :loading="reviewBusy"
-          :disabled="reviewNeedsReload"
+          :disabled="reassignBusy || reviewNeedsReload"
           @click="submitReview('APPROVE')"
         >
           通过
@@ -402,7 +507,7 @@ function reloadReview() {
         <el-button
           type="danger"
           :loading="reviewBusy"
-          :disabled="reviewNeedsReload"
+          :disabled="reviewNeedsReload || !canReview"
           @click="submitReview('REJECT')"
         >
           确认驳回

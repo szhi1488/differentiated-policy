@@ -1,10 +1,6 @@
 <script setup>
 import { usePolicySubmissionDetail } from '../../../composables/usePolicySubmissions'
-import {
-  POLICY_STATUS_LABELS,
-  POLICY_STATUS_TYPES,
-  policyIsEditable,
-} from '../../../constants/policy'
+import { policyStatusLabel, POLICY_STATUS_TYPES, policyIsEditable } from '../../../constants/policy'
 import PolicySubmissionContent from './PolicySubmissionContent.vue'
 import PolicyRejectionNotice from './PolicyRejectionNotice.vue'
 
@@ -33,7 +29,7 @@ void readDetail()
           <strong>{{ application.policyCode }}</strong>
         </div>
         <el-tag :type="POLICY_STATUS_TYPES[application.status]">
-          {{ POLICY_STATUS_LABELS[application.status] }}
+          {{ policyStatusLabel(application) }}
         </el-tag>
         <el-button
           v-if="policyIsEditable(application.status)"

@@ -1,6 +1,6 @@
 # 本地附件接口
 
-更新日期 2026-11-23。申请表单和每个时间调整目标均可上传文件。申请人、管理员通过所属申请及对应轮次下载已绑定的文件。
+更新日期 2026-11-23。申请表单和每个时间调整目标均可上传文件。本人、管理员及获授权的产品运营可按各自的申请和轮次权限下载已绑定文件。
 
 Element Plus Upload 负责选文件，`useAttachments` 通过统一请求层逐个上传。页面按实际响应展示上传中、已上传、失败和重试。上传期间锁定编辑与写操作，失败文件须重试或移除后再保存或提交。账号变化或退出会丢弃迟到响应并清理本地文件状态。
 
@@ -61,6 +61,7 @@ C:/Users/admin/Desktop/differentiated policy/data/
 | GET | `/api/policies/{id}/attachments/{attachmentId}/content` | 本人申请及当前内容的文件 ID | 200，强制下载 |
 | GET | `/api/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content` | 本人申请、提交日志及文件 ID | 200，强制下载 |
 | GET | `/api/admin/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content` | 管理员可读申请、提交日志及文件 ID | 200，强制下载 |
+| GET | `/api/policy-reviews/{id}/attachments/{attachmentId}/content?submissionVersion=2` | 审核详情阅读人、同一申请、指定轮次及该轮文件引用；产品运营的指派被移除后，凭该指派访问返回 404。[轮次授权](../architecture/policy-workflow-phase-c.md#api-与字段) | 200，强制下载 |
 
 上传返回 `id`、`originalName`、`size`（字节）、`contentType`（服务端推导）、`uploadedAt`（Instant）。下载固定返回 `application/octet-stream`、`Content-Disposition: attachment` 和 `X-Content-Type-Options: nosniff`。
 

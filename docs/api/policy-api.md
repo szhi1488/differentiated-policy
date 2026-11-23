@@ -201,6 +201,10 @@
 
 ### 正式提交
 
+启用 `POLICY_REVIEW_WORKFLOW_ENABLED` 后，服务端按本轮实际核验的内容分流，响应追加 `reviewStage`。有交叉段需要确认，或随本单提交了其他政策的截止调整，对应页面「确认整单并提交」，整轮进入 `PRODUCT_REVIEW`。例如 A 与 B 重叠后只留 A，或随单调整后没有交叉但仍需确认所选调整，均先给产品运营。没有确认段也没有随单调整，对应直接提交，取 `PURCHASE_REVIEW`。独立缩短本身所需的凭证只用于核验调整。服务端冻结本轮依据、审核人员和配置版本，按事务登记投递动作。[E 阶段分流与飞书投递](../architecture/policy-workflow-feishu-technical-design.md#nodes)
+
+关闭开关时，新轮走原采购流程，省略 `reviewStage`。原申请人成功重提时，按原指派结办上轮修改待办。缺设置返回 409 `POLICY_REVIEW_SETTINGS_REQUIRED`，所需组无人合格或无法由两人分别签署返回 409 `POLICY_REVIEW_ASSIGNEES_MISSING`，原状态、轮次和附件保留。[审核设置接口](policy-review-settings.md) · [切换条件](../architecture/policy-workflow-phase-b.md#切换与运行边界)
+
 普通申请无交叉且未选时间调整时，发送 `{ "recordVersion": 3 }` 即可。有随单时间调整时，即使没有交叉也须携带调整预览的 `confirmationToken` 和 `endAdjustments`，此时 `decisions` 可为空数组。独立缩短单的调整内容由服务端从草稿取得，只需回传版本与凭证。有任一交叉段时，送回本次预览的 `confirmationToken`，并按以下格式为每段提交一个决定。将对应的 `scope` 和 `through` 原样送回，零售使用 `selectedPolicyIds` 数组，百亿选一时使用单值 `policyId`。
 
 确认页合并普通商品只改变展示和操作次数。若零售京东同配置白、黑两件商品在同一时段结果相同，点一次确认要生成两条 `decisions`，分别送回各自的 `scope.goodsId` 和原段 `through`。百亿整段以接口返回的配置 `scope` 提交一个决定，特殊商品的颜色和数量随该段展示。[颜色分组验收](../business/override-engine.md#6-决策表与验收案例)
@@ -242,7 +246,8 @@
   "policyCode": "示例单号",
   "status": "PENDING",
   "recordVersion": 4,
-  "submissionVersion": 1
+  "submissionVersion": 1,
+  "reviewStage": "PURCHASE_REVIEW"
 }
 ```
 
@@ -264,7 +269,7 @@
 
 `audit-logs` 使用同样的分页参数和响应外层，按提交轮次倒序。每条含字符串 `id`、`submissionVersion`、`submittedAt`、`auditStatus`、`auditorName`、`auditComment` 和 `auditTime`。审核状态为 `SUBMITTED`、`APPROVED` 或 `REJECTED`，待审轮次的审核信息为 `null`，未提交的草稿返回空页。
 
-申请详情及继续编辑页在状态为 `REJECTED` 时，通过 `audit-logs?page=1&pageSize=1` 读取最新审核记录，核对 `submissionVersion` 与当前申请一致且日志为 `REJECTED`，在页面顶部显示驳回原因、审核人及时间。`auditComment` 为空或只有空白时显示「审核人未填写驳回原因」；请求失败和轮次不一致分别提示并允许重试，不显示旧轮次原因。接口及数据结构不变，继续沿用本人归属和有效会话校验。
+本人列表及详情的 `reviewStage` 在待审时标明产品运营初审或采购终审。申请详情及继续编辑页在状态为 `REJECTED` 时，通过 `audit-logs?page=1&pageSize=1` 读取最新审核记录，核对 `submissionVersion` 与当前申请一致且日志为 `REJECTED`。页面顶部按该记录显示退回环节、原因、实际退回人和北京时间。`rejectedAtStage` 从新流程本轮的退回决定取得，可为 `PRODUCT_REVIEW` 或 `PURCHASE_REVIEW`，旧流程的驳回属于采购终审。未记录环节时页面明示缺失。采购未填意见时提示「审核人未填写驳回原因」，读取失败或轮次不一致时可重试。重提沿用原单与原申请人，服务端重新取得最新名单并冻结新轮。
 
 单轮详情按列表返回的日志 `id` 查询，响应为 `{ "log": { ... }, "snapshot": { ... } }`。`snapshot` 包含原提交轮次的申请 ID、单号、申请人、完整表单与商品名称快照。每次读取先校验父申请的租户、申请人和删除状态，再按该申请匹配日志。草稿及驳回的编辑入口读取当前表单，历轮快照始终取自提交时保存的内容。
 

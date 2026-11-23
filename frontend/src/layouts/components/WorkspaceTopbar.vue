@@ -16,11 +16,12 @@ const keyword = ref('')
 const avatarFailed = ref(false)
 const displayName = computed(() => props.user?.name || props.roleLabel)
 const initial = computed(() => Array.from(displayName.value)[0])
+const currentMenu = computed(() => route.meta.menu || route.name)
 const currentGroup = computed(() =>
-  props.groups.find(({ links }) => links.some(({ name }) => name === route.name)),
+  props.groups.find(({ links }) => links.some(({ name }) => name === currentMenu.value)),
 )
 const currentPage = computed(() =>
-  currentGroup.value?.links.find(({ name }) => name === route.name),
+  currentGroup.value?.links.find(({ name }) => name === currentMenu.value),
 )
 const avatarUrl = computed(() => {
   const url = props.user?.avatarUrl

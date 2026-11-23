@@ -4,6 +4,33 @@ import { createMemoryHistory } from 'vue-router'
 import { createWorkspaceRouter } from '../../src/router/index'
 import { createAuthSession } from '../../src/composables/useAuthSession'
 
+it('两种身份共用按轮详情，含多值、越界或未定义参数的链接不进入业务页', async () => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  for (const roleType of ['APPLICANT', 'ADMIN']) {
+    session.setLogin({ user: { roleType } })
+    const path = '/reviews/9007199254740993?round=2&node=PRODUCT_REVIEW'
+    await router.push(path)
+    expect(router.currentRoute.value.fullPath).toBe(path)
+    for (const invalid of [
+      '5?round=1&round=2',
+      '5?round=0',
+      '5?round=2147483648',
+      '9223372036854775808?round=1',
+      '5?round=1&node=OTHER',
+      '5?round=1&redirect=/apply',
+      '5',
+    ]) {
+      await router.push('/reviews/' + invalid)
+      expect(router.currentRoute.value.name).toBe('review-link-unavailable')
+    }
+    await router.push('/reviews/5?round=1&node=REVISION')
+    expect(router.currentRoute.value.fullPath).toBe(
+      roleType === 'ADMIN' ? '/reviews/unavailable' : '/apply?policyId=5&round=1',
+    )
+  }
+})
+
 it('管理员可直达清洗页，恢复会话后保留地址并可切回源商品库', { timeout: 15000 }, async () => {
   const session = createAuthSession()
   const router = createWorkspaceRouter(createMemoryHistory(), session)
@@ -19,6 +46,7 @@ it('管理员可直达清洗页，恢复会话后保留地址并可切回源商�
     '/admin/policies',
     '/admin/model-subsidies',
     '/admin/users',
+    '/admin/review-settings',
   ])
   await router.push('/admin/catalog/cleaning')
   session.setLogin({ user: { roleType: 'ADMIN' } })

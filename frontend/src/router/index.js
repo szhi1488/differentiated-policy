@@ -27,6 +27,29 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         props: { applicant: true },
       },
       {
+        path: '/reviews',
+        name: 'review-inbox',
+        meta: { reviewWorkspace: true },
+        component: () => import('../views/reviews/PolicyReviewInboxPage.vue'),
+      },
+      {
+        path: '/reviews/unavailable',
+        name: 'review-link-unavailable',
+        meta: { reviewWorkspace: true, menu: 'review-inbox' },
+        component: () => import('../views/reviews/ReviewLinkUnavailable.vue'),
+      },
+      {
+        path: '/reviews/:id',
+        name: 'review-round',
+        meta: { reviewWorkspace: true, menu: 'review-inbox' },
+        component: () => import('../views/reviews/PolicyReviewRoundPage.vue'),
+        props: (route) => ({
+          policyId: route.params.id,
+          submissionVersion: Number(route.query.round),
+          node: route.query.node || '',
+        }),
+      },
+      {
         path: '/admin/catalog/sources',
         name: 'catalog-sources',
         meta: { role: 'ADMIN' },
@@ -61,6 +84,12 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         name: 'admin-users',
         meta: { role: 'ADMIN' },
         component: () => import('../views/admin/users/AdminUsersPage.vue'),
+      },
+      {
+        path: '/admin/review-settings',
+        name: 'admin-review-settings',
+        meta: { role: 'ADMIN' },
+        component: () => import('../views/admin/review-settings/PolicyReviewSettingsPage.vue'),
       },
       { path: '/:pathMatch(.*)*', component: EmptyRoute },
     ],

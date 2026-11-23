@@ -1,4 +1,5 @@
 import { request } from './request'
+import { readPolicyReviewRound } from './policy-reviews'
 
 const base = '/api/admin/policies'
 const policyPath = (id) => `${base}/${encodeURIComponent(id)}`
@@ -13,8 +14,19 @@ export function listAdminPolicies(filters, signal) {
   return request(`${base}?${params}`, { signal })
 }
 
-export function readAdminPolicy(id, signal) {
-  return request(policyPath(id) + '?includeCoverage=false', { signal })
+export async function readAdminPolicy(id, signal) {
+  const detail = await request(policyPath(id) + '?includeCoverage=false', { signal })
+  if (detail.audit.workflowVersion !== 1) {
+    return detail
+  }
+  const round = await readPolicyReviewRound(id, detail.audit.submissionVersion, signal)
+  if (
+    round.currentSubmissionVersion !== detail.policy.submissionVersion ||
+    round.recordVersion !== detail.policy.recordVersion
+  ) {
+    throw new Error('读取期间本轮审核状态已变化，请重新读取政策。')
+  }
+  return { ...detail, round }
 }
 
 export function listAdminPolicyAuditLogs(id, { page, pageSize }, signal) {
@@ -22,8 +34,15 @@ export function listAdminPolicyAuditLogs(id, { page, pageSize }, signal) {
   return request(`${policyPath(id)}/audit-logs?${params}`, { signal })
 }
 
-export function readAdminPolicyAuditLog(id, logId, signal) {
-  return request(`${policyPath(id)}/audit-logs/${encodeURIComponent(logId)}`, { signal })
+export async function readAdminPolicyAuditLog(id, logId, signal) {
+  const detail = await request(`${policyPath(id)}/audit-logs/${encodeURIComponent(logId)}`, {
+    signal,
+  })
+  if (detail.log.workflowVersion !== 1) {
+    return detail
+  }
+  const round = await readPolicyReviewRound(id, detail.log.submissionVersion, signal)
+  return { ...detail, round }
 }
 
 export function reviewAdminPolicy(id, body, signal) {

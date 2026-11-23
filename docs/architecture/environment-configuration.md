@@ -26,6 +26,12 @@
 
 吉客云商品接口使用 AppKey、AppSecret 签名及按需配置的商家授权 token，不发送飞书的 `tenant_key`。`JACKYUN_SOURCE_KEY` 是本地商品账套标识，与飞书企业标识不同；已有任务和来源数据后保持稳定，不随飞书测试转正式而顺手改名。[商品同步说明](catalog-admin-design.md#4-来源字段与同步)
 
+### 政策通知群与审核人员
+
+在 `backend/.env.local.properties` 或部署环境中填写 `FEISHU_POLICY_CHAT_ID`，值为该环境的通知群 `chat_id`（`oc_` 开头）。变更后重启后端。后端已支持读取此项，飞书群发送和待办仍待业务接入。
+
+按已确认的开发方案，有配置权限的管理员在管理后台按姓名分别多选产品运营和采购，后续政策沿用名单。采购候选限本企业已启用的管理员。环境文件只指定消息的目标群，系统从本轮选中账号解析飞书 `open_id` 完成点名。[办理及选人规则](policy-workflow-feishu-technical-design.md#assignees)
+
 ## 环境参数清单
 
 环境配置项如下。表中的默认值是程序的通用运行默认值；必须按环境填写的身份、数据库与站点信息不再回退到内置测试值。
@@ -37,6 +43,8 @@
 | `FEISHU_APP_ID` | 当前环境的飞书应用 ID，必填，无内置测试 ID |
 | `FEISHU_APP_SECRET` | 同一飞书应用的密钥，必填，仅服务端保存 |
 | `FEISHU_TENANT_KEY` | 当前环境的飞书企业标识，必填，不兼容旧配置名 |
+| `FEISHU_POLICY_CHAT_ID` | 当前环境的政策通知群 `chat_id`（`oc_…`）。测试环境填测试群，正式环境填正式群。可留空，已接入服务端配置读取，群消息与待办发送按开发技术书另行接入。 |
+| `POLICY_REVIEW_WORKFLOW_ENABLED` | 默认为 `false`。部署二十二表基线、维护审核名单并完成初审办理验收后，所有实例统一设为 `true`，使后续首提和重提按轮指派。既有轮次以持久化标记判断权限。飞书外部投递另按后续阶段启用。 |
 | `FEISHU_ALLOWED_ORIGINS` | 允许的前端 Origin，必填；含协议，多个用英文逗号分隔，不带路径及末尾 `/`；无本地地址回退 |
 | `JACKYUN_APP_KEY` | 吉客云应用标识，调用商品接口时填写 |
 | `JACKYUN_APP_SECRET` | 吉客云请求签名密钥，调用商品接口时填写 |

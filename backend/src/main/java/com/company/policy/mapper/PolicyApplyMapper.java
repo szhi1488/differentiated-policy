@@ -32,9 +32,21 @@ public interface PolicyApplyMapper {
             AND JSON_CONTAINS(platforms, JSON_QUOTE(#{query.platformCode}))
         </if>
         """;
+    String OWNER_STAGE =
+            "(SELECT "
+                    + PolicyReviewWorkflowMapper.CURRENT_STAGE
+                    + " FROM policy_audit_log a "
+                    + PolicyReviewWorkflowMapper.ROUND_JOIN
+                    + " WHERE a.policy_id=p.id AND a.tenant_key=p.tenant_key AND a.version=p.current_version) AS review_stage ";
     String AUDIT_COLUMNS =
-            "id, version, audit_status, auditor_name, audit_comment, audit_time, created_at";
-    String AUDIT_SCOPE = "policy_id = #{id} AND tenant_key = #{tenantKey}";
+            """
+            a.id, a.version, a.audit_status, a.auditor_name, a.audit_comment, a.audit_time, a.created_at, a.workflow_version,
+            CASE WHEN a.audit_status='REJECTED' THEN CASE WHEN a.workflow_version=0 THEN 'PURCHASE_REVIEW'
+              ELSE (SELECT CASE d.group_code WHEN 'PRODUCT' THEN 'PRODUCT_REVIEW' WHEN 'PURCHASE' THEN 'PURCHASE_REVIEW' END
+                FROM policy_review_decision d WHERE d.policy_id=a.policy_id AND d.tenant_key=a.tenant_key
+                  AND d.version=a.version AND d.decision='REJECT') END END AS rejected_at_stage
+            """;
+    String AUDIT_SCOPE = "a.policy_id = #{id} AND a.tenant_key = #{tenantKey}";
 
     @Select("<script>SELECT COUNT(*) FROM policy_apply WHERE " + OWNED + MINE_FILTERS + "</script>")
     long countMine(String tenantKey, long applicantId, PolicyListQuery query);
@@ -43,14 +55,22 @@ public interface PolicyApplyMapper {
             "<script>SELECT id, policy_no, status, record_version, current_version, channel_type,"
                     + " extension_source_id, end_time, platforms, created_at, updated_at,"
                     + " (extension_source_id IS NULL AND NULLIF(JSON_UNQUOTE(JSON_EXTRACT(goods_form_json,"
-                    + " '$.timeAdjustment.target.policyId')), 'null') IS NOT NULL) AS adjustment_only FROM policy_apply WHERE "
+                    + " '$.timeAdjustment.target.policyId')), 'null') IS NOT NULL) AS adjustment_only, "
+                    + OWNER_STAGE
+                    + " FROM policy_apply p WHERE "
                     + OWNED
                     + MINE_FILTERS
                     + " ORDER BY created_at DESC, id DESC LIMIT #{query.pageSize} OFFSET #{offset}</script>")
     List<PolicyApply> listMine(
             String tenantKey, long applicantId, PolicyListQuery query, long offset);
 
-    @Select("SELECT " + COLUMNS + " FROM policy_apply WHERE id = #{id} AND " + OWNED)
+    @Select(
+            "SELECT "
+                    + COLUMNS
+                    + ", "
+                    + OWNER_STAGE
+                    + " FROM policy_apply p WHERE id = #{id} AND "
+                    + OWNED)
     PolicyApply find(long id, String tenantKey, long applicantId);
 
     @Select("SELECT " + COLUMNS + " FROM policy_apply WHERE policy_no = #{code} AND " + OWNED)
@@ -114,11 +134,16 @@ public interface PolicyApplyMapper {
 
     @Insert(
             """
-        INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data, audit_status, created_at)
-        VALUES (#{id}, #{tenantKey}, #{version}, #{snapshot}, 'SUBMITTED', #{now})
+        INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data, audit_status, created_at, workflow_version)
+        VALUES (#{id}, #{tenantKey}, #{version}, #{snapshot}, 'SUBMITTED', #{now}, #{workflowVersion})
         """)
     int insertAudit(
-            long id, String tenantKey, int version, String snapshot, java.time.LocalDateTime now);
+            long id,
+            String tenantKey,
+            int version,
+            String snapshot,
+            java.time.LocalDateTime now,
+            int workflowVersion);
 
     @Select(
             """
@@ -127,13 +152,13 @@ public interface PolicyApplyMapper {
         """)
     String findSnapshot(long id, String tenantKey, int version);
 
-    @Select("SELECT COUNT(*) FROM policy_audit_log WHERE " + AUDIT_SCOPE)
+    @Select("SELECT COUNT(*) FROM policy_audit_log a WHERE " + AUDIT_SCOPE)
     long countAuditLogs(long id, String tenantKey);
 
     @Select(
             "SELECT "
                     + AUDIT_COLUMNS
-                    + " FROM policy_audit_log WHERE "
+                    + " FROM policy_audit_log a WHERE "
                     + AUDIT_SCOPE
                     + " ORDER BY version DESC LIMIT #{pageSize} OFFSET #{offset}")
     List<PolicyAuditLog> listAuditLogs(long id, String tenantKey, int pageSize, long offset);
@@ -141,7 +166,7 @@ public interface PolicyApplyMapper {
     @Select(
             "SELECT "
                     + AUDIT_COLUMNS
-                    + ", snapshot_data FROM policy_audit_log WHERE "
+                    + ", a.snapshot_data FROM policy_audit_log a WHERE "
                     + AUDIT_SCOPE
                     + " AND id = #{logId}")
     PolicyAuditLog findAuditLog(long id, String tenantKey, long logId);

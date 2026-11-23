@@ -21,7 +21,7 @@ public class CatalogAccessImpl implements CatalogAccess {
     }
 
     @Override
-    public UserInfo requireApplicant(CurrentUserResponse session) {
+    public UserInfo requireActive(CurrentUserResponse session) {
         var user = users.findIdentity(session.tenantKey(), session.openId());
         if (!config.hasCompanyTenant()) {
             throw new ApiException(
@@ -29,9 +29,17 @@ public class CatalogAccessImpl implements CatalogAccess {
         }
         if (user == null
                 || !Objects.equals(session.id(), user.getId().toString())
-                || !"APPLICANT".equals(user.getRoleType())
                 || !Integer.valueOf(0).equals(user.getIsDeleted())
                 || !config.getTenantKey().equals(user.getTenantKey())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "当前账号不属于本公司或已停用。");
+        }
+        return user;
+    }
+
+    @Override
+    public UserInfo requireApplicant(CurrentUserResponse session) {
+        var user = requireActive(session);
+        if (!"APPLICANT".equals(user.getRoleType())) {
             throw new ApiException(
                     HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "只有本公司有效申请人可使用政策申请。");
         }

@@ -12,14 +12,21 @@ import com.company.policy.common.exception.JackyunRateLimitException;
 import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.dto.JackyunGoodsQuery;
 import com.company.policy.dto.JackyunGoodsQuery.Phase;
+import com.company.policy.mapper.PolicyApplyMapper;
+import com.company.policy.mapper.PolicyReviewMapper;
 import com.company.policy.service.CatalogCleaningWorker;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.service.LoginSessionService;
+import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.UserInfoService;
+import com.company.policy.support.policy.PolicyExecutionChange.Kind;
+import com.company.policy.support.policy.PolicyRouteSummary;
+import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
+import com.company.policy.vo.PolicyApplicability.Policy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -27,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -60,6 +68,7 @@ import org.springframework.transaction.support.TransactionTemplate;
             "jackyun.app-secret=test-secret",
             "feishu.tenant-key=test-tenant",
             "policy.applicability-cutover-at=2026-01-01T00:00:00+08:00",
+            "policy.review-workflow-enabled=false",
             "jackyun.import-scheduling-enabled=false",
             "jackyun.clean-scheduling-enabled=false"
         })
@@ -81,6 +90,10 @@ class GoodsSyncIntegrationTest {
     @Autowired LoginSessionService sessions;
     @Autowired GoodsSyncService sync;
     @Autowired CatalogCleaningWorker cleaning;
+    @Autowired PolicyCoverageService coverage;
+    @Autowired PolicyApplyMapper policyMapper;
+    @Autowired PolicyReviewMapper reviewMapper;
+    @Autowired PolicySnapshotCodec snapshotCodec;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactions;
     @MockitoBean JackyunGoodsService upstream;
@@ -3735,6 +3748,17 @@ class GoodsSyncIntegrationTest {
         mvc.perform(policyRequest(post(path + "/submit"), applicant).content(body.toString()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"));
+        var route = workflowRoute(id);
+        assertThat(route.requiresProductReview()).isTrue();
+        assertThat(route.triggerSegments()).isZero();
+        assertThat(route.summary()).contains("1 项随单时间调整", option.path("policyCode").asText());
+        assertThat(route.adjustments())
+                .singleElement()
+                .satisfies(
+                        adjustment -> {
+                            assertThat(adjustment.target().policyId()).isEqualTo(prior);
+                            assertThat(adjustment.endTime()).isEqualTo(end);
+                        });
         var oldId = oldGood.path("id").asText();
         assertThat(effectiveIds("BILLION", oldId, "TAOBAO", afterEnd)).containsExactly(prior);
         mvc.perform(reviewRound(id, 2, 1, "APPROVE")).andExpect(status().isOk());
@@ -3829,6 +3853,86 @@ class GoodsSyncIntegrationTest {
         mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.applicability.status").value("DIRECT"));
+        mvc.perform(confirmedSubmission(path, owner, 2)).andExpect(status().isOk());
+        var extensionId =
+                json.readTree(ext.getResponse().getContentAsByteArray()).path("id").asText();
+        var plan = workflowRoute(extensionId);
+        assertThat(plan.requiresProductReview()).isFalse();
+        assertThat(plan.changes())
+                .singleElement()
+                .satisfies(
+                        segment -> {
+                            assertThat(segment.kind()).isEqualTo(Kind.ORDINARY_ADDITION);
+                            assertThat(segment.from()).isEqualTo("2099-01-26T11:12:14");
+                            assertThat(segment.through()).isEqualTo("2099-03-05T11:12:13");
+                        });
+    }
+
+    @Test
+    void batchExtensionRequiresTheApprovedSourcesRoundProductsPlatformsAndPlanReferences()
+            throws Exception {
+        var good = importedGoodForEditing();
+        var owner = session("test-tenant", "extension-source-snapshot", "APPLICANT");
+        assignPlatforms("extension-source-snapshot", "BILLION:PDD");
+        var source =
+                coveragePolicy(
+                        owner, good, "2099-04-01", "2099-04-03", "2026-01-01 09:00:00", false);
+        mvc.perform(reviewRound(source, 2, 1, "APPROVE")).andExpect(status().isOk());
+        var form = attachmentPolicyForm(good, "unused");
+        form.remove("attachmentInfo");
+        form.put("startTime", "2099-07-01T00:00:00+08:00")
+                .put("endTime", "2099-07-02T23:59:59+08:00");
+        var parent = createPolicy(owner, form.toString()).path("id").asText();
+        var path = "/api/policies/" + parent + "/submission-preview";
+        var response =
+                mvc.perform(get(path).session(owner).param("recordVersion", "1"))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse();
+        var target =
+                json.readTree(response.getContentAsByteArray())
+                        .at("/applicability/adjustmentOptions/0/target");
+        var body = json.createObjectNode().put("recordVersion", 1);
+        body.putArray("endAdjustments")
+                .addObject()
+                .put("endTime", "2099-04-08T15:30:00+08:00")
+                .put("reason", "原活动延长")
+                .set("target", target);
+        var preview = policyRequest(post(path), owner).content(body.toString());
+        mvc.perform(preview).andExpect(status().isOk());
+
+        var saved =
+                (ObjectNode)
+                        json.readTree(
+                                reviewMapper
+                                        .current(Long.parseLong(source), "test-tenant", 1)
+                                        .getSnapshotData());
+        for (var field :
+                List.of("id", "submissionVersion", "targets", "platformAssignments", "planKey")) {
+            var damaged = saved.deepCopy();
+            var card = (ObjectNode) damaged.at("/form/goodsForm/cards/0");
+            switch (field) {
+                case "id" -> damaged.put(field, parent);
+                case "submissionVersion" -> damaged.put(field, 2);
+                case "planKey" ->
+                        ((ObjectNode) card.at("/platformAssignments/0")).put(field, "缺失方案");
+                default -> card.putArray(field);
+            }
+            jdbc.update(
+                    "UPDATE policy_audit_log SET snapshot_data=? WHERE policy_id=?",
+                    damaged.toString(),
+                    source);
+            mvc.perform(preview)
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("POLICY_ADJUSTMENT_CHANGED"));
+        }
+        // 旧快照可以缺少目录展示信息，按其已确认的商品与平台承接延期。
+        saved.remove("goods");
+        jdbc.update(
+                "UPDATE policy_audit_log SET snapshot_data=? WHERE policy_id=?",
+                saved.toString(),
+                source);
+        mvc.perform(preview).andExpect(status().isOk());
     }
 
     @Test
@@ -3927,6 +4031,21 @@ class GoodsSyncIntegrationTest {
                 });
         mvc.perform(policyRequest(post(path + "/submit"), owner).content(body.toString()))
                 .andExpect(status().isOk());
+        var route = workflowRoute(parent);
+        assertThat(route.requiresProductReview()).isTrue();
+        assertThat(route.adjustments()).hasSize(3);
+        assertThat(route.changes())
+                .anySatisfy(
+                        segment -> {
+                            // 两份延期先交叉，本单尚未开始，两个临时身份共同构成新增叠加。
+                            assertThat(segment.from()).isEqualTo("2099-05-06T00:00:00");
+                            assertThat(segment.through()).isEqualTo("2099-05-06T23:59:59");
+                            assertThat(segment.kind()).isEqualTo(Kind.STACK);
+                            assertThat(segment.before()).isEmpty();
+                            assertThat(segment.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactlyInAnyOrder(firstKey, secondKey);
+                        });
         assignPlatforms("batch-transfer", "BILLION:TAOBAO");
         mvc.perform(reviewRound(parent, 2, 1, "APPROVE"))
                 .andExpect(status().isConflict())
@@ -4243,6 +4362,18 @@ class GoodsSyncIntegrationTest {
         mvc.perform(policyRequest(post(path + "/submit"), owner).content(submit.toString()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"));
+        var route = workflowRoute(id);
+        assertThat(route.requiresProductReview()).isFalse();
+        assertThat(route.changes()).isEmpty();
+        assertThat(route.adjustments())
+                .singleElement()
+                .satisfies(
+                        adjustment -> {
+                            assertThat(adjustment.target().policyId()).isEqualTo(original);
+                            assertThat(adjustment.previousEnd()).isEqualTo(previous);
+                            assertThat(adjustment.endTime()).isEqualTo(end);
+                        });
+        assertThat(route.summary()).contains("采购直审", "2096-02-16 01:02:03");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT COUNT(*) FROM policy_goods_detail WHERE policy_id=?",
@@ -4368,6 +4499,33 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.code").value("POLICY_CONFIRMATION_REQUIRED"));
         mvc.perform(confirmedSubmission(next, owner, 2))
                 .andExpect(jsonPath("$.status").value("PENDING"));
+        var route = workflowRoute(newId);
+        assertThat(route.requiresProductReview()).isTrue();
+        assertThat(route.adjustments())
+                .singleElement()
+                .satisfies(
+                        adjustment -> {
+                            assertThat(adjustment.extension()).isTrue();
+                            assertThat(adjustment.target().policyId()).isEqualTo(id);
+                        });
+        assertThat(route.changes())
+                .allSatisfy(
+                        segment ->
+                                assertThat(segment.from())
+                                        .isAfterOrEqualTo(
+                                                LocalDateTime.parse("2096-02-29T00:00:00")));
+        assertThat(route.changes())
+                .anySatisfy(
+                        segment -> {
+                            assertThat(segment.kind()).isEqualTo(Kind.STACK);
+                            assertThat(segment.from()).isEqualTo("2096-03-01T09:00:00");
+                            assertThat(segment.before())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly(cross);
+                            assertThat(segment.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactlyInAnyOrder(newId, cross);
+                        });
         mvc.perform(get("/api/admin/policies/" + newId).session(admin))
                 .andExpect(
                         jsonPath("$.snapshot.sourcePolicyCode")
@@ -4588,6 +4746,14 @@ class GoodsSyncIntegrationTest {
                 .param("platformCode", platform)
                 .param("goodsId", goodsId)
                 .param("at", at);
+    }
+
+    private PolicyRouteSummary workflowRoute(String policyId) {
+        long id = Long.parseLong(policyId);
+        var log = reviewMapper.current(id, "test-tenant", 1);
+        var snapshot = snapshotCodec.read(log.getSnapshotData());
+        var entry = policyMapper.find(id, "test-tenant", Long.parseLong(snapshot.applicantId()));
+        return coverage.workflowRoute(entry, snapshot, log.getCreatedAt());
     }
 
     private MockHttpServletRequestBuilder confirmedSubmission(

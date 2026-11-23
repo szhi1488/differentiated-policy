@@ -6,6 +6,7 @@ import com.company.policy.dto.UserRoleUpdate;
 import com.company.policy.dto.UserStatusUpdate;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
+import com.company.policy.vo.PolicyReviewerCandidate;
 import com.company.policy.vo.UserDetailResponse;
 import com.company.policy.vo.UserPlatformOwner;
 import com.company.policy.vo.UserStatsResponse;
@@ -20,6 +21,15 @@ public interface UserManagementService {
 
     /** 按姓名、部门、角色或状态分页查询本公司账号。 */
     PageResponse<UserSummaryResponse> list(CurrentUserResponse session, UserListQuery query);
+
+    /** 按岗位、姓名与部门分页查找本企业启用的政策审核候选人，采购仅含管理员。 */
+    PageResponse<PolicyReviewerCandidate> reviewCandidates(
+            CurrentUserResponse session,
+            String reviewGroup,
+            String name,
+            String department,
+            int page,
+            int pageSize);
 
     /** 统计本公司账号总数、启用申请人数、启用管理员数和停用账号数。 */
     UserStatsResponse stats(CurrentUserResponse session);

@@ -22,3 +22,23 @@ CREATE TABLE IF NOT EXISTS user_platform_assignment (
   PRIMARY KEY (tenant_key, perspective, platform_code),
   FOREIGN KEY (user_id, tenant_key) REFERENCES user_info(id, tenant_key)
 );
+
+CREATE TABLE IF NOT EXISTS policy_review_settings (
+  tenant_key VARCHAR(64) NOT NULL,
+  version INT NOT NULL DEFAULT 0,
+  updated_by BIGINT DEFAULT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tenant_key),
+  CONSTRAINT ck_review_settings_version CHECK (version >= 0),
+  CONSTRAINT fk_review_settings_editor FOREIGN KEY (updated_by, tenant_key) REFERENCES user_info (id, tenant_key)
+);
+
+CREATE TABLE IF NOT EXISTS policy_review_setting_member (
+  tenant_key VARCHAR(64) NOT NULL,
+  group_code VARCHAR(16) NOT NULL,
+  user_id BIGINT NOT NULL,
+  PRIMARY KEY (tenant_key, group_code, user_id),
+  CONSTRAINT ck_review_setting_group CHECK (group_code IN ('PRODUCT','PURCHASE')),
+  CONSTRAINT fk_review_setting_parent FOREIGN KEY (tenant_key) REFERENCES policy_review_settings (tenant_key),
+  CONSTRAINT fk_review_setting_user FOREIGN KEY (user_id, tenant_key) REFERENCES user_info (id, tenant_key)
+);

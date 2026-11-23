@@ -1,5 +1,6 @@
 package com.company.policy.support.policy;
 
+import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.entity.PolicySnapshotData;
 import com.company.policy.vo.ApplicantCatalogResponse;
@@ -7,9 +8,11 @@ import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import java.util.HashSet;
 import java.util.List;
 import java.util.function.Function;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 /** 提交时冻结表单和商品，读取旧记录时只转换接口需要的字段。 */
 @Component
@@ -17,6 +20,52 @@ public final class PolicySnapshotCodec {
     // 快照独立于 HTTP 的 Jackson 配置。旧记录可能带有已移除的 otherExplanation 字段。
     private final JsonMapper json =
             JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+
+    /** 还原执行范围只核对快照中的实际商品、平台与补贴关联，旧目录展示字段可以缺失。 */
+    public static void requireReplayableCards(Snapshot snapshot) {
+        var form = snapshot.form();
+        if (form == null
+                || form.goodsForm() == null
+                || form.goodsForm().cards() == null
+                || form.goodsForm().cards().isEmpty()
+                || form.selectedPlatforms() == null
+                || form.selectedPlatforms().isEmpty()) throw missingScope();
+        for (var card : form.goodsForm().cards()) {
+            if (card == null
+                    || card.targets() == null
+                    || card.targets().isEmpty()
+                    || card.platformAssignments() == null
+                    || card.platformAssignments().isEmpty()
+                    || card.subsidyPlans() == null
+                    || card.subsidyPlans().isEmpty()) throw missingScope();
+            for (var target : card.targets()) {
+                if (target == null
+                        || !StringUtils.hasText(target.ram())
+                        || !StringUtils.hasText(target.rom())) throw missingScope();
+                try {
+                    PolicyFormValidation.id(target.goodsId());
+                    PolicyFormValidation.id(target.spuId());
+                } catch (ApiException badId) {
+                    throw missingScope();
+                }
+            }
+            var planKeys = new HashSet<String>();
+            for (var plan : card.subsidyPlans()) {
+                if (plan == null || !StringUtils.hasText(plan.key()) || !planKeys.add(plan.key()))
+                    throw missingScope();
+            }
+            for (var assignment : card.platformAssignments()) {
+                if (assignment == null
+                        || !StringUtils.hasText(assignment.platformCode())
+                        || !form.selectedPlatforms().contains(assignment.platformCode())
+                        || !planKeys.contains(assignment.planKey())) throw missingScope();
+            }
+        }
+    }
+
+    private static IllegalStateException missingScope() {
+        return new IllegalStateException("已通过的快照缺少可还原的商品、平台或补贴关联。");
+    }
 
     public String write(Snapshot snapshot) {
         var stored =

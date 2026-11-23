@@ -3,6 +3,7 @@ package com.company.policy.support.policy;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.entity.PolicyApply;
+import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.entity.UserInfo;
@@ -61,16 +62,13 @@ public class PolicyBatchExtensions {
                     reviews.coverageSnapshots(
                             parent.getTenantKey(),
                             auditIds.subList(i, Math.min(i + 500, auditIds.size())))) {
-                byAudit.put(log.getId().toString(), codec.read(log.getSnapshotData()));
+                byAudit.put(log.getId().toString(), approvedSource(log, parent));
             }
         }
         var proposals = new ArrayList<Snapshot>();
         for (var change : changes) {
             var source = byAudit.get(change.target().auditLogId());
-            if (source == null
-                    || !source.id().equals(change.target().policyId())
-                    || !source.applicantId().equals(parent.getApplicantId().toString()))
-                throw changed();
+            if (source == null || !source.id().equals(change.target().policyId())) throw changed();
             var form = source.form();
             var originalCode = policyCode(Long.parseLong(source.id()));
             var extensionForm =
@@ -102,6 +100,22 @@ public class PolicyBatchExtensions {
                             originalCode));
         }
         return proposals;
+    }
+
+    private Snapshot approvedSource(PolicyAuditLog log, PolicyApply parent) {
+        try {
+            var source = codec.read(log.getSnapshotData());
+            if (!String.valueOf(log.getPolicyId()).equals(source.id())
+                    || log.getVersion() != source.submissionVersion()
+                    || !parent.getApplicantId().toString().equals(source.applicantId()))
+                throw changed();
+            PolicySnapshotCodec.requireReplayableCards(source);
+            return source;
+        } catch (IllegalStateException
+                | IllegalArgumentException
+                | NullPointerException invalidSource) {
+            throw changed();
+        }
     }
 
     public void verifyGoods(List<Snapshot> proposals) {
@@ -215,7 +229,12 @@ public class PolicyBatchExtensions {
                                     proposal.id()),
                             proposal.sourcePolicyCode());
             if (policies.insertAudit(
-                            child.getId(), child.getTenantKey(), 1, codec.write(saved), submitted)
+                            child.getId(),
+                            child.getTenantKey(),
+                            1,
+                            codec.write(saved),
+                            submitted,
+                            0)
                     != 1) throw changed();
             var lines = new ArrayList<PolicyApplyMapper.DetailLine>();
             for (var card : form.goodsForm().cards()) {
@@ -258,7 +277,7 @@ public class PolicyBatchExtensions {
         }
     }
 
-    private static String policyCode(long id) {
+    static String policyCode(long id) {
         return String.format(Locale.ROOT, "ZC-%06d", id);
     }
 

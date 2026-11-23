@@ -9,7 +9,7 @@ import {
   savePolicyAdjustmentDate,
   submitPolicy,
 } from '../api/policies'
-import { policyIsEditable } from '../constants/policy'
+import { policyIsEditable, policyStatusLabel } from '../constants/policy'
 import { RequestError } from '../api/request'
 import { readSubmissionPreview } from '../utils/policy-applicability'
 import { createRequestId } from '../utils/request-id'
@@ -45,6 +45,14 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     savedForm = JSON.stringify(form.value)
   }
 
+  function hasUnsavedChanges() {
+    return (
+      JSON.stringify(form.value) !== savedForm ||
+      Boolean(pendingCreate) ||
+      Boolean(attachments?.attachmentsFailed.value || adjustmentUploads?.attachmentsFailed.value)
+    )
+  }
+
   function show(message, type = 'warning') {
     notice.value = message
     noticeType.value = type
@@ -69,23 +77,59 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     show('')
   }
 
-  async function load(id, force = false) {
-    if (!id || writing.value || (!force && record.value?.id === id && !loadError.value)) {
+  async function load(id, force = false, revisionRound, signal) {
+    if (
+      !id ||
+      writing.value ||
+      (!revisionRound && !force && record.value?.id === id && !loadError.value)
+    ) {
       return false
     }
     operation?.abort()
     const controller = new AbortController()
+    const cancel = () => controller.abort()
+    if (signal?.aborted) {
+      return false
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
     operation = controller
     loading.value = true
-    loadError.value = ''
+    if (!revisionRound) {
+      loadError.value = ''
+    }
     show('')
     try {
       const detail = await readPolicy(id, controller.signal)
       if (!controller.signal.aborted) {
+        if (revisionRound) {
+          if (detail.id !== id || detail.submissionVersion !== revisionRound) {
+            throw new Error('单据轮次已变更，此链接无法修改当前申请。')
+          }
+          if (detail.status !== 'REJECTED') {
+            throw new Error('本轮已处理，当前没有退回修改任务。')
+          }
+          // 此处已核对当前归属、轮次及退回状态。服务端版本有变化时先保留本地输入。
+          if (
+            !force &&
+            record.value?.id === id &&
+            record.value.submissionVersion === revisionRound &&
+            record.value.status === 'REJECTED'
+          ) {
+            const sameVersion = record.value.recordVersion === detail.recordVersion
+            if (sameVersion || conflict.value || hasUnsavedChanges()) {
+              if (!sameVersion) {
+                conflict.value = true
+              }
+              loadError.value = ''
+              return true
+            }
+          }
+        }
         form.value = restorePolicyForm(detail)
         attachments?.restore(form.value.attachments)
         adjustmentUploads?.restore(form.value.adjustmentFiles)
         record.value = detail
+        loadError.value = ''
         conflict.value = false
         pendingCreate = undefined
         markSaved()
@@ -93,9 +137,13 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
       }
     } catch (error) {
       if (!controller.signal.aborted) {
+        if (revisionRound) {
+          throw error
+        }
         loadError.value = error.message
       }
     } finally {
+      signal?.removeEventListener('abort', cancel)
       // 仅当前请求清理状态；取消也须复位，旧请求不得影响后续请求。
       if (operation === controller) {
         operation = undefined
@@ -327,7 +375,12 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
       }
       if (!controller.signal.aborted) {
         record.value = submitted
-        show('申请已提交，等待审核。', 'success')
+        show(
+          submitted.reviewStage
+            ? `申请已提交，${policyStatusLabel(submitted)}。`
+            : '申请已提交，等待审核。',
+          'success',
+        )
         return true
       }
     } catch (error) {
@@ -357,7 +410,12 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
             detail.recordVersion >= saved.recordVersion + 1
           ) {
             record.value = detail
-            show('已核对，申请提交成功。', 'success')
+            show(
+              detail.reviewStage
+                ? `已核对，申请提交成功，${policyStatusLabel(detail)}。`
+                : '已核对，申请提交成功。',
+              'success',
+            )
             return true
           }
         } catch {
@@ -450,7 +508,7 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     clear,
     load,
     markSaved,
-    hasUnsavedChanges: () => JSON.stringify(form.value) !== savedForm || Boolean(pendingCreate),
+    hasUnsavedChanges,
     saveDraft: () => persist('save'),
     deleteDraft,
     submit: (withEndAdjustment = false) => persist(withEndAdjustment ? 'adjust' : 'submit'),

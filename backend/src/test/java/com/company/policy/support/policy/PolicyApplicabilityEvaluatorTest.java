@@ -14,7 +14,10 @@ import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.PolicyConsent.Decision;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.PolicyApplicability.Action;
+import com.company.policy.vo.PolicyApplicability.AdjustmentOption;
 import com.company.policy.vo.PolicyApplicability.Group;
+import com.company.policy.vo.PolicyApplicability.Policy;
+import com.company.policy.vo.PolicyApplicability.Scope;
 import com.company.policy.vo.PolicyApplicability.Segment;
 import com.company.policy.vo.PolicyApplicability.Status;
 import com.company.policy.vo.PolicyResponse.Snapshot;
@@ -22,7 +25,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PolicyApplicabilityEvaluatorTest {
     private static final LocalDateTime AS_OF = LocalDateTime.parse("2026-10-31T12:00:00");
@@ -654,8 +660,376 @@ class PolicyApplicabilityEvaluatorTest {
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_CUTOVER_REQUIRED"));
     }
 
+    @Test
+    void workflowSplitsAtApprovedRetailDecisionsInsideOneConfirmedFuturePeriod() {
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        var oldDecisions =
+                List.of(
+                        selection(scope, 10, 10, "302"),
+                        selection(scope, 11, 12, "301"),
+                        selection(scope, 13, 14, "302"));
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy(
+                                "303",
+                                10,
+                                14,
+                                "SALES",
+                                BOTH,
+                                card("COMMON", "PDD", null, BLACK, WHITE)),
+                        AS_OF);
+        add(trial, policy("301", 10, 14, "SALES", NATIONAL, PDD));
+        add(
+                trial,
+                policy("302", 10, 14, "SALES", NATIONAL, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), oldDecisions)));
+
+        var preview = trial.result();
+        var onlyRange = PolicyConfirmation.ranges(preview).get(0);
+        var confirmed =
+                PolicyConfirmation.confirm(
+                        preview,
+                        List.of(
+                                new PolicyDraftRequest.Choice(
+                                        scope,
+                                        onlyRange.through(),
+                                        "SELECT",
+                                        null,
+                                        List.of("302"))));
+        var changes = trial.workflowSegments(confirmed, Map.of());
+        assertThat(changes)
+                .filteredOn(PolicyExecutionChange::requiresProductReview)
+                .hasSize(3)
+                .allSatisfy(
+                        c ->
+                                assertThat(c.candidates())
+                                        .extracting(Policy::policyId)
+                                        .containsExactly("301", "302", "303"));
+        assertThat(changes)
+                .filteredOn(c -> c.kind() == PolicyExecutionChange.Kind.REPLACEMENT)
+                .singleElement()
+                .satisfies(
+                        change -> {
+                            assertThat(change.scope().goodsId()).isEqualTo(8001L);
+                            assertThat(change.from()).isEqualTo("2026-11-11T00:00:00");
+                            assertThat(change.through()).isEqualTo("2026-11-12T23:59:59");
+                            assertThat(change.removed())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("301");
+                            assertThat(change.added())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("302");
+                        });
+        assertThat(changes)
+                .filteredOn(c -> c.scope().goodsId().equals(8002L))
+                .singleElement()
+                .satisfies(
+                        c -> {
+                            assertThat(c.kind())
+                                    .isEqualTo(PolicyExecutionChange.Kind.ORDINARY_ADDITION);
+                            assertThat(c.requiresProductReview()).isFalse();
+                        });
+    }
+
+    private static Decision selection(Scope scope, int from, int end, String selected) {
+        return new Decision(
+                scope,
+                date(from, "00:00:00"),
+                date(end, "23:59:59"),
+                Action.SELECT_RETAIL_POLICIES,
+                List.of(),
+                List.of("301", "302"),
+                List.of(selected));
+    }
+
+    @Test
+    void workflowBillionStacksAcrossColorsWithoutRestoringAnExcludedRound() {
+        var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
+        var oldDecision =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(20, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("401", "402"),
+                        List.of("401"));
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy("403", 10, 15, null, null, card("SPECIFIED", "PDD", 0, WHITE)),
+                        AS_OF);
+        add(trial, policy("401", 1, 20, null, null, PDD));
+        add(
+                trial,
+                policy("402", 1, 20, null, null, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(oldDecision))));
+        var preview = trial.result();
+        var confirmed =
+                PolicyConfirmation.confirm(
+                        preview,
+                        List.of(
+                                new PolicyDraftRequest.Choice(
+                                        scope, date(15, "23:59:59"), "STACK", null, null)));
+        assertThat(trial.workflowSegments(confirmed, Map.of()))
+                .singleElement()
+                .satisfies(
+                        c -> {
+                            assertThat(c.scope()).isEqualTo(scope);
+                            assertThat(c.before())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("401");
+                            assertThat(c.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("401", "403");
+                            assertThat(c.candidates())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("401", "403");
+                            assertThat(c.added().get(0).selections().get(0).quantity()).isZero();
+                            assertThat(c.requiresProductReview()).isTrue();
+                        });
+    }
+
+    @Test
+    void workflowRetainsEachLegacyBillionProductsOwnBaseline() {
+        var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy("403", 10, 15, null, null, card("COMMON", "PDD", null, WHITE)),
+                        AS_OF);
+        add(trial, policy("401", 1, 20, null, null, PDD).withConsent(null));
+        add(
+                trial,
+                policy("402", 1, 20, null, null, card("COMMON", "PDD", null, WHITE))
+                        .withConsent(null));
+        var confirmed =
+                PolicyConfirmation.confirm(
+                        trial.result(),
+                        List.of(
+                                new PolicyDraftRequest.Choice(
+                                        scope, date(15, "23:59:59"), "CHOOSE_ONE", "402", null)));
+        var changes = trial.workflowSegments(confirmed, Map.of());
+        assertThat(changes).hasSize(2);
+        assertThat(changes.get(0).scope().goodsId()).isEqualTo(8001L);
+        assertThat(changes.get(0).before()).extracting(Policy::policyId).containsExactly("401");
+        assertThat(changes.get(0).requiresProductReview()).isTrue();
+        assertThat(changes.get(1).scope().goodsId()).isEqualTo(8002L);
+        assertThat(changes.get(1).before()).extracting(Policy::policyId).containsExactly("402");
+        assertThat(changes.get(1).requiresProductReview()).isTrue();
+        assertThat(changes.get(1).kind()).isEqualTo(PolicyExecutionChange.Kind.UNCHANGED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void oneEligibleBillionCandidateNeedsReviewWhenTheApplicantConfirmedTheRange(
+            boolean alreadyShortened) {
+        var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
+        var target = new PolicyConsent.Target("401", "401", date(20, "23:59:59"));
+        var cut = new PolicyConsent.EndAdjustment(target, date(9, "23:59:59"), "提前结束 A");
+        var options =
+                Map.of(
+                        target,
+                        new AdjustmentOption(
+                                target,
+                                "ZC-000401",
+                                date(1, "00:00:00"),
+                                date(20, "23:59:58"),
+                                "BILLION"));
+        var draft = policy("403", 10, 15, null, null, PDD);
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        alreadyShortened
+                                ? draft
+                                : draft.withConsent(
+                                        new PolicyConsent(3, List.of(), List.of(), List.of(cut))),
+                        AS_OF);
+        add(trial, policy("401", 1, 20, null, null, PDD));
+        var acceptedA =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(20, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("401", "402"),
+                        List.of("401"));
+        add(
+                trial,
+                policy("402", 1, 20, null, null, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(acceptedA))));
+        if (alreadyShortened)
+            trial.includeApprovedEnd("401", PolicyFormValidation.time(cut.endTime()));
+
+        var preview = trial.result(options);
+        assertThat(preview.scopes().get(0).segments().get(0).eligiblePolicyIds())
+                .containsExactly("403");
+        var confirmed =
+                PolicyConfirmation.confirm(
+                        preview,
+                        List.of(
+                                new PolicyDraftRequest.Choice(
+                                        scope, date(15, "23:59:59"), "CHOOSE_ONE", "403", null)));
+        assertThat(trial.workflowSegments(confirmed, options))
+                .singleElement()
+                .satisfies(
+                        change -> {
+                            assertThat(change.candidates())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("403");
+                            assertThat(change.kind())
+                                    .isEqualTo(
+                                            alreadyShortened
+                                                    ? PolicyExecutionChange.Kind.ORDINARY_ADDITION
+                                                    : PolicyExecutionChange.Kind.REPLACEMENT);
+                            assertThat(change.requiresProductReview()).isTrue();
+                        });
+    }
+
+    @Test
+    void confirmedOverlapsAreReviewedBothWhenKeepingAndReplacingAfterTheCut() {
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        var target = new PolicyConsent.Target("302", "302", date(14, "23:59:59"));
+        var end = date(10, "18:00:00");
+        var options =
+                Map.of(
+                        target,
+                        new AdjustmentOption(
+                                target,
+                                "ZC-000302",
+                                date(1, "00:00:00"),
+                                date(14, "23:59:58"),
+                                "RETAIL"));
+        var cut = new PolicyConsent.EndAdjustment(target, end, "原单提前退出");
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy("303", 10, 14, "SALES", LOCAL, PDD)
+                                .withConsent(
+                                        new PolicyConsent(3, List.of(), List.of(), List.of(cut))),
+                        AS_OF);
+        add(trial, policy("301", 10, 14, "SALES", NATIONAL, PDD));
+        var stacked =
+                new Decision(
+                        scope,
+                        date(10, "00:00:00"),
+                        date(14, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("301", "302"),
+                        List.of("301", "302"));
+        add(
+                trial,
+                policy("302", 10, 14, "SALES", LOCAL, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(stacked))));
+        var preview = trial.result(options);
+        var keepBoth =
+                new PolicyDraftRequest.Choice(scope, end, "SELECT", null, List.of("301", "302"));
+        var keepOne =
+                new PolicyDraftRequest.Choice(
+                        scope, date(14, "23:59:59"), "SELECT", null, List.of("301"));
+        assertThat(
+                        trial.workflowSegments(
+                                PolicyConfirmation.confirm(preview, List.of(keepBoth, keepOne)),
+                                options))
+                .hasSize(2)
+                .allMatch(PolicyExecutionChange::requiresProductReview);
+        var replace =
+                new PolicyDraftRequest.Choice(
+                        scope, date(14, "23:59:59"), "SELECT", null, List.of("301", "303"));
+        assertThat(
+                        trial.workflowSegments(
+                                PolicyConfirmation.confirm(preview, List.of(keepBoth, replace)),
+                                options))
+                .filteredOn(c -> c.kind() == PolicyExecutionChange.Kind.REPLACEMENT)
+                .singleElement()
+                .satisfies(
+                        c -> {
+                            assertThat(c.from()).isEqualTo("2026-11-10T18:00:01");
+                            assertThat(c.added())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("303");
+                            assertThat(c.removed())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly("302");
+                        });
+    }
+
+    @Test
+    void workflowRejectsMissingModernHistoryAndUnconfirmedOverlap() {
+        var trial =
+                new PolicyApplicabilityEvaluator(policy("303", 10, 14, "SALES", BOTH, PDD), AS_OF);
+        add(trial, policy("301", 10, 14, "SALES", NATIONAL, PDD));
+        assertThatThrownBy(
+                        () ->
+                                trial.workflowSegments(
+                                        new PolicyConsent(2, List.of(), List.of()), Map.of()))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
+        trial.include(
+                policy("302", 10, 14, "SALES", NATIONAL, PDD).withConsent(null),
+                302L,
+                AS_OF,
+                AS_OF,
+                false,
+                false);
+        var range = PolicyConfirmation.ranges(trial.result()).get(0);
+        var confirmed =
+                PolicyConfirmation.confirm(
+                        trial.result(),
+                        List.of(
+                                new PolicyDraftRequest.Choice(
+                                        range.scope(),
+                                        range.through(),
+                                        "SELECT",
+                                        null,
+                                        List.of("301"))));
+        assertThatThrownBy(() -> trial.workflowSegments(confirmed, Map.of()))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
+    }
+
     private static String date(int day, String time) {
         return "2026-11-%02dT%s+08:00".formatted(day, time);
+    }
+
+    @Test
+    void workflowRejectsAnActiveHistoryIndexWhoseSnapshotDoesNotContainTheMatchedScope() {
+        var trial =
+                new PolicyApplicabilityEvaluator(policy("303", 10, 14, "SALES", BOTH, PDD), AS_OF);
+        var wrongColor =
+                policy("301", 10, 14, "SALES", NATIONAL, card("COMMON", "PDD", null, WHITE));
+        assertThatThrownBy(() -> trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF, false))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
+        trial.includeApprovedEnd("301", PolicyFormValidation.time(date(9, "23:59:59")));
+        trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF, false);
+        assertThat(trial.result().canDirectSubmit()).isTrue();
+    }
+
+    @Test
+    void workflowRejectsAStoredRetailDecisionSelectingTwoCandidatesInOneGroup() {
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy("303", 10, 14, "SALES", NATIONAL, PDD), AS_OF);
+        add(trial, policy("301", 10, 14, "SALES", NATIONAL, PDD));
+        var range = PolicyConfirmation.ranges(trial.result()).get(0);
+        var broken =
+                new Decision(
+                        range.scope(),
+                        range.from(),
+                        range.through(),
+                        range.action(),
+                        range.groups(),
+                        range.eligiblePolicyIds(),
+                        List.of("301", "303"));
+        var confirmed =
+                new PolicyConsent(
+                        2, PolicyConfirmation.comparedRounds(trial.result()), List.of(broken));
+        assertThatThrownBy(() -> trial.workflowSegments(confirmed, Map.of()))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
     }
 
     private static void add(PolicyApplicabilityEvaluator trial, Snapshot prior) {
