@@ -2,6 +2,7 @@ package com.company.policy.vo;
 
 import com.company.policy.entity.CatalogGoods;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -89,7 +90,11 @@ public record CatalogGoodsResponse(
             long stopped,
             List<SeriesCount> series,
             List<Memory> configurations,
-            List<ModelCount> models) {}
+            List<ModelCount> models,
+            @JsonInclude(JsonInclude.Include.NON_NULL)
+                    List<ModelConfiguration> modelConfigurations) {}
+
+    public record ModelConfiguration(String spuId, String ram, String rom) {}
 
     public record SeriesCount(
             String brandName, String seriesId, String seriesName, long total, long active) {}

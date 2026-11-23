@@ -28,11 +28,21 @@ public final class PolicySnapshotCodec {
                         snapshot.submissionVersion(),
                         storeForm(snapshot.form()),
                         map(snapshot.goods(), PolicySnapshotCodec::storeGoods),
-                        snapshot.consent());
+                        snapshot.consent(),
+                        snapshot.sourcePolicyCode());
         try {
             return json.writeValueAsString(stored);
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法保存政策提交快照。", error);
+        }
+    }
+
+    public List<com.company.policy.entity.PolicyConsent.EndAdjustment> readEndAdjustments(
+            String value) {
+        try {
+            return json.readValue(value, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("无法读取已通过的整单提前结束记录。", error);
         }
     }
 
@@ -53,7 +63,8 @@ public final class PolicySnapshotCodec {
                     stored.submissionVersion(),
                     readForm(stored.form()),
                     map(stored.goods(), PolicySnapshotCodec::readGoods),
-                    stored.consent());
+                    stored.consent(),
+                    stored.sourcePolicyCode());
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法读取政策提交快照。", error);
         }
@@ -112,14 +123,16 @@ public final class PolicySnapshotCodec {
         if (value == null) {
             return null;
         }
-        return new PolicySnapshotData.GoodsForm(map(value.cards(), PolicySnapshotCodec::storeCard));
+        return new PolicySnapshotData.GoodsForm(
+                map(value.cards(), PolicySnapshotCodec::storeCard), value.timeAdjustment());
     }
 
     private static PolicyDraftRequest.GoodsForm readGoodsForm(PolicySnapshotData.GoodsForm value) {
         if (value == null) {
             return null;
         }
-        return new PolicyDraftRequest.GoodsForm(map(value.cards(), PolicySnapshotCodec::readCard));
+        return new PolicyDraftRequest.GoodsForm(
+                map(value.cards(), PolicySnapshotCodec::readCard), value.timeAdjustment());
     }
 
     private static PolicySnapshotData.Card storeCard(PolicyDraftRequest.Card value) {

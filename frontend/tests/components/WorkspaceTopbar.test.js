@@ -48,10 +48,16 @@ describe('工作台顶部栏', () => {
     search.props('fetchSuggestions')('商品', (items) => (results = items))
     expect(results).toHaveLength(0)
     search.props('fetchSuggestions')('提交', (items) => (results = items))
-    expect(results.map(({ name }) => name)).toEqual(['apply', 'submissions'])
-    search.vm.$emit('select', results[1])
+    expect(results.map(({ name }) => name)).toEqual([
+      'apply',
+      'submissions',
+      'applicant-model-subsidies',
+    ])
+    search.props('fetchSuggestions')('补贴', (items) => (results = items))
+    expect(results.map(({ name }) => name)).toEqual(['applicant-model-subsidies'])
+    search.vm.$emit('select', results[0])
     await flushPromises()
-    expect(wrapper.emitted('navigate')).toEqual([['submissions']])
+    expect(wrapper.emitted('navigate')).toEqual([['applicant-model-subsidies']])
   })
   it('头像加载失败回退姓名，更新地址后重新显示图片', async () => {
     await render()

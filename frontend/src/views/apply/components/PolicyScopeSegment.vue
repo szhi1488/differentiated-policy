@@ -25,11 +25,12 @@ const checkedCounts = computed(() => {
   return counts
 })
 // 零售每个范围对应一个具体商品和一个平台方案，可直接比较原补贴和本次补贴。
-const proposedPlan = computed(() =>
-  props.range.scope.goodsId
-    ? props.range.participants.find((policy) => policy.proposed)?.selections[0]?.subsidy
-    : null,
-)
+const proposedPlan = computed(() => {
+  const pending = props.range.participants.filter((policy) => policy.proposed)
+  return props.range.scope.goodsId && pending.length === 1
+    ? pending[0].selections[0]?.subsidy
+    : null
+})
 </script>
 
 <template>
@@ -52,7 +53,15 @@ const proposedPlan = computed(() =>
     <div class="segment-policies">
       <section v-for="policy in range.participants" :key="policy.policyId" class="segment-policy">
         <h5>
-          <span>{{ policy.proposed ? '本次申请' : '已通过' }}</span>
+          <span>
+            {{
+              policy.proposed
+                ? policy.policyId.startsWith('extension:')
+                  ? '拟延期'
+                  : '本次申请'
+                : '已通过'
+            }}
+          </span>
           {{ policy.policyCode }}
         </h5>
         <div v-for="(row, index) in policy.selections" :key="index" class="selection">
@@ -82,7 +91,7 @@ const proposedPlan = computed(() =>
     </div>
     <div class="segment-decision">
       <span v-if="partlyConfirmed" class="partial-choice">
-        本段商品的勾选结果不同，可按颜色筛选查看。
+        本段商品的勾选结果不同，请核对本段选择。
       </span>
       <template v-if="range.action === 'SELECT_RETAIL_POLICIES'">
         <p>勾选本段执行的政策。同组最多选一张，跨组选多张可叠加。</p>

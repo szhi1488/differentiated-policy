@@ -69,6 +69,7 @@
     width: 100%;
     position: static;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     border-right: 0;
     border-bottom: 1px solid #e6ecf6;
@@ -102,5 +103,14 @@
   }
   .workspace .workspace-topbar .workspace-menu-toggle {
     display: none;
+  }
+}
+@media (max-width: 360px) {
+  .workspace .workspace-brand {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .workspace .nav-item {
+    padding-inline: 4px;
   }
 }

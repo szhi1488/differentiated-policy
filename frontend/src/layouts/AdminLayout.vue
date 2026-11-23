@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, watch } from 'vue'
+import { provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import WorkspaceTopbar from './components/WorkspaceTopbar.vue'
@@ -13,6 +13,7 @@ const route = useRoute()
 const router = useRouter()
 const { collapsed, menuOpen, expanded, toggle } = useWorkspaceSidebar(600)
 const openGroups = reactive({})
+provide('modelSubsidyPreferences', { lastQuery: ref(null), showIndependent: ref(false) })
 watch(
   () => route.fullPath,
   () => (menuOpen.value = false),

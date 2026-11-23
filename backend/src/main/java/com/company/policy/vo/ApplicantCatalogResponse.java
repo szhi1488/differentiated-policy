@@ -1,7 +1,7 @@
 package com.company.policy.vo;
 
 import com.company.policy.entity.CatalogGoods;
-import com.company.policy.mapper.CatalogGoodsMapper.OnSaleConfiguration;
+import com.company.policy.mapper.CatalogGoodsMapper.CatalogConfiguration;
 import java.util.List;
 import java.util.Objects;
 
@@ -43,7 +43,7 @@ public record ApplicantCatalogResponse(
             List<ModelOption> models,
             List<Configuration> configurations) {
         public static Options from(
-                List<OnSaleConfiguration> rows, Long brandId, Long seriesId, Long spuId) {
+                List<CatalogConfiguration> rows, Long brandId, Long seriesId, Long spuId) {
             var byBrand =
                     rows.stream()
                             .filter(row -> brandId == null || brandId == row.brandId())

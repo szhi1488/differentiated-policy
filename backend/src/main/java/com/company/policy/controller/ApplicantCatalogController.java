@@ -26,7 +26,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestController
 @RequestMapping("/api/catalog")
-@Tag(name = "申请人选品", description = "查询本公司在售标准商品")
+@Tag(name = "申请人商品目录", description = "查询在售标准商品及机型补贴的目录选项")
 @ApiResponse(responseCode = "400", description = "筛选条件或分页无效")
 @ApiResponse(responseCode = "401", description = "会话无效")
 @ApiResponse(responseCode = "403", description = "非本公司有效申请人")
@@ -48,6 +48,12 @@ public class ApplicantCatalogController {
             @RequestParam(required = false) Long spuId,
             HttpServletRequest request) {
         return goods.onSaleOptions(sessions.requireLogin(request).user(), brandId, seriesId, spuId);
+    }
+
+    @GetMapping("/subsidy-options")
+    @Operation(summary = "读取机型补贴查询的目录选项", description = "包括已下架、停产机型的品牌、系列、版本和配置。")
+    public Options subsidyOptions(HttpServletRequest request) {
+        return goods.subsidyOptions(sessions.requireLogin(request).user());
     }
 
     @GetMapping("/goods")

@@ -33,6 +33,7 @@ export const APPLICANT_NAV_GROUPS = [
     links: [
       { name: 'apply', label: '提交政策' },
       { name: 'submissions', label: '我的提交' },
+      { name: 'applicant-model-subsidies', label: '机型补贴查询' },
     ],
   },
 ]

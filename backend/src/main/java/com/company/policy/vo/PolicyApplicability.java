@@ -1,6 +1,7 @@
 package com.company.policy.vo;
 
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
+import com.company.policy.entity.PolicyConsent.Target;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -14,7 +15,27 @@ public record PolicyApplicability(
         String effectiveThrough,
         Status status,
         boolean canDirectSubmit,
-        List<ScopeResult> scopes) {
+        List<ScopeResult> scopes,
+        @Schema(description = "当前申请人负责渠道及平台内可申请整单提前结束的旧政策，独立于本单适用范围")
+                List<AdjustmentOption> adjustmentOptions) {
+    public record AdjustmentOption(
+            Target target,
+            String policyCode,
+            String earliestEnd,
+            String latestEnd,
+            String perspective,
+            boolean canShorten,
+            boolean canExtend) {
+        public AdjustmentOption(
+                Target target,
+                String policyCode,
+                String earliestEnd,
+                String latestEnd,
+                String perspective) {
+            this(target, policyCode, earliestEnd, latestEnd, perspective, true, false);
+        }
+    }
+
     public enum Status {
         DIRECT,
         NEEDS_CONFIRMATION,

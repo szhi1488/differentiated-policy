@@ -3,6 +3,7 @@ package com.company.policy.controller;
 import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.dto.PolicyReviewRequest;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
@@ -12,6 +13,7 @@ import com.company.policy.vo.PolicyReviewResponse.Effective;
 import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
+import com.company.policy.vo.PolicySubsidyTimeline;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -118,6 +120,25 @@ public class PolicyReviewController {
             HttpServletRequest request) {
         return policies.preview(
                 sessions.requireLogin(request).user(), id, recordVersion, submissionVersion);
+    }
+
+    @GetMapping("/subsidy-timeline")
+    @ApiResponse(responseCode = "409", description = "历史涉及旧政策且未配置规则切换时间，POLICY_CUTOVER_REQUIRED")
+    @Operation(
+            summary = "查询机型配置的零售及百亿补贴时间轴",
+            description =
+                    "日期按北京时间含首尾。RAM、ROM 使用目录原值，如 16GB、1024GB。省略平台时返回全部平台。segments 为截至 asOf 的实际名单，plannedSegments 为按已通过决定计算的后续各段采用和未采用名单。")
+    public PolicySubsidyTimeline subsidyTimeline(
+            @RequestParam long spuId,
+            @RequestParam String ram,
+            @RequestParam String rom,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
+            @RequestParam(required = false) String platformCode,
+            HttpServletRequest request) {
+        return policies.subsidyTimeline(
+                sessions.requireLogin(request).user(),
+                new PolicyTimelineQuery(spuId, ram, rom, dateFrom, dateTo, null, platformCode));
     }
 
     @GetMapping("/effective")

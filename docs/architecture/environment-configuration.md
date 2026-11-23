@@ -1,6 +1,6 @@
 # 后端环境配置、部署与后台任务
 
-更新日期：2026-11-18。本文记录当前实现及用户确认的配置规则。实际部署方式和正式域名仍以部署时确定的环境为准，不代表已经发布上线。
+更新日期：2026-11-23。本文记录当前实现及用户确认的配置规则。实际部署方式和正式域名仍以部署时确定的环境为准，不代表已经发布上线。
 
 ## 配置文件与读取方式
 
@@ -84,6 +84,22 @@ SERVER_PORT=8080
 ```
 
 正式 HTTPS 站点另配置实际 Origin 和 `SESSION_COOKIE_SECURE=true`。飞书浏览器 OAuth 回调仍使用该 Origin 的首页 `/`，在飞书后台登记时带末尾 `/`；白名单 Origin 本身不带末尾 `/`。使用普通浏览器或飞书客户端均须保持前端与 `/api` 同源。[回调配置](feishu-auth-flow.md#普通浏览器登录)
+
+### 局域网申请人打不开登录页
+
+2026-11-23，清理政策数据、重启后端后，服务机能打开登录页，另一台申请人电脑访问同一地址却收到 `curl: (52) Empty reply from server` 和 `HTTP 000`。在**申请人电脑**上查看路由，Windows 为服务机地址选择了 `Meta` 虚拟网卡，下一跳为 `198.18.0.2`。申请人临时关闭 TUN 后，确认浏览器已能打开页面。
+
+遇到相同现象，可在申请人电脑的 PowerShell 输入服务机的实际局域网 IPv4，核对首页响应和出站网卡。此处的 5173 是本地前端端口。
+
+```powershell
+$serverIp = Read-Host '请输入服务机的局域网 IPv4 地址'
+curl.exe --noproxy "*" --max-time 5 -sS -o NUL -w "HTTP %{http_code}\n" "http://${serverIp}:5173/"
+Find-NetRoute -RemoteIPAddress $serverIp | Format-List InterfaceAlias, IPAddress, NextHop
+```
+
+`HTTP 000` 表示 curl 未收到 HTTP 状态码。即使绕过应用层代理，系统路由仍可能走 TUN。若关闭 TUN 后同一网址恢复，需要继续使用代理时，可为服务机的单个 IPv4 地址配置 TUN 路由排除（`/32`），重新开启后再用浏览器验证。[Mihomo 路由排除配置](https://wiki.metacubex.one/config/inbound/tun/#route-exclude-address)
+
+首页恢复后，如果系统提示登录，按飞书登录流程重新建立会话。后端重启可能使原 `HttpSession` 失效，申请人账号及分工仍从数据库读取。局域网环境由 IDEA 启动后端时，更新服务端代码后由操作者择时重新运行 `PolicyApplication`，再刷新前端验证。[政策数据清理范围](../sql/database-design.md#清空政策提交后重新验证)
 
 ## 后台任务与关闭页面
 

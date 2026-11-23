@@ -3,7 +3,10 @@ import { inject, onScopeDispose, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
-import { useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import PolicyAdjustmentEvidence from './components/PolicyAdjustmentEvidence.vue'
+import { createRequestId } from '../../utils/request-id'
+import { createPolicyTimeAdjustment } from '../../api/policies'
 import { usePolicySubmissions } from '../../composables/usePolicySubmissions'
 import {
   CHANNEL_LABELS,
@@ -14,6 +17,7 @@ import {
 } from '../../constants/policy'
 import { policyTime } from '../../utils/policy-adapter'
 import PolicySubmissionDrawer from './components/PolicySubmissionDrawer.vue'
+import PolicyAdjustmentDate from './components/PolicyAdjustmentDate.vue'
 
 const router = useRouter()
 const { busy, confirming, writing, preparePolicyEdit, deleteDraft } = inject('policyForm')
@@ -21,7 +25,18 @@ const { filters, data, error, loading, refresh, setFilter } = usePolicySubmissio
 const selected = ref(null)
 const detailOpen = ref(false)
 const deleteTarget = ref(null)
+const adjustmentSource = ref(null)
+const evidence = ref(null)
+const reason = ref('')
+const proofFiles = ref([])
+const proofStatus = ref({})
+const validTime = ref(false)
+let createKey
+const endTime = ref('')
+const creatingAdjustment = ref(false)
+const adjustmentError = ref('')
 let active = true
+onBeforeRouteLeave(() => !creatingAdjustment.value || !adjustmentSource.value)
 onScopeDispose(() => {
   active = false
 })
@@ -39,6 +54,60 @@ const filterOptions = [
 function openDetail(row) {
   selected.value = row
   detailOpen.value = true
+}
+
+function openAdjustment(row) {
+  createKey = createRequestId()
+  reason.value = ''
+  proofFiles.value = []
+  proofStatus.value = {}
+  validTime.value = false
+  adjustmentSource.value = row
+  endTime.value = ''
+  adjustmentError.value = ''
+}
+
+async function createAdjustment() {
+  const source = adjustmentSource.value
+  if (
+    !source ||
+    !validTime.value ||
+    !reason.value.trim() ||
+    proofStatus.value.busy ||
+    proofStatus.value.failed ||
+    creatingAdjustment.value
+  ) {
+    return
+  }
+  creatingAdjustment.value = true
+  adjustmentError.value = ''
+  try {
+    const draft = await createPolicyTimeAdjustment(
+      source,
+      endTime.value,
+      {
+        reason: reason.value.trim(),
+        attachmentInfo: proofFiles.value,
+      },
+      createKey,
+    )
+    evidence.value?.retainFiles()
+    if (active) {
+      adjustmentSource.value = null
+      ElMessage.success(`时间调整草稿 ${draft.policyCode} 已保存`)
+      void refresh()
+      await edit(draft)
+    }
+  } catch (cause) {
+    if (active) {
+      adjustmentError.value = cause.message
+      if (cause.code === 'POLICY_EXTENSION_SOURCE_CHANGED') {
+        void refresh()
+      }
+    }
+  } finally {
+    creatingAdjustment.value = false
+  }
 }
 
 async function edit(row) {
@@ -111,7 +180,13 @@ async function removeDraft(row) {
     <el-empty v-else-if="!data?.items.length" description="没有符合条件的申请" :image-size="90" />
     <template v-else>
       <el-table :data="data.items" row-key="id">
-        <el-table-column prop="policyCode" label="申请单号" min-width="196" show-overflow-tooltip />
+        <el-table-column prop="policyCode" label="申请单号" min-width="196">
+          <template #default="{ row }">
+            {{ row.policyCode }}
+            <div v-if="row.sourcePolicyCode">延期自 {{ row.sourcePolicyCode }}</div>
+            <div v-else-if="row.adjustmentOnly">提前结束申请</div>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="POLICY_STATUS_TYPES[row.status]">
@@ -135,6 +210,15 @@ async function removeDraft(row) {
         <el-table-column label="操作" fixed="right" width="195">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+            <el-button
+              v-if="row.status === 'APPROVED' && (row.canExtend || row.canShorten)"
+              link
+              type="primary"
+              :disabled="busy || confirming"
+              @click="openAdjustment(row)"
+            >
+              调整政策时间
+            </el-button>
             <el-button
               v-if="policyIsEditable(row.status)"
               link
@@ -172,6 +256,57 @@ async function removeDraft(row) {
       </footer>
     </template>
 
+    <el-dialog
+      :model-value="Boolean(adjustmentSource)"
+      title="调整政策时间"
+      width="min(500px, calc(100% - 24px))"
+      align-center
+      :show-close="!creatingAdjustment"
+      :close-on-press-escape="!creatingAdjustment"
+      :close-on-click-modal="false"
+      @update:model-value="adjustmentSource = null"
+    >
+      <template v-if="adjustmentSource">
+        <p>
+          原政策 {{ adjustmentSource.policyCode }} 于
+          {{ policyTime(adjustmentSource.endTime).replace('T', ' ') }}
+          到期。调整申请将生成新单号，审核通过后生效。
+        </p>
+        <el-form
+          label-position="top"
+          :disabled="creatingAdjustment"
+          @submit.prevent="createAdjustment"
+        >
+          <PolicyAdjustmentDate
+            v-model="endTime"
+            :previous-end="adjustmentSource.endTime"
+            :earliest-end="adjustmentSource.earliestEnd"
+            :can-extend="adjustmentSource.canExtend"
+            :can-shorten="adjustmentSource.canShorten"
+            @validity="validTime = $event"
+          />
+          <PolicyAdjustmentEvidence
+            ref="evidence"
+            v-model:reason="reason"
+            v-model:attachment-info="proofFiles"
+            :disabled="creatingAdjustment"
+            @status-change="proofStatus = $event"
+          />
+        </el-form>
+        <el-alert v-if="adjustmentError" :title="adjustmentError" type="error" :closable="false" />
+      </template>
+      <template #footer>
+        <el-button :disabled="creatingAdjustment" @click="adjustmentSource = null">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="creatingAdjustment"
+          :disabled="!validTime || !reason.trim() || proofStatus.busy || proofStatus.failed"
+          @click="createAdjustment"
+        >
+          创建调整草稿
+        </el-button>
+      </template>
+    </el-dialog>
     <el-drawer
       v-if="selected"
       v-model="detailOpen"

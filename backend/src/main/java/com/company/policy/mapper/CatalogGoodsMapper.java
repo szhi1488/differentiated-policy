@@ -254,17 +254,19 @@ public interface CatalogGoodsMapper {
 
     @Select(
             """
+        <script>
         SELECT DISTINCT b.id AS brand_id, b.name AS brand_name, s.id AS series_id,
             s.name AS series_name, p.id AS spu_id, p.name AS model_name, p.edition, g.ram, g.rom
         """
                     + JOINED
                     + """
-        WHERE g.status = 1
+        <if test="onSaleOnly">WHERE g.status = 1</if>
         ORDER BY brand_id, series_id, spu_id, g.ram, g.rom
+        </script>
         """)
-    List<OnSaleConfiguration> onSaleConfigurations();
+    List<CatalogConfiguration> catalogConfigurations(@Param("onSaleOnly") boolean onSaleOnly);
 
-    record OnSaleConfiguration(
+    record CatalogConfiguration(
             long brandId,
             String brandName,
             long seriesId,
@@ -310,6 +312,11 @@ public interface CatalogGoodsMapper {
             long stopped) {}
 
     record Memory(String ram, String rom) {}
+
+    @Select("SELECT DISTINCT spu_id, ram, rom FROM goods ORDER BY spu_id, ram, rom")
+    List<ModelConfiguration> modelConfigurations();
+
+    record ModelConfiguration(long spuId, String ram, String rom) {}
 
     record ModelCount(
             long seriesId, long spuId, String modelName, String edition, long total, long active) {}

@@ -1,5 +1,6 @@
 package com.company.policy.dto;
 
+import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.vo.PolicyApplicability.Scope;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
@@ -38,7 +39,31 @@ public record PolicyDraftRequest(
         }
     }
 
-    public record GoodsForm(List<Card> cards) {}
+    public record GoodsForm(
+            List<Card> cards,
+            @com.fasterxml.jackson.annotation.JsonInclude(
+                            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                    EndAdjustment timeAdjustment) {
+        public GoodsForm(List<Card> cards) {
+            this(cards, null);
+        }
+    }
+
+    public PolicyDraftRequest withTimeAdjustment(EndAdjustment change) {
+        return new PolicyDraftRequest(
+                recordVersion,
+                perspective,
+                selectedPlatforms,
+                verifyType,
+                sceneType,
+                sceneTypes,
+                estimated,
+                startTime,
+                endTime,
+                specialRemark,
+                attachmentInfo,
+                new GoodsForm(goodsForm.cards(), change));
+    }
 
     public record Card(
             String key,
@@ -67,10 +92,24 @@ public record PolicyDraftRequest(
             String planKey,
             @JsonDeserialize(using = IntOnly.class) Integer quantity) {}
 
+    public record Extension(
+            @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
+            @Schema(description = "新的北京时间到期日期，含当天", example = "2026-12-10") String endDate,
+            @Schema(description = "北京时间新截止时刻，与旧版 endDate 二选一") String endTime,
+            @Schema(description = "已核对的原单实际截止。创建取列表 endTime，修改取详情 adjustmentSourceEnd。该值变化返回 409")
+                    String expectedSourceEnd,
+            @Schema(description = "必填，1 至 512 字") String reason,
+            @Schema(description = "选填的证明文件") List<Link> attachmentInfo) {}
+
+    public record AdjustmentPreview(
+            @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
+            List<EndAdjustment> endAdjustments) {}
+
     public record Submission(
             @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
             String confirmationToken,
-            List<Choice> decisions) {}
+            List<Choice> decisions,
+            List<EndAdjustment> endAdjustments) {}
 
     public record Choice(
             Scope scope,

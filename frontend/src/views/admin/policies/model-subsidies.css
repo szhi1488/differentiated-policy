@@ -1,3 +1,7 @@
+:root:has(.model-subsidies) {
+  /* 时间轴明细随指针改变高度，预留页面滚动条宽度以固定图表位置。 */
+  scrollbar-gutter: stable;
+}
 .model-subsidies {
   display: grid;
   gap: 16px;
@@ -17,7 +21,7 @@
   box-shadow: 0 3px 12px #1f539505;
 }
 .model-subsidy-query {
-  padding: 17px 18px 0;
+  padding: 17px 18px;
 }
 .model-subsidy-filters {
   display: flex;
@@ -33,7 +37,8 @@
 .model-subsidy-filters .model-subsidy-model-field {
   flex-basis: 180px;
 }
-.model-subsidy-filters .model-subsidy-config-field {
+.model-subsidy-filters .model-subsidy-config-field,
+.model-subsidy-filters .model-subsidy-assigned-field {
   flex-basis: 150px;
 }
 .model-subsidy-filters .model-subsidy-date-field {
@@ -61,22 +66,12 @@
 .model-subsidy-query-actions .el-button svg {
   margin-right: 5px;
 }
-.model-subsidy-query-note {
+.model-subsidy-status {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  color: #9a7a43;
-  background: #fffcf6;
-  margin: 15px -18px 0;
-  padding: 9px 18px;
-  border-radius: 0 0 9px 9px;
-  font-size: 11px;
-  line-height: 1.7;
-}
-.model-subsidy-query-note .model-subsidy-example {
-  font-size: 12px;
-  margin-left: auto;
+  gap: 12px;
+  padding: 16px 18px;
+  color: #536981;
 }
 .model-subsidy-estimate {
   display: inline-block;
@@ -110,10 +105,6 @@
 .model-subsidy-source-periods summary {
   cursor: pointer;
 }
-.model-subsidy-query-note svg {
-  flex: none;
-  margin-top: 2px;
-}
 .model-subsidy-query-actions .el-checkbox {
   margin: 0;
   height: 32px;
@@ -121,7 +112,7 @@
 .model-subsidy-query-actions .el-checkbox__label {
   font-size: 12px;
 }
-/* 仅此预览页以 SVG 代替组件的 CSS 勾选符号，保留原生复选框交互。 */
+/* 仅此查询页以 SVG 代替组件的 CSS 勾选符号，保留原生复选框交互。 */
 .model-subsidy-independent {
   position: relative;
 }
@@ -275,7 +266,8 @@
   line-height: 1.7;
   color: #536981;
 }
-.model-subsidy-source-heading {
+.model-subsidy-source-heading,
+.model-subsidy-upcoming h3 {
   margin: 16px 0 0;
   padding-top: 12px;
   border-top: 1px solid #e2eaf5;
@@ -287,6 +279,24 @@
   color: #64768a;
   font-weight: 400;
   margin-left: 4px;
+}
+.model-subsidy-upcoming p,
+.model-subsidy-upcoming ol {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #536981;
+}
+.model-subsidy-upcoming ol {
+  list-style: none;
+  padding: 0;
+  max-height: 14em;
+  overflow-y: auto;
+}
+.model-subsidy-upcoming li {
+  display: grid;
+  gap: 2px;
+  padding: 5px 0;
+  overflow-wrap: anywhere;
 }
 .model-subsidy-source {
   margin-top: 10px;
@@ -313,7 +323,7 @@
 }
 @media (max-width: 650px) {
   .model-subsidy-query {
-    padding: 14px 12px 0;
+    padding: 14px 12px;
   }
   .model-subsidy-filters {
     display: grid;
@@ -328,10 +338,6 @@
   }
   .model-subsidy-query-actions {
     grid-column: 1 / -1;
-  }
-  .model-subsidy-query-note {
-    margin-inline: -12px;
-    padding-inline: 12px;
   }
   .model-subsidy-chart-header {
     padding-inline: 12px;

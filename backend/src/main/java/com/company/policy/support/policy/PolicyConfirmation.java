@@ -118,8 +118,7 @@ public final class PolicyConfirmation {
 
     public static boolean requiresResubmission(PolicyConsent saved, PolicyApplicability current) {
         if (current.status() == Status.NO_EFFECTIVE_PERIOD) return true;
-        if (saved != null && saved.ruleVersion() != 1 && saved.ruleVersion() != 2)
-            throw new IllegalStateException("无法识别该轮适用范围规则版本。");
+        if (saved != null && !saved.supported()) throw new IllegalStateException("无法识别该轮适用范围规则版本。");
         if (saved != null
                 && current.scopes().stream().anyMatch(s -> s.scope().goodsId() != null)
                 && !new HashSet<>(saved.comparedRounds()).containsAll(comparedRounds(current)))

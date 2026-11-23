@@ -31,8 +31,11 @@ public interface CatalogGoodsService {
     /** 按已选品牌、系列和机型返回在售商品的联动筛选选项。 */
     Options onSaleOptions(CurrentUserResponse session, Long brandId, Long seriesId, Long spuId);
 
+    /** 为申请人的机型补贴查询列出所有销售状态的机型配置。 */
+    Options subsidyOptions(CurrentUserResponse session);
+
     /** 汇总标准商品的销售状态、系列和机型数量，并列出已有内存配置。 */
-    Summary summary(CurrentUserResponse session);
+    Summary summary(CurrentUserResponse session, boolean includeModelConfigurations);
 
     /** 按商品编号读取标准商品详情和当前编辑版本。 */
     CatalogGoodsResponse detail(CurrentUserResponse session, long id);

@@ -81,3 +81,15 @@ it('申请人手动访问管理员地址仍回到申请人页，查询参数不�
   await router.push('/admin/users?roleType=ADMIN')
   expect(router.currentRoute.value.path).toBe('/apply')
 })
+
+it('申请人恢复会话后可以直达本人平台的补贴查询，管理员进入申请人地址时回到管理员工作台', async () => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  await router.push('/apply/model-subsidies')
+  session.setLogin({ user: { roleType: 'APPLICANT' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.name).toBe('applicant-model-subsidies')
+  session.setLogin({ user: { roleType: 'ADMIN' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.name).toBe('catalog-sources')
+})

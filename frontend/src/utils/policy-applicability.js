@@ -6,7 +6,7 @@ function incomplete() {
   throw new Error('适用范围预览不完整，请重新预览。')
 }
 
-function scopeView({ scope, policies, segments }) {
+function scopeView({ scope, policies, segments }, effectiveFrom) {
   if (!scope?.platformCode || !policies?.length || !segments?.length) {
     incomplete()
   }
@@ -75,31 +75,26 @@ function scopeView({ scope, policies, segments }) {
     if (!fromText || !throughText) {
       incomplete()
     }
-    const search = [
-      title,
-      target,
-      ...participants.flatMap((p) => [
-        p.policyCode,
-        ...p.selections.flatMap((s) =>
-          s.products.map((item) => [item.goodsName, item.goodsId, item.colorName].join(' ')),
-        ),
-      ]),
-    ]
-      .join(' ')
-      .toLowerCase()
     return {
       ...segment,
       resultLabel:
         groups.length === 1 ? '同组选一' : groups.length > 1 ? '跨组可叠加' : '叠加或选一',
       key: JSON.stringify([key, through]),
       scope,
+      // 正在生效的首段随核对时钟向前移动，沿用服务端对首段起点的比较口径。
+      confirmationBasis: JSON.stringify([
+        segment.from === effectiveFrom ? 'START' : segment.from,
+        through,
+        action,
+        groups,
+        participants.map((p) => [p.policyId, p.auditLogId, p.submissionVersion, p.selections]),
+      ]),
       fromText,
       throughText,
       participants,
       byId,
       product,
       eligible: eligiblePolicyIds.map((id) => byId.get(id)),
-      search,
     }
   })
   return { key, scope, title, target, commonConfiguration, product, ranges }
@@ -131,19 +126,10 @@ function decisionGroupKey(range) {
   ])
 }
 
-/** 先筛实际命中，再按配置分页。每个显示时段保留本次操作对应的原始决定。 */
-export function groupSubmissionScopes(scopes, platform = '', resultLabel = '', search = '') {
+/** 按配置汇总命中商品，每个显示时段保留对应的原始决定。 */
+export function groupSubmissionScopes(scopes) {
   const cards = new Map()
   for (const item of scopes) {
-    if (platform && item.scope.platformCode !== platform) {
-      continue
-    }
-    const ranges = item.ranges.filter(
-      (r) => (!resultLabel || resultLabel === r.resultLabel) && r.search.includes(search),
-    )
-    if (!ranges.length) {
-      continue
-    }
     const key = item.commonConfiguration ?? item.key
     if (!cards.has(key)) {
       cards.set(key, {
@@ -158,7 +144,7 @@ export function groupSubmissionScopes(scopes, platform = '', resultLabel = '', s
     }
     const card = cards.get(key)
     card.products.push(item.product)
-    for (const range of ranges) {
+    for (const range of item.ranges) {
       const groupKey = item.commonConfiguration ? decisionGroupKey(range) : range.key
       if (!card.ranges.has(groupKey)) {
         card.ranges.set(groupKey, { ...range, key: groupKey, members: [] })
@@ -194,7 +180,7 @@ export function readSubmissionPreview(preview) {
   ) {
     incomplete()
   }
-  const scopes = result.scopes.map(scopeView)
+  const scopes = result.scopes.map((scope) => scopeView(scope, result.effectiveFrom))
   const ranges = scopes.flatMap((s) => s.ranges)
   if (new Set(ranges.map((r) => r.key)).size !== ranges.length) {
     incomplete()

@@ -9,10 +9,13 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.validateFil
 import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.dto.PolicyReviewRequest;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
+import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
@@ -35,6 +38,7 @@ import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
 import com.company.policy.vo.PolicyReviewResponse.Summary;
+import com.company.policy.vo.PolicySubsidyTimeline;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -58,6 +62,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private final PolicyApplyMapper policies;
     private final ObjectMapper json;
     private final PolicySnapshotCodec snapshots;
+    private final com.company.policy.support.policy.PolicyBatchExtensions extensions;
 
     PolicyReviewServiceImpl(
             PolicyCoverageService coverage,
@@ -65,13 +70,15 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             PolicyReviewMapper reviews,
             PolicyApplyMapper policies,
             ObjectMapper json,
-            PolicySnapshotCodec snapshots) {
+            PolicySnapshotCodec snapshots,
+            com.company.policy.support.policy.PolicyBatchExtensions extensions) {
         this.coverage = coverage;
         this.access = access;
         this.reviews = reviews;
         this.policies = policies;
         this.json = json;
         this.snapshots = snapshots;
+        this.extensions = extensions;
     }
 
     @Override
@@ -132,7 +139,10 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 auditSummary(log),
                 !includeCoverage || "REJECTED".equals(entry.getStatus())
                         ? null
-                        : coverage.submitted(entry, log, snapshot));
+                        : coverage.submitted(entry, log, snapshot),
+                "APPROVED".equals(entry.getStatus())
+                        ? coverage.approvedEnds(entry.getTenantKey(), now()).get(Long.toString(id))
+                        : null);
     }
 
     @Override
@@ -157,7 +167,10 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if ("APPROVED".equals(status)) {
             var log = current(entry);
             var snapshot = snapshot(log);
-            coverage.lockScope(snapshot.form());
+            coverage.lockScope(
+                    entry,
+                    snapshot.form(),
+                    snapshot.consent() == null ? List.of() : snapshot.consent().endAdjustments());
             var time = now();
             var preview = preview(entry, log, snapshot, time);
             if (preview.requiresResubmission()) {
@@ -171,7 +184,9 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                                 ? "该轮已无可生效时段，请驳回，由原申请人调整日期后重提。"
                                 : "当前组合与申请人确认范围不同，请查看覆盖预览并驳回，由原申请人重新确认后提交。");
             }
-            return finishReview(entry, admin, status, remark, time);
+            var result = finishReview(entry, admin, status, remark, time);
+            extensions.approve(entry, snapshot, admin, log.getCreatedAt(), time);
+            return result;
         }
         return finishReview(entry, admin, status, remark, now());
     }
@@ -209,13 +224,55 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
 
     private OverridePreview preview(
             PolicyApply entry, PolicyAuditLog log, Snapshot snapshot, LocalDateTime at) {
-        var result = coverage.applicability(entry, snapshot, at, log.getCreatedAt(), log.getId());
+        PolicyApplicability result;
+        try {
+            result = coverage.applicability(entry, snapshot, at, log.getCreatedAt(), log.getId());
+        } catch (ApiException changed) {
+            if (!"POLICY_ADJUSTMENT_CHANGED".equals(changed.getCode())) throw changed;
+            var saved = snapshot.consent();
+            if (snapshot.form().goodsForm().timeAdjustment() != null
+                    || entry.getExtensionSourceId() != null) {
+                result =
+                        new PolicyApplicability(
+                                "SNAPSHOT_DATES",
+                                formatTime(at),
+                                formatTime(at),
+                                snapshot.form().endTime(),
+                                PolicyApplicability.Status.NEEDS_CONFIRMATION,
+                                false,
+                                List.of(),
+                                List.of());
+                return new OverridePreview(result, saved, true, "REJECT_FOR_RESUBMISSION");
+            }
+            var withoutCuts =
+                    new PolicyConsent(
+                            saved.ruleVersion(), saved.comparedRounds(), saved.decisions());
+            result =
+                    coverage.applicability(
+                            entry,
+                            snapshot.withConsent(withoutCuts),
+                            at,
+                            log.getCreatedAt(),
+                            log.getId());
+            return new OverridePreview(result, saved, true, "REJECT_FOR_RESUBMISSION");
+        }
         var changed = PolicyConfirmation.requiresResubmission(snapshot.consent(), result);
         return new OverridePreview(
                 result,
                 snapshot.consent(),
                 changed,
                 changed ? "REJECT_FOR_RESUBMISSION" : "REVIEW");
+    }
+
+    @Override
+    public PolicySubsidyTimeline subsidyTimeline(
+            CurrentUserResponse session, PolicyTimelineQuery query) {
+        var admin = access.requirePolicyAdmin(session);
+        query.validate();
+        return coverage.subsidyTimeline(
+                admin.getTenantKey(),
+                query,
+                ChannelPlatform.all().stream().filter(query::matches).toList());
     }
 
     @Override

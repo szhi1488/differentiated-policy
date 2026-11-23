@@ -26,6 +26,7 @@ const applicationRoute = computed(() => ({
   query: state.record.value ? { policyId: state.record.value.id } : {},
 }))
 provide('policyForm', state)
+provide('modelSubsidyPreferences', { lastQuery: ref(null), showIndependent: ref(false) })
 // 在地址变更前确认，取消导航时保留原地址、表单和附件；加载由申请页负责。
 const removePolicyGuard = router.beforeEach((to) => {
   const id = to.query.policyId
@@ -79,20 +80,14 @@ onScopeDispose(state.clear)
           :class="{ 'is-collapsed': !policyMenuOpen }"
         >
           <button
+            v-for="link in APPLICANT_NAV_GROUPS[0].links"
+            :key="link.name"
             class="nav-item workspace-nav-item"
-            :class="{ 'is-active': route.name === 'apply' }"
-            :aria-current="route.name === 'apply' ? 'page' : undefined"
-            @click="$router.push(applicationRoute)"
+            :class="{ 'is-active': route.name === link.name }"
+            :aria-current="route.name === link.name ? 'page' : undefined"
+            @click="router.push(link.name === 'apply' ? applicationRoute : { name: link.name })"
           >
-            提交政策
-          </button>
-          <button
-            class="nav-item workspace-nav-item"
-            :class="{ 'is-active': route.name === 'submissions' }"
-            :aria-current="route.name === 'submissions' ? 'page' : undefined"
-            @click="$router.push({ name: 'submissions' })"
-          >
-            我的提交
+            {{ link.label }}
           </button>
         </div>
       </nav>
@@ -109,7 +104,7 @@ onScopeDispose(state.clear)
       />
       <div class="workspace-content-background">
         <main class="workspace-main">
-          <PolicyBanner />
+          <PolicyBanner v-if="route.name !== 'applicant-model-subsidies'" />
           <router-view />
         </main>
       </div>

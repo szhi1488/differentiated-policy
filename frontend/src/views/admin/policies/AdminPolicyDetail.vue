@@ -1,6 +1,7 @@
 <script setup>
 import { policyAttachmentDownloadUrl } from '../../../api/attachments'
 import { computed } from 'vue'
+import PolicyEndAdjustments from '../../../components/PolicyEndAdjustments.vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import AttachmentDownload from '../../../components/AttachmentDownload.vue'
 import { CHANNEL_LABELS, PLATFORM_LABELS, VERIFY_LABELS } from '../../../constants/policy'
@@ -88,6 +89,9 @@ function platformNames(codes) {
 const basicFields = computed(() => {
   const { perspective, selectedPlatforms, verifyType, estimated, startTime, endTime } = form.value
   return [
+    ...(props.detail.snapshot.sourcePolicyCode
+      ? [['延期原单', props.detail.snapshot.sourcePolicyCode]]
+      : []),
     ['渠道', CHANNEL_LABELS[perspective]],
     ['整单平台', platformNames(selectedPlatforms)],
     ['核销类型', VERIFY_LABELS[verifyType] ?? '—'],
@@ -112,6 +116,14 @@ const basicFields = computed(() => {
     </section>
 
     <section class="admin-policy-detail-section">
+      <PolicyEndAdjustments
+        :changes="detail.snapshot.consent?.endAdjustments"
+        :time-adjustment="form.goodsForm.timeAdjustment"
+        :approved-end="detail.approvedEnd"
+        :policy-id="policy.id"
+        :log-id="audit.id"
+        admin
+      />
       <h3>机型及补贴信息</h3>
       <section v-if="commonRows.length" class="admin-policy-goods-group">
         <h4>普通机型</h4>

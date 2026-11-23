@@ -10,6 +10,7 @@ import com.company.policy.vo.CatalogGoodsResponse;
 import com.company.policy.vo.CatalogGoodsResponse.Summary;
 import com.company.policy.vo.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -121,8 +122,12 @@ public class CatalogGoodsController {
 
     @GetMapping("/summary")
     @Operation(summary = "查看商品统计、品牌系列及机型版本计数和配置选项")
-    public Summary summary(HttpServletRequest request) {
-        return goods.summary(sessions.requireLogin(request).user());
+    public Summary summary(
+            @Parameter(description = "附加各机型实际存在的 RAM、ROM，涵盖全部销售状态")
+                    @RequestParam(defaultValue = "false")
+                    boolean includeModelConfigurations,
+            HttpServletRequest request) {
+        return goods.summary(sessions.requireLogin(request).user(), includeModelConfigurations);
     }
 
     @GetMapping("/{id}")

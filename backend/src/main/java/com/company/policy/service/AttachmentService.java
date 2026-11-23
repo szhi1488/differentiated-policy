@@ -18,6 +18,9 @@ public interface AttachmentService {
     /** 核验文件归属和内容是否存在，并返回可保存到政策表单的附件列表。 */
     List<Link> bind(List<Link> attachments, CurrentUserResponse user);
 
+    /** 核验期限变更的可选上传文件并取原名。正式绑定时调用方须在同一事务持有上传者行锁。 */
+    List<Link> resolveChangeFiles(List<Link> files, CurrentUserResponse user);
+
     /** 校验申请归属后，下载本人申请当前内容中引用的附件。 */
     Download downloadCurrent(long policyId, String attachmentId, CurrentUserResponse user);
 

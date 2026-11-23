@@ -25,7 +25,19 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     canEdit: () => !confirming.value && !persistence.locked.value,
   })
   const { files, attachmentNotice, attachmentsFailed } = attachments
-  const persistence = usePolicyDraft(form, confirming, attachments, refreshPlatforms)
+  const adjustmentUploads = useAttachments({
+    discardUnboundOnRestore: true,
+    onChange: (values) => {
+      form.value.adjustmentFiles = values
+    },
+  })
+  const persistence = usePolicyDraft(
+    form,
+    confirming,
+    attachments,
+    refreshPlatforms,
+    adjustmentUploads,
+  )
   const blocked = () => confirming.value || persistence.locked.value
   const { notice, noticeType } = persistence
   let revision = 0
@@ -240,6 +252,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     form.value = createForm()
     persistence.markSaved()
     attachments.restore()
+    adjustmentUploads.restore()
     notice.value = ''
   }
 
@@ -248,9 +261,16 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       return
     }
     if (
-      ['verifyType', 'scenes', 'estimated', 'startTime', 'endTime', 'remark', 'links'].includes(
-        field,
-      )
+      [
+        'verifyType',
+        'scenes',
+        'estimated',
+        'startTime',
+        'endTime',
+        'remark',
+        'links',
+        'adjustmentReason',
+      ].includes(field)
     ) {
       form.value[field] = value
     }
@@ -428,7 +448,9 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       return false
     }
     if (
-      (persistence.hasUnsavedChanges() || attachmentsFailed.value) &&
+      (persistence.hasUnsavedChanges() ||
+        attachmentsFailed.value ||
+        adjustmentUploads.attachmentsFailed.value) &&
       !(await confirmed(() =>
         confirm('打开该申请会替换当前未保存的内容，是否继续？', {
           confirmButtonText: '打开申请',
@@ -454,6 +476,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
 
   return {
     ...persistence,
+    adjustmentUploads,
     reloadDraft,
     preparePolicyEdit,
     confirmPolicyReplacement,

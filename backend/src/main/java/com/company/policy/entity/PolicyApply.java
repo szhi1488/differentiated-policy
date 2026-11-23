@@ -7,6 +7,8 @@ import lombok.Data;
 public class PolicyApply {
     private Long id;
     private String policyNo;
+    private Long extensionSourceId;
+    private boolean adjustmentOnly;
     private String tenantKey;
     private Long applicantId;
     private String applicantName;

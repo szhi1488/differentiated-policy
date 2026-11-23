@@ -16,7 +16,7 @@ import org.apache.ibatis.annotations.Update;
 public interface PolicyApplyMapper {
     String COLUMNS =
             """
-        id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,
+        id, policy_no, extension_source_id, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,
         scene_types, is_estimated, start_time, end_time, remark, goods_form_json, attachment_urls,
         status, current_version, record_version
         """;
@@ -41,7 +41,9 @@ public interface PolicyApplyMapper {
 
     @Select(
             "<script>SELECT id, policy_no, status, record_version, current_version, channel_type,"
-                    + " platforms, created_at, updated_at FROM policy_apply WHERE "
+                    + " extension_source_id, end_time, platforms, created_at, updated_at,"
+                    + " (extension_source_id IS NULL AND NULLIF(JSON_UNQUOTE(JSON_EXTRACT(goods_form_json,"
+                    + " '$.timeAdjustment.target.policyId')), 'null') IS NOT NULL) AS adjustment_only FROM policy_apply WHERE "
                     + OWNED
                     + MINE_FILTERS
                     + " ORDER BY created_at DESC, id DESC LIMIT #{query.pageSize} OFFSET #{offset}</script>")
@@ -54,14 +56,21 @@ public interface PolicyApplyMapper {
     @Select("SELECT " + COLUMNS + " FROM policy_apply WHERE policy_no = #{code} AND " + OWNED)
     PolicyApply findByCode(String code, String tenantKey, long applicantId);
 
+    @Select(
+            "SELECT "
+                    + COLUMNS
+                    + " FROM policy_apply WHERE extension_source_id = #{id} AND "
+                    + OWNED)
+    PolicyApply findExtension(long id, String tenantKey, long applicantId);
+
     @Insert(
             """
         INSERT INTO policy_apply (
-            policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms,
+            policy_no, extension_source_id, tenant_key, applicant_id, applicant_name, channel_type, platforms,
             write_off_type, scene_types, is_estimated, start_time, end_time, remark,
             goods_form_json, attachment_urls, created_at, updated_at
         ) VALUES (
-            #{entry.policyNo}, #{entry.tenantKey}, #{entry.applicantId}, #{entry.applicantName},
+            #{entry.policyNo}, #{entry.extensionSourceId}, #{entry.tenantKey}, #{entry.applicantId}, #{entry.applicantName},
             #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.sceneTypes},
             #{entry.isEstimated}, #{entry.startTime}, #{entry.endTime}, #{entry.remark},
             #{entry.goodsFormJson}, #{entry.attachmentUrls}, #{now}, #{now}

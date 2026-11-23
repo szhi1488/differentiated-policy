@@ -3,6 +3,7 @@ package com.company.policy.service;
 import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyListQuery;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
@@ -10,15 +11,33 @@ import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Detail;
 import com.company.policy.vo.PolicyResponse.Page;
 import com.company.policy.vo.PolicyResponse.Summary;
+import com.company.policy.vo.PolicySubsidyTimeline;
 import java.util.List;
 
 /** 供申请人保存草稿、提交政策，并查询本人的申请和审核记录。 */
 public interface PolicyApplyService {
     List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session);
 
+    /** 按申请人当前负责的平台分工查询机型补贴历史和后续计划。 */
+    PolicySubsidyTimeline subsidyTimeline(CurrentUserResponse session, PolicyTimelineQuery query);
+
     /** 为当前申请人首次保存政策草稿，可用请求标识核对重复创建。 */
     PolicyResponse create(
             CurrentUserResponse session, PolicyDraftRequest request, String requestKey);
+
+    /** 从本人已通过的提交快照创建关联延期草稿。 */
+    PolicyResponse extend(
+            CurrentUserResponse session, long id, PolicyDraftRequest.Extension request);
+
+    PolicyResponse adjustTime(
+            CurrentUserResponse session,
+            long id,
+            PolicyDraftRequest.Extension request,
+            String requestKey);
+
+    /** 仅调整时间变更草稿或已驳回延期申请的到期日期。 */
+    PolicyResponse saveExtensionDate(
+            CurrentUserResponse session, long id, PolicyDraftRequest.Extension request);
 
     /** 校验记录版本后，保存本人草稿或已驳回申请的修改。 */
     PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request);
@@ -29,6 +48,10 @@ public interface PolicyApplyService {
     /** 读取本人拟提交整单在当前负责平台的区间判定和本轮确认标识。 */
     PolicyResponse.SubmissionPreview preview(
             CurrentUserResponse session, long id, Integer recordVersion);
+
+    /** 按整张旧政策提前结束的申请重新试算交叉时段。 */
+    PolicyResponse.SubmissionPreview previewAdjusted(
+            CurrentUserResponse session, long id, PolicyDraftRequest.AdjustmentPreview request);
 
     /** 校验已保存的申请并正式提交，生成本轮提交快照和商品明细。 */
     PolicyResponse submit(

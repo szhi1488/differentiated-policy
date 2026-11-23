@@ -110,6 +110,14 @@ export function restorePolicyForm(detail) {
       .filter((item) => item.type === 'FILE')
       .map(({ id, originalName }) => ({ type: 'FILE', id, originalName })),
   }
+  const change = source.goodsForm.timeAdjustment
+  if (detail.sourcePolicyCode || change) {
+    form.adjustmentReason = change?.reason ?? ''
+    form.adjustmentFiles = change?.attachmentInfo ?? []
+    if (change) {
+      form.endTime = policyTime(change.endTime)
+    }
+  }
   for (const card of source.goodsForm.cards) {
     if (!card.targets?.length) {
       continue

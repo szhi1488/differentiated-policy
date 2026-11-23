@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { timelineTimeFromValue, timelineTimeValue } from '../utils/subsidy-timeline'
 
-/** 两张预览图共用时间指针和缩放状态，回写相同缩放值时不重复更新。 */
+/** 两张时间轴共用时间指针和缩放状态，回写相同缩放值时不重复更新。 */
 export function useSubsidyTimelineNavigation(range, initialTime = () => range.value[1]) {
   const cursorAt = ref('')
   const zoom = ref({ start: 0, end: 100 })

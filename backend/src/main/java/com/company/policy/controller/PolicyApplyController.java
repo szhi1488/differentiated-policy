@@ -5,6 +5,7 @@ import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.Submission;
 import com.company.policy.dto.PolicyListQuery;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyApplyService;
 import com.company.policy.vo.PolicyResponse;
@@ -13,14 +14,17 @@ import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Detail;
 import com.company.policy.vo.PolicyResponse.Page;
 import com.company.policy.vo.PolicyResponse.Summary;
+import com.company.policy.vo.PolicySubsidyTimeline;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.LocalDate;
 import java.util.List;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -41,7 +45,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestController
 @RequestMapping("/api/policies")
-@Tag(name = "提交政策", description = "仅本公司有效申请人可读写本人申请")
+@Tag(name = "提交政策", description = "本公司有效申请人读写本人申请，查询负责渠道平台的机型补贴")
 @ApiResponse(responseCode = "400", description = "请求格式、表单枚举、字段组合或完整性有误")
 @ApiResponse(responseCode = "401", description = "会话无效")
 @ApiResponse(responseCode = "403", description = "身份、请求来源无效或所选渠道平台未分给本人（POLICY_PLATFORM_FORBIDDEN）")
@@ -63,6 +67,27 @@ public class PolicyApplyController {
         return policies.assignedPlatforms(sessions.requireLogin(request).user());
     }
 
+    @GetMapping("/subsidy-timeline")
+    @ApiResponse(responseCode = "409", description = "历史涉及旧政策且未配置规则切换时间，POLICY_CUTOVER_REQUIRED")
+    @Operation(
+            summary = "查询本人负责渠道平台的机型补贴",
+            description =
+                    "日期按北京时间含首尾。RAM、ROM 使用目录原值。省略渠道和平台查询当前全部分工，无分工返回空轨道。可传平台编码，或同时指定渠道 RETAIL／BILLION 和平台。越权返回 403。结果含已通过原单、历史及后续计划。")
+    public PolicySubsidyTimeline subsidyTimeline(
+            @RequestParam long spuId,
+            @RequestParam String ram,
+            @RequestParam String rom,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
+            @RequestParam(required = false) String perspective,
+            @RequestParam(required = false) String platformCode,
+            HttpServletRequest request) {
+        return policies.subsidyTimeline(
+                sessions.requireLogin(request).user(),
+                new PolicyTimelineQuery(
+                        spuId, ram, rom, dateFrom, dateTo, perspective, platformCode));
+    }
+
     @PostMapping(path = "/drafts", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(
@@ -74,6 +99,38 @@ public class PolicyApplyController {
             @RequestHeader(value = "Idempotency-Key", required = false) String requestKey,
             HttpServletRequest request) {
         return policies.create(sessions.requireLogin(request).user(), body, requestKey);
+    }
+
+    @PostMapping(path = "/{id}/extension-draft", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "从本人已通过政策创建延期草稿",
+            description = "延长段从原截止后一秒开始。原因必填，证明选传。相同时间、原因和附件的延期草稿可重复取得。")
+    public PolicyResponse extend(
+            @PathVariable long id,
+            @RequestBody PolicyDraftRequest.Extension body,
+            HttpServletRequest request) {
+        return policies.extend(sessions.requireLogin(request).user(), id, body);
+    }
+
+    @PostMapping(path = "/{id}/time-adjustment-draft", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "对本人已通过政策创建时间调整申请", description = "新截止早于原截止为提前结束，晚于原截止为延期。原因必填，证明文件选传。")
+    public PolicyResponse adjustTime(
+            @PathVariable long id,
+            @RequestBody PolicyDraftRequest.Extension body,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestKey,
+            HttpServletRequest request) {
+        return policies.adjustTime(sessions.requireLogin(request).user(), id, body, requestKey);
+    }
+
+    @PutMapping(
+            path = {"/{id}/extension-date", "/{id}/time-adjustment-date"},
+            consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "修改本人时间调整草稿的截止、原因和证明文件", description = "限草稿或已驳回状态，须携带当前记录版本。")
+    public PolicyResponse saveExtensionDate(
+            @PathVariable long id,
+            @RequestBody PolicyDraftRequest.Extension body,
+            HttpServletRequest request) {
+        return policies.saveExtensionDate(sessions.requireLogin(request).user(), id, body);
     }
 
     @PutMapping(path = "/{id}/draft", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -112,11 +169,23 @@ public class PolicyApplyController {
         return policies.preview(sessions.requireLogin(request).user(), id, recordVersion);
     }
 
+    @PostMapping(path = "/{id}/submission-preview", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "核对随本轮申请送审的政策时间调整",
+            description =
+                    "可混合缩短和延长。依据候选的 canShorten、canExtend 按方向核权。每项带原截止、新截止和必填原因，证明文件选传。延期与本单一起重算交叉时段。")
+    public PolicyResponse.SubmissionPreview previewAdjusted(
+            @PathVariable long id,
+            @RequestBody PolicyDraftRequest.AdjustmentPreview body,
+            HttpServletRequest request) {
+        return policies.previewAdjusted(sessions.requireLogin(request).user(), id, body);
+    }
+
     @PostMapping(path = "/{id}/submit", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
             summary = "提交已保存的申请",
             description =
-                    "直提只需 recordVersion；有交叉时提交 confirmationToken 和各段 decisions。零售每段提交 SELECT 和 selectedPolicyIds，完整场景组合与核销类型相同的政策最多选一张。选择缺失、无效或范围变化返回 409。成功转 PENDING 并保存本轮快照和明细。")
+                    "没有交叉且没有整单调整时直提只需 recordVersion；有交叉或整单调整时须带回 confirmationToken、各段 decisions 及相同的 endAdjustments。零售每段提交 SELECT 和 selectedPolicyIds，完整场景组合与核销类型相同的政策最多选一张。选择缺失、无效或范围变化返回 409。成功转 PENDING 并保存本轮快照和明细。")
     public PolicyResponse submit(
             @PathVariable long id, @RequestBody Submission body, HttpServletRequest request) {
         return policies.submit(sessions.requireLogin(request).user(), id, body);

@@ -1,4 +1,5 @@
 import { request } from './request'
+import { policyApiTime } from '../utils/policy-adapter'
 
 const path = '/api/policies'
 const itemPath = (id) => `${path}/${encodeURIComponent(id)}`
@@ -26,9 +27,44 @@ export function deletePolicyDraft(id, recordVersion, signal) {
   return request(`${itemPath(id)}/draft?${params}`, { method: 'DELETE', signal })
 }
 
+export function createPolicyTimeAdjustment(source, endTime, evidence, key, signal) {
+  return write(
+    `${itemPath(source.id)}/time-adjustment-draft`,
+    'POST',
+    {
+      recordVersion: source.recordVersion,
+      endTime: policyApiTime(endTime),
+      expectedSourceEnd: policyApiTime(source.endTime),
+      ...evidence,
+    },
+    { 'Idempotency-Key': key },
+    signal,
+  )
+}
+
+export function savePolicyAdjustmentDate(id, recordVersion, endTime, evidence, signal) {
+  return write(
+    `${itemPath(id)}/time-adjustment-date`,
+    'PUT',
+    { recordVersion, endTime: policyApiTime(endTime), ...evidence },
+    {},
+    signal,
+  )
+}
+
 export function previewPolicySubmission(id, recordVersion, signal) {
   const params = new URLSearchParams({ recordVersion })
   return request(itemPath(id) + '/submission-preview?' + params, { signal })
+}
+
+export function previewPolicyAdjustments(id, recordVersion, endAdjustments, signal) {
+  return write(
+    itemPath(id) + '/submission-preview',
+    'POST',
+    { recordVersion, endAdjustments },
+    {},
+    signal,
+  )
 }
 
 export function submitPolicy(id, body, signal) {

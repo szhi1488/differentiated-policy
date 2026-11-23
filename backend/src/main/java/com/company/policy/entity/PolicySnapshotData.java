@@ -12,7 +12,8 @@ public record PolicySnapshotData(
         int submissionVersion,
         Form form,
         List<Goods> goods,
-        @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode) {
     public record Form(
             Integer recordVersion,
             String perspective,
@@ -29,7 +30,10 @@ public record PolicySnapshotData(
 
     public record Link(String type, String url, String id, String originalName) {}
 
-    public record GoodsForm(List<Card> cards) {}
+    public record GoodsForm(
+            List<Card> cards,
+            @JsonInclude(JsonInclude.Include.NON_NULL)
+                    PolicyConsent.EndAdjustment timeAdjustment) {}
 
     public record Card(
             String key,

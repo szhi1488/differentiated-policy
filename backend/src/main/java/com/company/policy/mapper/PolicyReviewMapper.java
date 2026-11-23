@@ -1,6 +1,8 @@
 package com.company.policy.mapper;
 
+import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyReviewQuery;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.vo.PolicyApplicability.Scope;
@@ -95,9 +97,97 @@ public interface PolicyReviewMapper {
           AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
           AND a.id IN
           <foreach collection="auditIds" item="auditId" open="(" separator="," close=")">#{auditId}</foreach>
+        ORDER BY a.created_at, a.id
         </script>
         """)
     List<PolicyAuditLog> coverageSnapshots(String tenantKey, List<Long> auditIds);
+
+    // 调整适用于整张旧单，查询独立于发起调整的新单商品、平台及自身有效期。
+    @Select(
+            """
+            SELECT a.policy_id AS request_id, a.audit_time, JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') AS changes
+            FROM policy_audit_log a JOIN policy_apply p ON p.id=a.policy_id AND p.tenant_key=a.tenant_key AND p.current_version=a.version
+            WHERE p.tenant_key=#{tenant} AND p.is_deleted=0 AND p.status='APPROVED' AND a.audit_status='APPROVED'
+              AND a.audit_time <= #{asOf} AND JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') IS NOT NULL
+            ORDER BY a.audit_time,a.id
+            """)
+    List<ApprovedChanges> approvedChanges(String tenant, LocalDateTime asOf);
+
+    record ApprovedChanges(long requestId, LocalDateTime auditTime, String changes) {}
+
+    // 负责一个实际使用的平台即可发起整单调整。旧单的分工、日期和渠道独立于本次表单。
+    String ADJUSTABLE =
+            """
+            FROM policy_apply p
+            JOIN policy_audit_log a ON a.policy_id=p.id AND a.tenant_key=p.tenant_key AND a.version=p.current_version
+            WHERE p.tenant_key=#{tenant} AND p.is_deleted=0 AND p.status='APPROVED' AND a.audit_status='APPROVED'
+              AND EXISTS (
+                SELECT 1 FROM user_platform_assignment u
+                JOIN user_info owner ON owner.id=u.user_id AND owner.tenant_key=u.tenant_key
+                JOIN policy_goods_detail d ON d.platform_code=u.platform_code
+                WHERE d.policy_id=p.id AND d.version=a.version AND u.tenant_key=p.tenant_key
+                  AND u.perspective=p.channel_type AND u.user_id=#{applicantId}
+                  AND owner.is_deleted=0 AND owner.role_type='APPLICANT')
+            """;
+
+    @Select(
+            """
+            SELECT p.id AS policy_id, a.id AS audit_id, p.channel_type AS perspective, a.audit_time,
+                   p.applicant_id, p.platforms,
+                   EXISTS(SELECT 1 FROM policy_apply child WHERE child.tenant_key=p.tenant_key
+                     AND child.extension_source_id=p.id AND child.is_deleted=0) AS has_extension,
+                   JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')) AS start_time,
+                   JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')) AS end_time,
+                   NULLIF(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.sourcePolicyCode')), 'null') AS source_policy_code
+            """
+                    + ADJUSTABLE
+                    + """
+                       AND a.audit_time <= #{asOf}
+                       AND (p.applicant_id=#{applicantId}
+                         OR LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) >= #{today})
+                     ORDER BY p.id DESC
+                     """)
+    List<AdjustmentCandidate> adjustmentCandidates(
+            String tenant, long applicantId, LocalDateTime asOf, String today);
+
+    record AdjustmentCandidate(
+            long policyId,
+            long auditId,
+            String perspective,
+            LocalDateTime auditTime,
+            long applicantId,
+            String platforms,
+            boolean hasExtension,
+            String startTime,
+            String endTime,
+            String sourcePolicyCode) {}
+
+    @Select(
+            """
+            <script>SELECT DISTINCT detail.spu_id FROM policy_goods_detail detail
+            JOIN (SELECT p.id, a.version
+            """
+                    + ADJUSTABLE
+                    + """
+                      AND a.id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+                    ) eligible ON detail.policy_id=eligible.id AND detail.version=eligible.version
+                    </script>
+                    """)
+    List<Long> adjustmentModels(String tenant, long applicantId, List<Long> ids);
+
+    @Select(
+            """
+        <script>SELECT DISTINCT detail.goods_id FROM policy_goods_detail detail
+        JOIN (SELECT p.id, a.version
+        """
+                    + ADJUSTABLE
+                    + """
+              AND p.applicant_id=#{applicantId}
+              AND a.id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            ) eligible ON detail.policy_id=eligible.id AND detail.version=eligible.version
+        </script>
+        """)
+    List<Long> extensionGoods(String tenant, long applicantId, List<Long> ids);
 
     // 限定公司、当前已通过轮次、交叉日期与本次实际选品范围。不同颜色的百亿商品按配置命中。
     @Select(
@@ -112,7 +202,7 @@ public interface PolicyReviewMapper {
           AND a.audit_time &lt;= #{asOf}
           AND LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
           AND (<if test="includeExpiredLegacy">JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL OR </if>
-               LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
+                 LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
         <choose>
           <when test="channel == 'RETAIL'">
             AND (d.goods_id, d.platform_code) IN
@@ -147,6 +237,45 @@ public interface PolicyReviewMapper {
     Configuration configuration(long goodsId);
 
     record Configuration(long spuId, String ram, String rom) {}
+
+    @Select(
+            "SELECT id FROM goods WHERE spu_id = #{spuId} AND ram = #{ram} AND rom = #{rom} ORDER BY id")
+    List<Long> configurationGoods(long spuId, String ram, String rom);
+
+    // 只取原单日期和轮次索引，完整快照按命中的展示窗口分批读取。
+    @Select(
+            """
+        <script>
+        SELECT a.id, a.audit_time,
+            LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) AS first_date,
+            LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) AS last_date,
+            CASE WHEN JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL THEN TRUE ELSE FALSE END AS no_consent
+        FROM policy_apply p
+        JOIN policy_audit_log a ON a.policy_id = p.id AND a.version = p.current_version AND a.tenant_key = p.tenant_key
+        WHERE p.tenant_key = #{tenant} AND p.is_deleted = 0 AND p.status = 'APPROVED'
+          AND a.audit_status = 'APPROVED' AND a.audit_time &lt;= #{asOf}
+          AND EXISTS (SELECT 1 FROM policy_goods_detail d
+              WHERE d.policy_id = p.id AND d.version = p.current_version
+                AND d.spu_id = #{query.spuId} AND d.ram = #{query.ram} AND d.rom = #{query.rom}
+                AND (p.channel_type, d.platform_code) IN
+                <foreach collection="scopes" item="scope" open="(" separator="," close=")">
+                  (#{scope.perspective}, #{scope.platformCode})
+                </foreach>)
+        ORDER BY a.created_at, a.id
+        </script>
+        """)
+    List<TimelineIndex> timelineIndex(
+            String tenant,
+            PolicyTimelineQuery query,
+            List<ChannelPlatform> scopes,
+            LocalDateTime asOf);
+
+    record TimelineIndex(
+            long id,
+            LocalDateTime auditTime,
+            String firstDate,
+            String lastDate,
+            boolean noConsent) {}
 
     @Update(
             """
@@ -195,6 +324,10 @@ public interface PolicyReviewMapper {
           WHERE p.tenant_key = #{tenantKey} AND p.channel_type = #{perspective} AND p.is_deleted = 0
             AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
             AND p.start_time &lt;= #{at} AND a.audit_time &lt;= #{at}
+            AND (p.extension_source_id IS NULL OR p.end_time &gt;= #{at})
+          <if test="!ended.isEmpty()">
+            AND a.id NOT IN <foreach collection="ended" item="id" open="(" separator="," close=")">#{id}</foreach>
+          </if>
           <choose>
             <when test="policyId != null">
               AND EXISTS (
@@ -221,7 +354,8 @@ public interface PolicyReviewMapper {
             Integer version,
             String platformCode,
             Long goodsId,
-            DraftScope draftScope);
+            DraftScope draftScope,
+            List<Long> ended);
 
     record DraftScope(long applicantId, List<PolicyApplyMapper.DetailLine> targets) {}
 

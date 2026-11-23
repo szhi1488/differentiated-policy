@@ -20,6 +20,13 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         component: () => import('../views/apply/MySubmissionsPage.vue'),
       },
       {
+        path: '/apply/model-subsidies',
+        name: 'applicant-model-subsidies',
+        meta: { role: 'APPLICANT' },
+        component: () => import('../views/admin/policies/AdminModelSubsidiesPage.vue'),
+        props: { applicant: true },
+      },
+      {
         path: '/admin/catalog/sources',
         name: 'catalog-sources',
         meta: { role: 'ADMIN' },

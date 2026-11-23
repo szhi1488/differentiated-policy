@@ -29,7 +29,11 @@ public final class PolicyReviewResponse {
             List<Summary> items, long total, int page, int pageSize, Map<String, Long> counts) {}
 
     public record Detail(
-            Summary policy, Snapshot snapshot, AuditSummary audit, Coverage coverage) {}
+            Summary policy,
+            Snapshot snapshot,
+            AuditSummary audit,
+            Coverage coverage,
+            PolicyResponse.ApprovedEnd approvedEnd) {}
 
     public record Review(
             String id,

@@ -304,7 +304,14 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         if (invalidId(brandId) || invalidId(seriesId) || invalidId(spuId)) {
             throw invalid();
         }
-        return Options.from(mapper.onSaleConfigurations(), brandId, seriesId, spuId);
+        return Options.from(mapper.catalogConfigurations(true), brandId, seriesId, spuId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Options subsidyOptions(CurrentUserResponse session) {
+        access.requireApplicant(session);
+        return Options.from(mapper.catalogConfigurations(false), null, null, null);
     }
 
     private static boolean invalidId(Long id) {
@@ -363,7 +370,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
 
     @Override
     @Transactional(readOnly = true)
-    public Summary summary(CurrentUserResponse session) {
+    public Summary summary(CurrentUserResponse session, boolean includeModelConfigurations) {
         access.requireAdmin(session);
         var counts = mapper.seriesCounts();
         return new Summary(
@@ -393,7 +400,15 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                                                 row.edition(),
                                                 row.total(),
                                                 row.active()))
-                        .toList());
+                        .toList(),
+                includeModelConfigurations
+                        ? mapper.modelConfigurations().stream()
+                                .map(
+                                        c ->
+                                                new CatalogGoodsResponse.ModelConfiguration(
+                                                        Long.toString(c.spuId()), c.ram(), c.rom()))
+                                .toList()
+                        : null);
     }
 
     @Override

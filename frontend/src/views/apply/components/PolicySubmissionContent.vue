@@ -4,11 +4,13 @@ import { CHANNEL_LABELS, PLATFORM_LABELS, VERIFY_LABELS } from '../../../constan
 import { displayValue, policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import { policyAttachmentDownloadUrl } from '../../../api/attachments'
 import AttachmentDownload from '../../../components/AttachmentDownload.vue'
+import PolicyEndAdjustments from '../../../components/PolicyEndAdjustments.vue'
 import PolicySubmissionGoods from './PolicySubmissionGoods.vue'
 
 const props = defineProps({
   detail: { type: Object, required: true },
   logId: { type: String, default: null },
+  editingTime: Boolean,
 })
 const form = computed(() => props.detail.form)
 const platformName = (code) => PLATFORM_LABELS[code] ?? code
@@ -19,6 +21,9 @@ const time = (value) => policyTime(value).replace('T', ' ')
   <div class="submission-content">
     <el-descriptions :column="1" border>
       <el-descriptions-item label="申请人">{{ detail.applicantName }}</el-descriptions-item>
+      <el-descriptions-item v-if="detail.sourcePolicyCode" label="延期原单">
+        {{ detail.sourcePolicyCode }}
+      </el-descriptions-item>
       <el-descriptions-item label="渠道">
         {{ CHANNEL_LABELS[form.perspective] }}
       </el-descriptions-item>
@@ -39,7 +44,11 @@ const time = (value) => policyTime(value).replace('T', ' ')
       <el-descriptions-item label="开始时间">
         {{ time(form.startTime) || '未填写' }}
       </el-descriptions-item>
-      <el-descriptions-item label="到期时间">
+      <el-descriptions-item
+        :label="
+          form.goodsForm.timeAdjustment && !detail.sourcePolicyCode ? '原单填报截止' : '到期时间'
+        "
+      >
         {{ time(form.endTime) || '未填写' }}
       </el-descriptions-item>
       <el-descriptions-item label="特别备注">
@@ -58,6 +67,13 @@ const time = (value) => policyTime(value).replace('T', ' ')
       </el-descriptions-item>
     </el-descriptions>
 
+    <PolicyEndAdjustments
+      :changes="editingTime ? [] : detail.endAdjustments"
+      :time-adjustment="editingTime ? null : form.goodsForm.timeAdjustment"
+      :approved-end="detail.approvedEnd"
+      :policy-id="detail.id"
+      :log-id="logId"
+    />
     <PolicySubmissionGoods :cards="form.goodsForm.cards" :goods="detail.goods" />
   </div>
 </template>

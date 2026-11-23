@@ -2,6 +2,7 @@ package com.company.policy.service;
 
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.dto.PolicyReviewRequest;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
@@ -10,6 +11,7 @@ import com.company.policy.vo.PolicyReviewResponse.Effective;
 import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
+import com.company.policy.vo.PolicySubsidyTimeline;
 
 /** 供管理员审核政策申请、查看历轮记录、预览覆盖结果并查询有效政策。 */
 public interface PolicyReviewService {
@@ -33,6 +35,9 @@ public interface PolicyReviewService {
             String platformCode,
             long goodsId,
             String at);
+
+    /** 读取管理员选定平台及机型的已通过原单、历史与后续计划。 */
+    PolicySubsidyTimeline subsidyTimeline(CurrentUserResponse session, PolicyTimelineQuery query);
 
     /** 分页查询本公司指定申请的历轮提交和审核记录。 */
     com.company.policy.vo.PolicyResponse.Page<AuditSummary> auditLogs(

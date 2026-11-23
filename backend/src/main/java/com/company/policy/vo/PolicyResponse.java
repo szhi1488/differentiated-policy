@@ -18,7 +18,13 @@ public record PolicyResponse(
             String perspective,
             List<String> selectedPlatforms,
             String createdAt,
-            String updatedAt) {}
+            String updatedAt,
+            String endTime,
+            String sourcePolicyCode,
+            boolean adjustmentOnly,
+            String earliestEnd,
+            boolean canExtend,
+            boolean canShorten) {}
 
     public record Detail(
             String id,
@@ -28,7 +34,18 @@ public record PolicyResponse(
             int submissionVersion,
             String applicantName,
             PolicyDraftRequest form,
-            List<ApplicantCatalogResponse> goods) {}
+            List<ApplicantCatalogResponse> goods,
+            String sourcePolicyCode,
+            List<PolicyConsent.EndAdjustment> endAdjustments,
+            ApprovedEnd approvedEnd,
+            String adjustmentSourceEnd) {}
+
+    public record ApprovedEnd(
+            String requestPolicyCode,
+            String targetAuditId,
+            String actualEnd,
+            String approvedAt,
+            PolicyConsent.EndAdjustment change) {}
 
     public record Snapshot(
             String id,
@@ -38,7 +55,8 @@ public record PolicyResponse(
             int submissionVersion,
             PolicyDraftRequest form,
             List<ApplicantCatalogResponse> goods,
-            @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode) {
         public Snapshot(
                 String id,
                 String policyCode,
@@ -47,7 +65,37 @@ public record PolicyResponse(
                 int submissionVersion,
                 PolicyDraftRequest form,
                 List<ApplicantCatalogResponse> goods) {
-            this(id, policyCode, applicantId, applicantName, submissionVersion, form, goods, null);
+            this(
+                    id,
+                    policyCode,
+                    applicantId,
+                    applicantName,
+                    submissionVersion,
+                    form,
+                    goods,
+                    null,
+                    null);
+        }
+
+        public Snapshot(
+                String id,
+                String policyCode,
+                String applicantId,
+                String applicantName,
+                int submissionVersion,
+                PolicyDraftRequest form,
+                List<ApplicantCatalogResponse> goods,
+                PolicyConsent consent) {
+            this(
+                    id,
+                    policyCode,
+                    applicantId,
+                    applicantName,
+                    submissionVersion,
+                    form,
+                    goods,
+                    consent,
+                    null);
         }
 
         public Snapshot withConsent(PolicyConsent value) {
@@ -59,7 +107,8 @@ public record PolicyResponse(
                     submissionVersion,
                     form,
                     goods,
-                    value);
+                    value,
+                    sourcePolicyCode);
         }
     }
 

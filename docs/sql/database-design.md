@@ -2,6 +2,22 @@
 
 更新日期：2026-11-20。十五表空库基线适用于 MySQL 8.0.16+，包含用户头像字段 `avatar_url` 和商品政策名 `policy_name`。公司所有有效管理员共用源商品、清洗结果和标准目录。后端须在建立会话前校验公司飞书租户，并在请求时校验有效身份及权限。政策三表已纳入空库脚本。申请人政策接口和商品引用检查已使用政策三表，目标 MySQL 待联调。2026-11-17 用户管理五个接口直接复用本基线，没有新增字段、表或迁移。
 
+## 已有库升级政策延期
+
+已有项目库停写并备份后，由用户在 Navicat 选中目标库，一次执行[政策延期升级脚本](upgrade_policy_extensions.sql)。前提为 MySQL 8.0.16+，已有 `policy_apply` 及其 `(id, tenant_key)` 唯一索引，尚无 `extension_source_id`。脚本用一次 ALTER 增加可空的原单 ID、同租户自引用外键和唯一索引。普通申请及独立缩短申请该字段为 NULL。独立或随单生成的延期单在此记录本人已通过的来源政策。时间调整使用现有表单和快照 JSON，已具备该列、索引和外键的库无需为原因、证明或批量延期增设字段。创建延期时使用原单实际截止的下一秒。
+
+核对 `policies_before = policies_after`、`extensions_after = 0`，建表结果应含 `uk_apply_extension_source` 和 `fk_apply_extension_source`。核对后启动新版服务。空库直接使用当前完整基线。延期草稿可按原草稿删除规则删除；延期已通过后可从新单继续延长。
+
+2026-11-23 的 Navicat 回显显示延期字段、唯一索引和外键所在的 `ALTER TABLE` 已执行成功。验收查询的回显只有 `OK`，仍需看结果网格中的行数与 `invalid_extensions`（预期为 0）。已完成结构升级的库可单独运行脚本末尾的核对查询。
+
+## 清空政策提交后重新验证
+
+[清空政策提交脚本](clear_policy_submissions.sql) 用于已完成延期升级、需要从头验证提交的库。它清空所选库内**所有申请人**的草稿、延期单、待审单、已通过及已驳回的申请，也清空各轮补贴决定、审核记录和政策商品明细。账号、角色、平台分工、商品目录和磁盘附件均在本脚本的范围之外。
+
+1. 停止后端写入并备份目标库。在 Navicat 同一查询窗口按段执行，先核对库名和三表记录数。
+2. 运行脚本的事务段，查看结果网格中的 `applications_left`、`audit_rounds_left` 和 `goods_details_left`。三项均为 0 且确认清空时，在原窗口单独执行 `COMMIT;`。提交前要取消时，在原窗口执行 `ROLLBACK;`。脚本末尾的提交和回滚命令都已注释，需要手动选择。
+3. 提交后，在同一库的新查询窗口复查三个余量，并刷新已打开的表格页，再恢复写入。此次执行回显为删除 20 条商品明细、6 条审核记录、7 条申请，解除延期引用影响 0 行。该回显只记录事务内执行的行数，最终以提交后的复查为准。
+
 ## 已有十四表库升级步骤
 
 2026-11-19 的两项增量适用于已有原始 SKU 一对一基线的十四表库。由用户停止后端写入、备份目标库，在 Navicat 核对库名和当前结构。两项都待升级时，先回填商品名称与政策名，再升级自动排除约束。已完成的步骤通过脚本的核对查询确认。两个差异数均为 0、两处约束均核对通过后启动新版后端。需要整体回退时，在停写期间恢复升级前备份并切回旧版。
@@ -135,6 +151,40 @@
 
 本人未提交草稿允许物理删除 `policy_apply`，条件为 `DRAFT`、`current_version=0`、本人归属、`is_deleted=0` 和当前记录版本，并排除已有 `policy_audit_log`、`policy_goods_detail` 引用。删除与保存、提交采用同一主表行的条件写入。其他状态的申请及历史继续保留，磁盘附件独立处理。
 
+#### 在 Navicat 核对逐段采用决定
+
+从 `policy_apply.id` 找到申请，再按 `policy_audit_log.policy_id` 和 `version` 打开对应提交轮次，展开 `snapshot_data.consent`。正式提交成功时，后端把决定与本轮快照、商品明细一起写入同一事务。只在预览窗口勾选或点「返回核对」时，选择仍在页面中。
+
+| 快照字段 | 可以核对的内容 |
+| --- | --- |
+| `comparedRounds` | 当时参与对照的旧申请 ID、提交轮次和审核日志 ID |
+| `decisions[].scope` | 本段适用的平台，以及零售的具体商品或百亿的机型版本、RAM 和 ROM |
+| `decisions[].from`、`through` | 本段开始与结束的北京时间，包含首尾秒 |
+| `decisions[].groups`、`eligiblePolicyIds`、`selectedPolicyIds` | 该段的分组、候选申请 ID 和实际选中的申请 ID |
+
+例如两单重叠，第一段只用 A，第二段 A、B 叠加，两段分别保存自己的起止和选中名单。无冲突直提的新单保存规则版本和空的 `decisions`。早期快照可能缺少 `consent`，回查时沿用对应历史规则。[审核与旧单兼容](../api/admin-api.md#覆盖预览与有效政策)
+
+审核通过后，机型补贴查询读取已通过的轮次及其快照。时间轴的实际采用、未采用和后续安排在查询时逐段计算。服务重启后可据此还原结果，后续有新单获批时再查会反映新安排。[机型补贴查询契约](../api/page-api-plan.md#查询补贴历史)
+
+<a id="在-navicat-核对整单提前结束记录"></a>
+
+#### 在 Navicat 按发起单或原单核对时间调整
+
+独立时间调整草稿保存在 `policy_apply.goods_form_json` 的 `$.timeAdjustment`，正式提交时冻结于本轮 `policy_audit_log.snapshot_data` 的 `$.form.goodsForm.timeAdjustment`。该对象记录本次核对的旧单和所提的新截止、原因、文件。独立缩短还会由服务端将这一项写入 `$.consent.endAdjustments`，审核后供原政策计算实际截止。该缩短申请不新增 `policy_goods_detail` 商品明细。独立延期通过 `extension_source_id` 指向原单，延期单有自己的明细。
+
+随单调整的每个目标占发起申请本轮 `$.consent.endAdjustments` 的一项。点「确认调整」只重算预览，正式提交后才有审核记录。例如 `ZC-000020` 同时缩短 `ZC-000017`、延长 `ZC-000016`，在本公司筛选 `policy_audit_log.policy_id = 20`，按 `version` 打开对应快照，可在数组里找到 `target.policyId` 为 `"17"`、`"16"` 的两项。逐段选择的政策名单另在 `decisions`。[逐段决定的快照字段](#在-navicat-核对逐段采用决定)
+
+| 调整项字段 | 可核对的内容 |
+| --- | --- |
+| `target.policyId`、`target.auditLogId` | 目标旧单的 `policy_apply.id` 及其获批轮次的 `policy_audit_log.id` |
+| `target.previousEnd` | 申请调整时核对的旧单实际截止秒，包括此前已批准的缩短 |
+| `endTime`、`reason` | 新截止及必填原因。`endTime` 早于 `previousEnd` 表示缩短，晚于表示延长，两者均使用 `+08:00`、精确到秒 |
+| `attachmentInfo` | 本项目标的上传文件 ID 和服务端文件名。可省略，未保存调整附件的旧轮次按无文件读取 |
+
+每个调整项的审核结果取发起单对应轮次的 `policy_audit_log`。`SUBMITTED` 为整批待审，`REJECTED` 为整批驳回，两个状态下调整均留在快照，原政策继续按此前的截止执行。该轮 `APPROVED` 后，缩短作用于目标旧单全部平台和商品。若批准晚于所填截止，旧单保留到批准前一秒。多次获批缩短取最早的实际截止。随单延期在同一审批事务为每张原单生成真实的已通过子单。子单通过 `extension_source_id` 关联原单，`$.consent.batchPolicyKey` 保存预览及逐段决定中该延期的标识，可与发起单该轮对照。子单承接原实际截止的下一秒，原单主表和原获批快照仍保留原值。[审批与生效规则](../api/policy-api.md#整单提前结束)
+
+只读查询的 `tenant_key` 填本企业，`request_id` 和 `target_id` 分别按发起单和原单筛选。比如按发起单查填 `20`、`NULL`，按旧单反查填 `NULL`、`17`。`adjustment_direction` 为 `SHORTEN` 或 `EXTEND`。仅已生效的批准缩短显示本轮的 `approved_through`，延期的 `approved_through` 为空。每个发起单、每个提交轮次、每个目标各列一次，批量获批生成的子单不再重复计入。早期独立延期若未保存 `timeAdjustment`，可通过 `extension_source_id` 查看原单及延期单的起止，查询不推算其原因。[时间调整只读查询](query_policy_end_adjustments.sql)
+
 ### 数据库与服务端校验
 
 | 范围 | 数据库 | 服务端 |
@@ -142,7 +192,7 @@
 | 身份与历史 | 同租户账号外键、每单每轮唯一、明细关联本轮、外键限制删除 | 校验有效身份和权限，正常业务过滤主表逻辑删除，保护每轮快照与历史明细 |
 | 平台与颜色 | 正式明细平台编码、商品复合外键、同轮同平台同商品唯一 | 校验渠道与整单平台、卡片与方案分配、选中商品在售、同平台跨卡重复选中同一商品 |
 | 数量和补贴 | 快照和草稿使用 JSON 对象 | 指定颜色按平台选填参考数量，留空保存为 NULL，填写 0 原样保存。补贴仅保存所选方式的参数，金额按 `DECIMAL(10,2)`、比例按 `DECIMAL(5,2)` 百分数的精度校验 |
-| 日期和提交完整性 | 同时填写时校验开始时刻早于表单结束时刻 | 草稿保留未填项，提交完整校验。时间为北京时间，精确到秒。规则上线起按获批快照的截止日期判定，结束日有效至 23:59:59 |
+| 日期和提交完整性 | 同时填写时校验开始时刻早于表单结束时刻 | 草稿保留未填项，提交完整校验。时间为北京时间，精确到秒。普通原单原定有效至快照截止日 23:59:59，延期单按所选截止秒，获批的整单提前结束进一步限定旧单截止 |
 
 ### 权限、历史与任务
 
@@ -366,6 +416,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | --- | --- | --- | --- | --- |
 | id | BIGINT | 否 | 自增 | 申请主键 |
 | policy_no | VARCHAR(32) | 否 | — | 沿用的内部创建幂等标识；对外短单号由 id 生成 |
+| extension_source_id | BIGINT | 是 | NULL | 延期所承接的已通过政策 ID，按租户关联原单。每张原单最多一张直接延期单 |
 | tenant_key | VARCHAR(64) | 否 | — | 会话确定的租户 |
 | applicant_id | BIGINT | 否 | — | 同租户的本地账号 |
 | applicant_name | VARCHAR(64) | 否 | — | 申请人姓名快照 |
@@ -374,7 +425,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | write_off_type | VARCHAR(20) | 是 | NULL | SALES 或 ACTIVATION |
 | scene_types | JSON | 是 | NULL | 零售实际选择的场景数组，1–3 个互不重复的 NATIONAL_SUB、LOCAL_SUB、SELF_SUB；空草稿及百亿使用 SQL NULL |
 | is_estimated | TINYINT | 是 | NULL | 0 否、1 是，百亿为空 |
-| start_time、end_time | DATETIME | 是 | NULL | 开始时间、截止时间。北京时间，精确到秒，生效查询使用该轮快照 |
+| start_time、end_time | DATETIME | 是 | NULL | 表单开始时间、截止时间，均为北京时间。实际有效期按获批快照与后续获批的整单提前结束决定计算 |
 | remark | TEXT | 是 | NULL | 特别备注，申请唯一备注字段 |
 | goods_form_json | JSON | 是 | NULL | 可回填的商品卡、选品、联动及方案 |
 | attachment_urls | JSON | 是 | NULL | 附件文件 ID 和外部链接列表 |
@@ -394,7 +445,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | policy_id | BIGINT | 否 | — | 关联 policy_apply.id |
 | tenant_key | VARCHAR(64) | 否 | — | 与申请及审核人相同 |
 | version | INT UNSIGNED | 否 | — | 提交轮次，从 1 开始 |
-| snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品、附件引用及本轮适用范围决定（旧快照缺少 `consent`）。由 Java 记录类 `PolicySnapshotData` 定义格式。[快照读写与旧数据兼容](../api/policy-api.md#提交快照的存储与兼容) |
+| snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品、附件引用及本轮适用范围决定。随单时间调整和独立缩短写入 `$.consent.endAdjustments`，独立调整保存在 `$.form.goodsForm.timeAdjustment`，旧快照可缺少 `consent`。由 Java 记录类 `PolicySnapshotData` 定义格式。[快照读写与旧数据兼容](../api/policy-api.md#提交快照的存储与兼容) |
 | audit_status | VARCHAR(20) | 否 | SUBMITTED | SUBMITTED、APPROVED、REJECTED |
 | auditor_id | BIGINT | 是 | NULL | 同租户的审核人账号 |
 | auditor_name | VARCHAR(64) | 是 | NULL | 审核人姓名快照 |

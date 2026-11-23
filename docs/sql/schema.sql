@@ -336,6 +336,7 @@ CREATE TABLE `catalog_operation_log` (
 CREATE TABLE `policy_apply` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '政策申请主键',
   `policy_no` VARCHAR(32) NOT NULL COMMENT '政策单号，创建草稿时生成',
+  `extension_source_id` BIGINT DEFAULT NULL COMMENT '本次延期承接的已通过政策 ID',
   `tenant_key` VARCHAR(64) NOT NULL COMMENT '申请所属租户，由会话确定',
   `applicant_id` BIGINT NOT NULL COMMENT '本地申请人 ID',
   `applicant_name` VARCHAR(64) NOT NULL COMMENT '申请人姓名快照',
@@ -358,12 +359,15 @@ CREATE TABLE `policy_apply` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_apply_policy_no` (`policy_no`),
+  UNIQUE KEY `uk_apply_extension_source` (`extension_source_id`, `tenant_key`),
   UNIQUE KEY `uk_apply_tenant_binding` (`id`, `tenant_key`),
   KEY `idx_apply_mine` (`applicant_id`, `tenant_key`, `is_deleted`, `created_at`, `id`),
   KEY `idx_apply_status` (`tenant_key`, `is_deleted`, `status`, `created_at`, `id`),
 
   CONSTRAINT `fk_apply_applicant`
     FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `fk_apply_extension_source`
+    FOREIGN KEY (`extension_source_id`, `tenant_key`) REFERENCES `policy_apply` (`id`, `tenant_key`),
   CONSTRAINT `ck_apply_channel` CHECK (`channel_type` IN ('RETAIL', 'BILLION')),
   CONSTRAINT `ck_apply_platforms` CHECK (`platforms` IS NULL OR JSON_TYPE(`platforms`) = 'ARRAY'),
   CONSTRAINT `ck_apply_goods_form` CHECK (`goods_form_json` IS NULL OR JSON_TYPE(`goods_form_json`) = 'OBJECT'),

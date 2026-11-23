@@ -16,7 +16,7 @@ import { createWorkspaceRouter } from '../../src/router'
 import { createMemoryHistory } from 'vue-router'
 import { createAuthSession, authSession } from '../../src/composables/useAuthSession'
 import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
-import { direct, matchedPreview } from '../fixtures/policy-applicability'
+import { direct, endOption, matchedPreview } from '../fixtures/policy-applicability'
 import { createForm, policyModelKey } from '../../src/utils/policy-form'
 
 const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
@@ -85,6 +85,7 @@ let submitResponseMode
 let auditRounds
 let submissionVersion
 let uploadFailure
+let rejectedAdjustments
 beforeEach(() => {
   permitted = retail
   rows = catalog
@@ -97,6 +98,7 @@ beforeEach(() => {
   auditRounds = []
   submissionVersion = 0
   uploadFailure = null
+  rejectedAdjustments = []
   fetchMock = vi.fn(async (path, init) => {
     const url = new URL(path, 'http://test.local')
     if (url.pathname === '/api/policies/platforms') {
@@ -112,8 +114,14 @@ beforeEach(() => {
     if (url.pathname.startsWith('/api/attachments/') && init.method === 'DELETE') {
       return reply(null, 204)
     }
-    if (url.pathname === '/api/catalog/options') {
+    if (
+      url.pathname === '/api/catalog/options' ||
+      url.pathname === '/api/catalog/subsidy-options'
+    ) {
       return reply(options)
+    }
+    if (url.pathname === '/api/policies/subsidy-timeline') {
+      return reply({ asOf: '2026-11-23T12:00:00+08:00', tracks: [] })
     }
     if (url.pathname === '/api/catalog/goods') {
       const filters = ['brandId', 'seriesId', 'spuId', 'ram', 'rom']
@@ -191,6 +199,14 @@ beforeEach(() => {
       if (submitFailure) {
         return reply({ code: 'POLICY_VALIDATION_FAILED', message: submitFailure }, 400)
       }
+      if (init.method === 'POST') {
+        expect(JSON.parse(init.body).recordVersion).toBe(version)
+        return reply({
+          snapshot: { form: draft, goods: rows },
+          applicability,
+          confirmationToken: 'adjusted-' + version,
+        })
+      }
       expect(Number(url.searchParams.get('recordVersion'))).toBe(version)
       return reply({
         snapshot: { form: draft, goods: rows },
@@ -204,7 +220,7 @@ beforeEach(() => {
       }
       if (submitResponseMode === 'no-longer-matched') {
         submitResponseMode = null
-        applicability = direct
+        applicability = { ...direct, adjustmentOptions: [endOption] }
         return reply({ code: 'POLICY_COVERAGE_CHANGED', message: '交叉范围变化' }, 409)
       }
       if (submitResponseMode === 'changed') {
@@ -230,7 +246,12 @@ beforeEach(() => {
       if (!draft) {
         return reply({ code: 'POLICY_NOT_FOUND', message: '未找到此申请。' }, 404)
       }
-      return reply({ ...record(), form: draft, goods: rows })
+      return reply({
+        ...record(),
+        form: draft,
+        goods: rows,
+        endAdjustments: savedStatus === 'REJECTED' ? rejectedAdjustments : [],
+      })
     }
     throw new Error(`意外请求 ${path}`)
   })
@@ -292,7 +313,72 @@ async function render(path = '/apply') {
   return router
 }
 
+async function openMenu(router, label) {
+  const navigated = new Promise((resolve) => {
+    const stop = router.afterEach(() => {
+      stop()
+      resolve()
+    })
+  })
+  await button(label).trigger('click')
+  await navigated
+  await flushPromises()
+}
+
 describe('申请人工作台组件协作', () => {
+  it(
+    '从申请表查负责的渠道平台，返回保留草稿，再进入时按最新分工查询',
+    { timeout: 15000 },
+    async () => {
+      permitted = [
+        { perspective: 'RETAIL', platformCode: 'PDD' },
+        { perspective: 'BILLION', platformCode: 'PDD' },
+      ]
+      const requests = () =>
+        fetchMock.mock.calls.map(([path]) => new URL(path, 'http://test.local'))
+      const queries = () =>
+        requests().filter((url) => url.pathname === '/api/policies/subsidy-timeline')
+      const platform = () =>
+        wrapper.findAllComponents(ElSelect).find((select) => select.props('ariaLabel') === '平台')
+      const router = await render()
+      await wrapper.get('[aria-label="特别备注"]').setValue('查补贴后继续填写')
+      await openMenu(router, '机型补贴查询')
+      expect(queries()).toHaveLength(1)
+      expect(wrapper.findAll('h1').map((el) => el.text())).toEqual(['机型补贴查询'])
+      expect(
+        platform()
+          .findAllComponents(ElOption)
+          .map((option) => option.props('label')),
+      ).toEqual(expect.arrayContaining(['全部负责平台', '零售 · 拼多多', '百亿 · 拼多多']))
+      expect(platform().findAllComponents(ElOption)).toHaveLength(3)
+      platform().vm.$emit('update:modelValue', 'BILLION:PDD')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(Object.fromEntries(queries().at(-1).searchParams)).toMatchObject({
+        perspective: 'BILLION',
+        platformCode: 'PDD',
+      })
+      await openMenu(router, '提交政策')
+      expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('查补贴后继续填写')
+      permitted = [{ perspective: 'RETAIL', platformCode: 'PDD' }]
+      await openMenu(router, '机型补贴查询')
+      expect(queries()).toHaveLength(3)
+      expect(queries().at(-1).searchParams.has('perspective')).toBe(false)
+      expect(
+        platform()
+          .findAllComponents(ElOption)
+          .map((option) => option.props('label')),
+      ).toEqual(['全部负责平台', '零售 · 拼多多'])
+      await openMenu(router, '我的提交')
+      permitted = []
+      await openMenu(router, '机型补贴查询')
+      expect(wrapper.text()).toContain('尚未分配负责平台')
+      expect(queries()).toHaveLength(3)
+      expect(wrapper.find('.model-subsidy-workspace').exists()).toBe(false)
+      expect(requests().some((url) => url.pathname.startsWith('/api/admin/'))).toBe(false)
+    },
+  )
+
   it('只列出当前渠道分给本人的平台，移交后可保留内容并手动移除', async () => {
     permitted = [
       { perspective: 'RETAIL', platformCode: 'JD' },
@@ -332,12 +418,303 @@ describe('申请人工作台组件协作', () => {
     expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('收起菜单后仍保留')
     await group.trigger('click')
     expect(group.attributes('aria-expanded')).toBe('true')
-    await button('我的提交').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('submissions'))
+    await openMenu(router, '我的提交')
+    expect(router.currentRoute.value.name).toBe('submissions')
     expect(button('我的提交').attributes('aria-current')).toBe('page')
-    await button('提交政策').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('apply'))
+    await openMenu(router, '提交政策')
+    expect(router.currentRoute.value.name).toBe('apply')
     expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('收起菜单后仍保留')
+  })
+
+  it('从我的提交选择已通过单的延期日期，用新单号重新核对延长时段', async () => {
+    const source = {
+      id: '100',
+      policyCode: 'ZC-000100',
+      status: 'APPROVED',
+      recordVersion: 3,
+      submissionVersion: 1,
+      perspective: 'RETAIL',
+      selectedPlatforms: ['JD'],
+      canExtend: true,
+      canShorten: true,
+      endTime: '2096-02-28T12:00:00+08:00',
+      updatedAt: '2026-11-01T12:00:00+08:00',
+    }
+    const originalFetch = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation(async (url, init) => {
+      if (url.startsWith('/api/policies/mine?')) {
+        return reply({ items: [source], total: 1, pageSize: 20 })
+      }
+      if (url === '/api/policies/100/time-adjustment-draft') {
+        expect(JSON.parse(init.body)).toEqual({
+          recordVersion: 3,
+          reason: '活动延期',
+          attachmentInfo: [],
+          expectedSourceEnd: source.endTime,
+          endTime: '2096-03-02T15:24:19+08:00',
+        })
+        version = 1
+        draft = {
+          perspective: 'RETAIL',
+          selectedPlatforms: ['JD'],
+          verifyType: 'SALES',
+          sceneTypes: ['NATIONAL_SUB'],
+          estimated: false,
+          specialRemark: '继承的原单备注',
+          startTime: '2096-02-28T12:00:01+08:00',
+          endTime: '2096-03-02T15:24:19+08:00',
+          attachmentInfo: [],
+          goodsForm: {
+            cards: [],
+            timeAdjustment: {
+              target: { policyId: source.id, previousEnd: source.endTime, auditLogId: '232' },
+              endTime: '2096-03-02T15:24:19+08:00',
+              reason: '活动延期',
+              attachmentInfo: [],
+            },
+          },
+        }
+        return reply({
+          id: '321',
+          policyCode: 'ZC-000321',
+          status: 'DRAFT',
+          recordVersion: 1,
+          submissionVersion: 0,
+        })
+      }
+      if (url === '/api/policies/321') {
+        return reply({
+          id: '321',
+          policyCode: 'ZC-000321',
+          sourcePolicyCode: source.policyCode,
+          status: 'DRAFT',
+          recordVersion: version,
+          submissionVersion: 0,
+          applicantName: '申请人',
+          form: draft,
+          goods: [],
+        })
+      }
+      if (url === '/api/policies/321/time-adjustment-date') {
+        expect(JSON.parse(init.body)).toEqual({
+          recordVersion: version,
+          reason: '活动延期',
+          attachmentInfo: [],
+          endTime: '2096-03-02T15:24:19+08:00',
+        })
+        return reply({ id: '321', recordVersion: ++version, status: 'DRAFT', submissionVersion: 0 })
+      }
+      return originalFetch(url, init)
+    })
+    applicability = matchedPreview()
+    applicability.scopes[0].segments = [
+      {
+        ...applicability.scopes[0].segments[0],
+        from: '2096-03-01T00:00:00+08:00',
+        through: '2096-03-02T15:24:19+08:00',
+      },
+    ]
+    const router = await render('/apply/submissions')
+    await button('调整政策时间').trigger('click')
+    expect(button('创建调整草稿').element.disabled).toBe(true)
+    await button('取消').trigger('click')
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/time-adjustment-draft'))).toBe(false)
+    await button('调整政策时间').trigger('click')
+    wrapper.findComponent(ElDatePicker).vm.$emit('update:modelValue', '2096-03-02T15:24:19')
+    await flushPromises()
+    expect(button('创建调整草稿').element.disabled).toBe(true)
+    await wrapper.get('textarea[aria-label="调整原因"]').setValue('活动延期')
+    await button('创建调整草稿').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/apply?policyId=321'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('继承的原单备注')
+    expect(wrapper.text()).toContain('ZC-000100')
+    expect(wrapper.find('[aria-label="特别备注"]').exists()).toBe(false)
+    await confirmFormSubmission()
+    expect(wrapper.text()).toContain('2096-03-01 00:00:00')
+    await wrapper.get('.scope-segment input[value="118"]').setValue(true)
+    await button('确认整单并提交').trigger('click')
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    await button('确认提交').trigger('click')
+    await flushPromises()
+    const submits = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
+    expect(submits).toHaveLength(1)
+    expect(submits[0][0]).toBe('/api/policies/321/submit')
+    expect(JSON.parse(submits[0][1].body).decisions[0].through).toBe('2096-03-02T15:24:19+08:00')
+    expect(savedStatus).toBe('PENDING')
+  })
+
+  it.each(['DRAFT', 'REJECTED'])(
+    '本人仅保留一个原单平台时，独立缩短申请更新原因和证明后只提交一次自身调整（%s）',
+    async (initialStatus) => {
+      permitted = [{ perspective: 'RETAIL', platformCode: 'JD' }]
+      const change = {
+        target: { policyId: '100', auditLogId: '231', previousEnd: '2096-02-28T23:59:59+08:00' },
+        endTime: '2096-02-21T03:02:01+08:00',
+        reason: '提前下线',
+      }
+      draft = {
+        perspective: 'RETAIL',
+        selectedPlatforms: ['JD', 'PDD'],
+        verifyType: 'SALES',
+        sceneTypes: ['NATIONAL_SUB'],
+        estimated: false,
+        startTime: '2096-02-01T00:00:00+08:00',
+        endTime: change.target.previousEnd,
+        attachmentInfo: [],
+        goodsForm: {
+          timeAdjustment: change,
+          cards: [
+            {
+              key: 'shared',
+              cardType: 'COMMON',
+              followsOrderPlatforms: true,
+              targets: [white],
+              subsidyPlans: [{ key: 's', subsidyMode: 'FIXED', fixedAmount: '3.00' }],
+              platformAssignments: ['JD', 'PDD'].map((platformCode) => ({
+                platformCode,
+                planKey: 's',
+              })),
+            },
+          ],
+        },
+      }
+      savedStatus = initialStatus
+      if (initialStatus === 'REJECTED') {
+        submissionVersion = 1
+        rejectedAdjustments = [change]
+      }
+      version = 1
+      const originalFetch = fetchMock.getMockImplementation()
+      fetchMock.mockImplementation(async (path, init) => {
+        if (path === '/api/policies/321/time-adjustment-date') {
+          const input = JSON.parse(init.body)
+          expect(input).toMatchObject({
+            recordVersion: 1,
+            reason: '取消活动',
+            endTime: change.endTime,
+            attachmentInfo: [{ id: 'file-通知.pdf', originalName: '通知.pdf' }],
+          })
+          return reply({
+            id: '321',
+            recordVersion: ++version,
+            status: savedStatus,
+            submissionVersion,
+          })
+        }
+        return originalFetch(path, init)
+      })
+      await render('/apply?policyId=321')
+      expect(wrapper.text()).toContain('提前结束申请')
+      const reason = wrapper.get('textarea[aria-label="调整原因"]')
+      await reason.setValue('  ')
+      expect(button('核对并提交调整').element.disabled).toBe(true)
+      await reason.setValue('取消活动')
+      const picker = wrapper.get('input[aria-label="上传调整证明文件"]')
+      Object.defineProperty(picker.element, 'files', {
+        configurable: true,
+        value: [new File(['data'], '通知.pdf')],
+      })
+      await picker.trigger('change')
+      await flushPromises()
+      expect(button('核对并提交调整').element.disabled).toBe(false)
+      await confirmFormSubmission()
+      expect(
+        fetchMock.mock.calls
+          .filter(([url]) => url.endsWith('/submit'))
+          .map(([, init]) => JSON.parse(init.body)),
+      ).toEqual([{ recordVersion: 2, confirmationToken: 'scope-2' }])
+      expect(savedStatus).toBe('PENDING')
+    },
+  )
+
+  it('提交普通申请时，没有交叉即使有可提前结束的旧单也直接送审', async () => {
+    applicability = { ...direct, adjustmentOptions: [endOption] }
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    await confirmFormSubmission()
+    expect(wrapper.find('.submission-coverage-dialog').exists()).toBe(false)
+    const submissions = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
+    expect(submissions).toHaveLength(1)
+    expect(JSON.parse(submissions[0][1].body)).toEqual({ recordVersion: 1 })
+    expect(savedStatus).toBe('PENDING')
+  })
+
+  it('主动提前结束时可取消返回表单，核对后须再确认整单才送审', async () => {
+    applicability = { ...direct, adjustmentOptions: [endOption] }
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    await wrapper.get('[aria-label="特别备注"]').setValue('申请备注')
+    const posts = (suffix) =>
+      fetchMock.mock.calls.filter(([path, init]) => path.endsWith(suffix) && init.method === 'POST')
+    const openEditor = async () => {
+      await button('调整政策时间').trigger('click')
+      await flushPromises()
+      return wrapper.get('.policy-end-dialog')
+    }
+    const initial = await openEditor()
+    expect(initial.text()).toContain('调整政策时间')
+    await initial
+      .findAll('button')
+      .find((action) => action.text() === '取消')
+      .trigger('click')
+    await flushPromises()
+    expect(posts('/submit')).toHaveLength(0)
+    expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('申请备注')
+    expect(wrapper.find('.submission-coverage-dialog').exists()).toBe(false)
+
+    const editor = await openEditor()
+    await editor.get('.end-options input[value="518"]').setValue(true)
+    await button('添加所选政策').trigger('click')
+    editor.getComponent(ElDatePicker).vm.$emit('update:modelValue', '2026-12-15T12:34:56')
+    await editor.get('textarea').setValue('平台活动提前结束')
+    await button('核对调整').trigger('click')
+    await flushPromises()
+    expect(posts('/submission-preview')).toHaveLength(0)
+    await button('确认调整').trigger('click')
+    await flushPromises()
+    const endAdjustments = [
+      {
+        target: endOption.target,
+        endTime: '2026-12-15T12:34:56+08:00',
+        reason: '平台活动提前结束',
+      },
+    ]
+    const recordVersion = version
+    expect(posts('/submission-preview')).toHaveLength(1)
+    expect(JSON.parse(posts('/submission-preview')[0][1].body)).toEqual({
+      recordVersion,
+      endAdjustments,
+    })
+    expect(posts('/submit')).toHaveLength(0)
+    await button('确认整单并提交').trigger('click')
+    expect(posts('/submit')).toHaveLength(0)
+    await button('确认提交').trigger('click')
+    await flushPromises()
+    expect(posts('/submit')).toHaveLength(1)
+    expect(JSON.parse(posts('/submit')[0][1].body)).toEqual({
+      recordVersion,
+      confirmationToken: 'adjusted-' + recordVersion,
+      decisions: [],
+      endAdjustments,
+    })
+    expect(savedStatus).toBe('PENDING')
+  })
+
+  it('主动提前结束但没有候选旧单时停在表单并保留草稿', async () => {
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    await button('调整政策时间').trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/submission-preview?'))).toBe(true)
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    expect(savedStatus).toBe('DRAFT')
+    expect(wrapper.find('.submission-coverage-dialog').exists()).toBe(false)
+    expect(wrapper.find('.policy-end-dialog').exists()).toBe(false)
+    expect(wrapper.find('.policy-model-card').exists()).toBe(true)
   })
 
   it('返回编辑保留已保存草稿、商品及附件，直至逐段确认执行政策', async () => {
@@ -364,18 +741,31 @@ describe('申请人工作台组件协作', () => {
     await confirmFormSubmission()
     await wrapper.get('.scope-segment input[value="118"]').setValue(true)
     await wrapper.get('.scope-segment input[value="119"]').setValue(true)
-    await wrapper.get('[aria-label="覆盖商品关键词"]').setValue('不会命中的商品')
-    expect(wrapper.text()).toContain('没有符合条件的交叉时段')
     await button('确认整单并提交').trigger('click')
+    expect(wrapper.text()).toContain('确认提交整单？')
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(0)
+    await button('返回核对').trigger('click')
+    expect(savedStatus).toBe('DRAFT')
+    expect(wrapper.findAll('.scope-segment')).toHaveLength(2)
+    expect(wrapper.get('.scope-segment input[value="118"]').element.checked).toBe(true)
+    expect(wrapper.get('.scope-segment input[value="119"]').element.checked).toBe(true)
+    expect(wrapper.get('.scope-footer').text()).toContain('2 / 2')
+    expect(wrapper.text()).toContain('审批资料.pdf')
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(0)
+    await button('确认整单并提交').trigger('click')
+    const submit = button('确认提交')
+    await Promise.all([submit.trigger('click'), submit.trigger('click')])
     await flushPromises()
-    const posted = JSON.parse(fetchMock.mock.calls.find(([url]) => url.endsWith('/submit'))[1].body)
+    const requests = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
+    expect(requests).toHaveLength(1)
+    const posted = JSON.parse(requests[0][1].body)
     expect(posted.confirmationToken).toBe('scope-2')
     expect(posted.decisions.map((d) => d.selectedPolicyIds)).toEqual([['118'], ['119']])
     expect(savedStatus).toBe('PENDING')
   })
 
   it.each([false, true])(
-    '直提或确认后范围变化，清除所有旧决定并展示最新时段（原先有命中 %s）',
+    '直提或确认后范围变化，重新展示全部时段并按最新选择送审（原先有命中 %s）',
     async (hit) => {
       if (hit) {
         applicability = matchedPreview()
@@ -389,6 +779,7 @@ describe('申请人工作台组件协作', () => {
         await wrapper.get('.scope-segment input[value="118"]').setValue(true)
         await wrapper.get('.scope-segment input[value="119"]').setValue(true)
         await button('确认整单并提交').trigger('click')
+        await button('确认提交').trigger('click')
         await flushPromises()
       }
       expect(wrapper.text()).toContain('适用范围已变化')
@@ -397,10 +788,19 @@ describe('申请人工作台组件协作', () => {
       expect(
         fetchMock.mock.calls.filter(([url]) => url.includes('/submission-preview?')),
       ).toHaveLength(2)
-      await button('返回编辑').trigger('click')
-      await flushPromises()
-      expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(1)
+      expect(wrapper.findAll('.scope-segment')).toHaveLength(2)
+      expect(wrapper.get('.scope-segment input[value="119"]').element.checked).toBe(false)
       expect(savedStatus).toBe('DRAFT')
+      await wrapper.get('.scope-segment input[value="238"]').setValue(true)
+      await wrapper.get('.scope-segment input[value="119"]').setValue(true)
+      await button('确认整单并提交').trigger('click')
+      await button('确认提交').trigger('click')
+      await flushPromises()
+      const submissions = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
+      expect(submissions).toHaveLength(2)
+      const retried = JSON.parse(submissions[1][1].body)
+      expect(retried.decisions.map((d) => d.selectedPolicyIds)).toEqual([['238'], ['119']])
+      expect(savedStatus).toBe('PENDING')
     },
   )
 
@@ -414,6 +814,7 @@ describe('申请人工作台组件协作', () => {
     await wrapper.get('.scope-segment input[value="118"]').setValue(true)
     await wrapper.get('.scope-segment input[value="119"]').setValue(true)
     await button('确认整单并提交').trigger('click')
+    await button('确认提交').trigger('click')
     await flushPromises()
     const submits = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
     expect(submits).toHaveLength(2)
@@ -724,6 +1125,84 @@ describe('申请人工作台组件协作', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('国补、自补')
   })
+
+  it.each(['同一轮次', '已变更截止', '已无分工'])(
+    '驳回后保存并返回仍核对上轮批量调整、原因和文件（%s）',
+    async (scenario) => {
+      draft = {
+        perspective: 'RETAIL',
+        selectedPlatforms: ['JD'],
+        verifyType: 'SALES',
+        sceneType: 'NATIONAL_SUB',
+        estimated: false,
+        startTime: null,
+        endTime: null,
+        specialRemark: '',
+        attachmentInfo: [],
+        goodsForm: { cards: [] },
+      }
+      savedStatus = 'REJECTED'
+      version = 3
+      submissionVersion = 1
+      const target =
+        scenario === '已变更截止'
+          ? { ...endOption.target, previousEnd: '2026-12-27T12:34:56+08:00' }
+          : endOption.target
+      const files = [{ type: 'FILE', id: '上轮证明', originalName: '活动说明.pdf' }]
+      rejectedAdjustments = [
+        {
+          target: endOption.target,
+          endTime: '2026-12-15T12:34:56+08:00',
+          reason: '平台已确认',
+          attachmentInfo: files,
+        },
+      ]
+      applicability = {
+        ...direct,
+        adjustmentOptions: scenario === '已无分工' ? [] : [{ ...endOption, target }],
+      }
+      const router = await render('/apply?policyId=321')
+      await addModel()
+      await button('保存草稿').trigger('click')
+      await flushPromises()
+      await router.push('/apply/submissions')
+      await flushPromises()
+      await button('继续编辑').trigger('click')
+      await flushPromises()
+      if (scenario === '已无分工') {
+        await button('调整政策时间').trigger('click')
+        await flushPromises()
+      } else {
+        await confirmFormSubmission()
+      }
+      const editor = wrapper.get('.policy-end-dialog')
+      expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+      if (scenario === '已无分工') {
+        expect(editor.text()).toContain('这张政策已不可调整')
+        expect(button('核对调整').element.disabled).toBe(true)
+        await button('移除调整').trigger('click')
+      } else {
+        expect(editor.get('textarea').element.value).toBe('平台已确认')
+        expect(editor.text()).toContain('活动说明.pdf')
+        expect(editor.text()).toContain(target.previousEnd.slice(0, 19).replace('T', ' '))
+      }
+      await button('核对调整').trigger('click')
+      await flushPromises()
+      await button('确认调整').trigger('click')
+      await flushPromises()
+      if (scenario === '已无分工') {
+        await button('直接提交').trigger('click')
+      } else {
+        await button('确认整单并提交').trigger('click')
+        await button('确认提交').trigger('click')
+      }
+      await flushPromises()
+      const submitted = fetchMock.mock.calls.find(([url]) => url.endsWith('/submit'))
+      const expected = scenario === '已无分工' ? [] : [{ ...rejectedAdjustments[0], target }]
+      expect(JSON.parse(submitted[1].body).endAdjustments).toEqual(expected)
+      expect(submissionVersion).toBe(2)
+    },
+  )
 
   it('申请人仅查看当前申请和驳回原因，并以最新版本重新提交原单', async () => {
     draft = {

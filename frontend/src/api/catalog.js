@@ -32,8 +32,9 @@ export function readCatalogGoods(filters, signal) {
   return getPage(goodsPath, filters, signal)
 }
 
-export function readCatalogGoodsSummary(signal) {
-  return request(goodsPath + '/summary', { signal })
+export function readCatalogGoodsSummary(signal, { includeModelConfigurations = false } = {}) {
+  const query = includeModelConfigurations ? '?includeModelConfigurations=true' : ''
+  return request(goodsPath + '/summary' + query, { signal })
 }
 
 export function readCatalogGood(id, signal) {
@@ -156,4 +157,8 @@ export function readApplicantGoods(filters, signal) {
 
 export function readApplicantCatalogOptions(signal) {
   return request('/api/catalog/options', { signal })
+}
+
+export function readApplicantSubsidyOptions(signal) {
+  return request('/api/catalog/subsidy-options', { signal })
 }

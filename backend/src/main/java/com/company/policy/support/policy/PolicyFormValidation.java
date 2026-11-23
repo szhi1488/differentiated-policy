@@ -174,7 +174,7 @@ public final class PolicyFormValidation {
         for (Target target : targets) {
             id(target.spuId());
             require(
-                    matches(MEMORY, target.ram()) && matches(MEMORY, target.rom()),
+                    validMemory(target.ram()) && validMemory(target.rom()),
                     "商品配置须同时提供标准 RAM 和 ROM。");
             require(goods.add(id(target.goodsId())), "同一张商品卡片不能重复选择同一商品。");
         }
@@ -298,6 +298,10 @@ public final class PolicyFormValidation {
 
     private static boolean oneOf(String value, Set<String> values) {
         return value == null || values.contains(value);
+    }
+
+    public static boolean validMemory(String value) {
+        return matches(MEMORY, value);
     }
 
     private static boolean matches(Pattern pattern, String value) {

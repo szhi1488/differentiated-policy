@@ -4,10 +4,12 @@ import com.company.policy.common.config.AttachmentProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest.Link;
 import com.company.policy.mapper.PolicyAttachmentMapper;
+import com.company.policy.mapper.PolicyAttachmentMapper.FileReference;
 import com.company.policy.mapper.PolicyAttachmentMapper.Membership;
 import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.AttachmentService;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.support.policy.PolicyFormValidation;
 import com.company.policy.vo.AttachmentResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -20,6 +22,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -146,23 +149,47 @@ public class AttachmentServiceImpl implements AttachmentService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public List<Link> bind(List<Link> attachments, CurrentUserResponse user) {
+        var items = PolicyFormValidation.entries(attachments);
         var result = new ArrayList<Link>();
-        if (attachments.stream().anyMatch(item -> "FILE".equals(item.type()))) {
+        if (items.stream().anyMatch(item -> "FILE".equals(item.type()))) {
             lockOwner(user);
         }
-        for (var item : attachments) {
+        for (var item : items) {
             if ("FILE".equals(item.type())) {
-                var saved = authorized(item.id(), user);
-                if (!Files.isRegularFile(
-                        root.resolve(item.id()).resolve("content"), LinkOption.NOFOLLOW_LINKS)) {
-                    throw notFound();
-                }
-                result.add(new Link("FILE", null, item.id(), saved.attachment().originalName()));
+                result.add(ownedFile(item.id(), user));
             } else {
                 result.add(item);
             }
         }
         return result;
+    }
+
+    @Override
+    public List<Link> resolveChangeFiles(List<Link> files, CurrentUserResponse user) {
+        var listed = PolicyFormValidation.entries(files);
+        if (listed.size() > 10) {
+            throw PolicyFormValidation.invalid("每项期限变更最多上传 10 个文件。");
+        }
+        var ids = new HashSet<String>();
+        var result = new ArrayList<Link>();
+        for (var item : listed) {
+            if (!"FILE".equals(item.type())
+                    || item.id() == null
+                    || item.url() != null
+                    || !ids.add(item.id())) {
+                throw PolicyFormValidation.invalid("变更附件仅支持已上传的文件，每个文件只能添加一次。");
+            }
+            result.add(ownedFile(item.id(), user));
+        }
+        return List.copyOf(result);
+    }
+
+    private Link ownedFile(String id, CurrentUserResponse user) {
+        var saved = authorized(id, user);
+        if (!Files.isRegularFile(root.resolve(id).resolve("content"), LinkOption.NOFOLLOW_LINKS)) {
+            throw notFound();
+        }
+        return new Link("FILE", null, id, saved.attachment().originalName());
     }
 
     @Override
@@ -216,9 +243,12 @@ public class AttachmentServiceImpl implements AttachmentService {
         return policyContent(id, tenantKey, membership);
     }
 
-    private String fileReference(String id) {
+    private FileReference fileReference(String id) {
         try {
-            return json.writeValueAsString(Map.of("type", "FILE", "id", id));
+            var file = Map.of("type", "FILE", "id", id);
+            return new FileReference(
+                    json.writeValueAsString(file),
+                    json.writeValueAsString(Map.of("attachmentInfo", List.of(file))));
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法序列化政策附件引用。", error);
         }
@@ -255,11 +285,7 @@ public class AttachmentServiceImpl implements AttachmentService {
         authorized(id, user);
         Path directory = root.resolve(id);
         try {
-            var file = Map.of("type", "FILE", "id", id);
-            if (policies.attachmentReferenced(
-                    json.writeValueAsString(file),
-                    json.writeValueAsString(
-                            Map.of("form", Map.of("attachmentInfo", List.of(file)))))) {
+            if (policies.attachmentReferenced(fileReference(id))) {
                 throw new ApiException(
                         HttpStatus.CONFLICT,
                         "ATTACHMENT_REFERENCED",

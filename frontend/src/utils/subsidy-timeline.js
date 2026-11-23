@@ -8,6 +8,14 @@ export const timelineAxisTime = (value) => new Date(value).toISOString().slice(0
 export const timelineTimeText = (value) => value.replace('T', ' ')
 export const timelineTimeFromValue = (value) =>
   new Date(Math.floor(value / 1000) * 1000 + 8 * 3600000).toISOString().slice(0, 19)
+
+export function timelineMonthDates(beijingTime) {
+  const month = beijingTime.slice(0, 7)
+  const [year, monthNumber] = month.split('-').map(Number)
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10)
+  return [month + '-01', lastDay]
+}
+
 // 展示给业务人员的是包含在该段内的最后一秒。
 export const timelineLastSecond = (exclusiveEnd) =>
   timelineTimeFromValue(timelineTimeValue(exclusiveEnd) - 1000)
@@ -15,6 +23,20 @@ export const timelineDecimal = (value) =>
   String(value)
     .replace(/\.0+$/, '')
     .replace(/(\.\d*?)0+$/, '$1')
+
+export function timelineGoodsLabel(goods) {
+  return [...new Set(goods.map((g) => g.color || '#' + g.id))].join('、')
+}
+
+export function appendTimelinePart(parts, startAt, endAt, used, open, planned) {
+  const last = parts.at(-1)
+  const status = planned ? (used ? '计划采用' : '计划未采用') : undefined
+  if (last && last.used === used && last.status === status && last.endAt === startAt) {
+    Object.assign(last, { endAt, open })
+  } else {
+    parts.push({ startAt, endAt, used, open, status })
+  }
+}
 
 export function timelinePlanText(segment) {
   return segment.subsidyMode === 'FIXED'
@@ -34,61 +56,15 @@ export function timelinePlanCaption(segment) {
     : timelinePlanText(segment)
 }
 
-/** 只匹配示例已提供的适用区间，不在前端重建审核或覆盖算法。 */
+/** 时点按左闭右开区间匹配。 */
 export function timelineContainsAt(segment, at) {
   return Boolean(at && segment.startAt <= at && (!segment.endAt || at < segment.endAt))
 }
 
-/** 整理已给定的采用结果。同范围同一轮政策连续采用时共用起止，停用后恢复则另起一段。 */
-export function withPolicyUsePeriods(segments) {
-  const history = new Map()
-  function periodsFor(segment, plan) {
-    const key = JSON.stringify([
-      segment.channel,
-      segment.platformCode,
-      segment.trackId,
-      plan.policyCode,
-      plan.submissionVersion,
-    ])
-    if (!history.has(key)) {
-      history.set(key, [])
-    }
-    return history.get(key)
+export function timelineEndText(endAt, open = false) {
+  if (!endAt) {
+    return '尚无确定结束时间'
   }
-  const result = segments.map((segment) => ({ ...segment }))
-  for (const segment of [...result].sort((a, b) => a.startAt.localeCompare(b.startAt))) {
-    segment.excluded = segment.excluded.map((plan) => ({
-      ...plan,
-      usePeriods: periodsFor(segment, plan),
-    }))
-    segment.policies = segment.policies.map((plan) => {
-      const usePeriods = periodsFor(segment, plan)
-      let period = usePeriods.at(-1)
-      if (period && period.endAt === segment.startAt) {
-        period.endAt = segment.endAt
-      } else {
-        period = { startAt: segment.startAt, endAt: segment.endAt }
-        usePeriods.push(period)
-      }
-      return { ...plan, usePeriod: period, usePeriods }
-    })
-  }
-  return result
-}
-
-export function timelineEndText(endAt) {
-  return endAt ? timelineTimeText(timelineLastSecond(endAt)) : '尚无确定结束时间'
-}
-
-export function visibleTimelineSegments(segments, range, showIndependent, platformCode) {
-  if (range[0] > range[1]) {
-    return []
-  }
-  return segments.filter(
-    (segment) =>
-      (!platformCode || segment.platformCode === platformCode) &&
-      (showIndependent || segment.scope === 'NORMAL') &&
-      segment.startAt <= range[1] &&
-      (!segment.endAt || segment.endAt > range[0]),
-  )
+  const end = timelineTimeText(timelineLastSecond(endAt))
+  return open ? end + '（截至查询时）' : end
 }

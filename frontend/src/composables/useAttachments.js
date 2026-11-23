@@ -8,7 +8,11 @@ import {
 } from '../constants/attachments'
 
 /** 上传成功后保留服务端标识；失败保留原文件供用户手动重试。 */
-export function useAttachments({ onChange = () => {}, canEdit = () => true } = {}) {
+export function useAttachments({
+  onChange = () => {},
+  canEdit = () => true,
+  discardUnboundOnRestore = false,
+} = {}) {
   const files = ref([])
   const attachmentNotice = ref('')
   const attachmentsBusy = computed(() =>
@@ -33,6 +37,14 @@ export function useAttachments({ onChange = () => {}, canEdit = () => true } = {
   function restore(attachments = []) {
     revision++
     operation?.abort()
+    if (discardUnboundOnRestore) {
+      const kept = new Set(attachments.map((item) => item.id))
+      const removed = files.value.filter(
+        (file) => file.attachment && !file.bound && !kept.has(file.attachment.id),
+      )
+      // 草稿或历史轮次已绑定的文件由服务端保护，清理不影响下一份表单。
+      void Promise.allSettled(removed.map((file) => deleteAttachment(file.attachment.id)))
+    }
     files.value = attachments.map((attachment) => ({
       id: attachment.id,
       file: null,

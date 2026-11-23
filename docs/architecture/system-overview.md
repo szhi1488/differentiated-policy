@@ -10,9 +10,9 @@
 
 系统是嵌入飞书的公司内部 ERP，支持飞书客户端和普通浏览器访问，包含申请人与采购管理员两类角色。客户端通过 JS-SDK 免登，浏览器提供飞书扫码与网页 OAuth 授权，使用同一套服务端身份核验及会话。先完成申请、审核、查询闭环；不扩展结算、打款、库存或多级审批。
 
-飞书登录后按服务端 `user.roleType` 分流。ADMIN 进入「商品 → 源商品库」，其他角色沿用申请人工作台。申请人侧栏为「政策提交 → 提交政策 / 我的提交」，同一表单切换零售和百亿。管理员可从「商品」查看清洗任务和标准目录，从「政策管理 → 差异化政策」查看或审核已提交政策。[管理员工作台](admin-workspace.md)
+飞书登录后按服务端 `user.roleType` 分流。ADMIN 进入「商品 → 源商品库」，其他角色沿用申请人工作台。申请人侧栏为「政策提交 → 提交政策 / 我的提交 / 机型补贴查询」，同一表单切换零售和百亿。管理员可从「商品」查看清洗任务和标准目录，从「政策管理 → 差异化政策」查看或审核已提交政策。[管理员工作台](admin-workspace.md)
 
-两角色共用顶部栏，包含侧栏开关、当前位置、角色菜单搜索、帮助及登录人头像，侧栏复用同一份菜单视觉样式。申请人左下角的角色标识区已移除，手机保留两个直接入口。头像由登录服务保存到 `user_info.avatar_url`，经登录和会话接口的 `user.avatarUrl` 返回；缺失或加载失败显示姓名首字。[实现及验证](frontend-development.md#2026-11-15-共用顶部导航与飞书头像)
+两角色共用顶部栏，包含侧栏开关、当前位置、角色菜单搜索、帮助及登录人头像，侧栏复用同一份菜单视觉样式。申请人左下角的角色标识区已移除，手机保留三个直接入口。头像由登录服务保存到 `user_info.avatar_url`，经登录和会话接口的 `user.avatarUrl` 返回；缺失或加载失败显示姓名首字。[实现及验证](frontend-development.md#2026-11-15-共用顶部导航与飞书头像)
 
 ```mermaid
 flowchart LR
@@ -48,7 +48,7 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 
 ## 前端组件与页面现状
 
-管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 已提供静态预览。`AdminModelSubsidiesPage.vue` 组织紧凑筛选及补贴明细，`PolicySubsidyTimeline.vue` 通过 ECharts 6.1.0 自定义图与 SVGRenderer 上下展示零售、百亿区间；`useSubsidyTimelineNavigation` 共用指针和缩放状态，示例集中在 `mocks/fixtures/model-subsidies.js`。比例显示计算基数，支持当前标记、独立商品、色块点击和右侧时点查询；悬停保持底色、移开恢复边框，移动指针不重建图表。「当前时间」读取浏览器时钟，按北京时间将查询日期范围带到今天，恢复完整缩放并同步两图指针和右侧时点结果。机型摘要、独立指针操作栏、冗余说明及明细下拉框已移除。查询条件下方说明数据来自内置示例。页面不调用商品或政策业务接口；真实已通过政策历史计算及申请人端未接入，无后端或数据库调整。[页面规则](admin-workspace.md#机型补贴查询静态预览) · [既往验证](frontend-development.md#2026-11-16-紧凑查询区与当前时间定位)
+管理员「政策管理 → 机型补贴查询」`#/admin/model-subsidies` 从管理员目录读取机型配置，从政策时间轴接口读取两渠道的审核快照和分段名单。`useModelSubsidyQuery` 管理筛选、请求与重试，两张 SVG 时间轴及明细复用同一份响应。申请人从 `#/apply/model-subsidies` 进入同一查询页面，服务端根据当前分工限制渠道和平台。[查询契约](../api/page-api-plan.md#机型补贴查询) · [页面规则](admin-workspace.md#机型补贴查询)
 
 管理员五页及申请人提交政策、我的提交已统一侧栏、标题横幅和主内容区视觉：`workspace-sidebar-waves.png` 维护侧栏贴底波浪，`workspace-page-banner.png` 维护标题背景，`workspace-content-background.png` 在两角色布局的顶部导航下铺满正文区域。标题通过 `WorkspacePageHeading.vue` 复用 `AppIcon` SVG 线性图标，移除说明小字；共用 104px 横幅基准高度、桌面 22px／手机 20px 标题和 48px 图标底座。资源归属、裁切及响应式间距见[两角色工作台视觉](frontend-development.md#两角色工作台视觉)，各轮本地检查与模拟预览已记录，飞书真机仍待复测。
 
@@ -79,7 +79,7 @@ Element Plus 组件及样式通过 unplugin-vue-components 按需导入，中文
 | `views/admin/policies/AdminPoliciesPage.vue`、`AdminPolicyDetail.vue` | 政策状态页签、两行分区筛选、同尺寸查看和审核窗口、驳回原因小窗。筛选控件为 32px，标签位于上方；详情右侧将备注、附件及审核信息分区。普通机型可展开已选颜色，指定机型按平台显示颜色、数量和补贴 |
 | `views/apply/PolicyApplicationPage.vue` | `/apply` 页面入口，组装基础信息、时间、明细与附件区块；工作台确认渠道切换、取消平台及清空表单 |
 | `views/apply/components/PolicyGoodsPicker.vue`、`PolicyModelCard.vue`、`PolicySubsidyFields.vue` | 「指定适用机型」单选具体颜色成卡，「选择手机型号」新建普通卡，卡内可继续追加配置。卡片默认沿用整单平台，支持调整和分配补贴方案 |
-| `layouts/ApplicantLayout.vue`、`layouts/workspace-navigation.css` | 两端共用侧栏视觉。申请人「政策提交」可展开、收起，子菜单无圆点，底部角色标识区已移除；手机保留两个直接入口。布局持有表单状态，菜单收起和路由切换保留填写；身份变化及失效清理 |
+| `layouts/ApplicantLayout.vue`、`layouts/workspace-navigation.css` | 两端共用侧栏视觉。申请人「政策提交」可展开、收起，子菜单无圆点，底部角色标识区已移除；手机保留三个直接入口。布局持有表单状态，菜单收起和路由切换保留填写；身份变化及失效清理 |
 | `vite.config.js`、`tests/` | 按需导入组件及样式；Vitest 在 `tests/` 下收集单元、组件和集成测试，`setup.js` 为 jsdom 提供尺寸监听替身 |
 
 自定义 CSS 保留侧栏、横幅、业务网格、响应式布局和少量控件尺寸调整。`assets/styles/` 维护全局基础及品牌，工作台布局样式位于 `layouts/`，各页面样式随组件加载。桌面上机型卡片并列显示适用平台和补贴方案，平板和手机上改为上下排列。数量仅在指定适用机型卡中选填。手机上日期范围上下显示完整时间，日期弹层限制宽度并可纵向滚动。构建与验收见[前端工程检查与验收](frontend-harness.md)。
@@ -105,7 +105,7 @@ frontend/src/
   views/apply/                 政策申请页、我的提交及当前申请详情
     components/                基础、时间、明细和附件表单区块
   views/admin/catalog/         源商品库、商品清洗与识别、商品中心
-  views/admin/policies/        差异化政策审核及机型补贴静态预览
+  views/admin/policies/        差异化政策审核、机型补贴查询及两渠道时间轴
   views/admin/users/           用户管理、详情抽屉、分工弹窗及角色和启停确认弹窗
 
 backend/src/main/java/com/company/policy/
@@ -181,7 +181,9 @@ backend/src/main/java/com/company/policy/
 | 普通浏览器扫码、网页授权与回调 | 已实现，已看到真实二维码并验证模拟扫码回调。真实手机确认后的登录待联调。[飞书登录验证记录](feishu-auth-flow.md#验证记录) |
 | 会话恢复、退出、来源保护 | 已实现。角色调整后的旧会话分流已通过 Chrome 与隔离 H2 验证。真实飞书账号重新进入工作台和退出重登待复测。[验证记录](feishu-auth-flow.md#验证记录) |
 | 渠道显隐、平台独立明细、补贴切换 | 已实现前端交互 |
-| 草稿保存、回填、正式提交 | 零售保存实际多选场景。按最新分工预览，有可生效时段且整单无命中可直提；有交叉时按机型配置核对，提交保存原始商品范围、时段决定与本轮快照 |
+| 草稿保存、回填、正式提交 | 有可生效时段、无交叉且未选时间调整时直接送审。需要确认时按平台分页列出全部命中商品卡，保留逐段选单和整单二次确认。[确认弹窗](../business/perspective-rules.md#确认政策适用范围) |
+| 已通过政策的时间调整 | 「我的提交」可独立发起提前结束或延期。申请表及范围确认窗可随单调整多张旧单，必填逐单原因，证明文件选传，随发起单整批审核。[两个入口及权限](frontend-development.md#申请人从两个入口调整政策时间) |
+| 两角色机型补贴查询 | 两图按平台逐段显示整组配置或具体商品，区分申报商品及实际审核范围。管理员查本公司政策，申请人查本人当前负责渠道和平台的政策。[时间轴规则](frontend-development.md#零售与百亿时间轴统一展示商品范围) |
 | 我的提交与申请详情 | 已接入本人分页列表、当前申请详情及驳回原因，界面不展示提交轮次和历轮审核；后台保留日志和快照。草稿及已驳回申请可继续编辑，本人未提交草稿可物理删除。商品及补贴通过 `PolicySubmissionGoods.vue` 按机型、配置汇总颜色，直接对应平台与方案，指定卡按平台显示数量 |
 | 选品、共享补贴、上传 | 已接入在售选品、平台方案分配、文件上传和政策附件绑定 |
 | 吉客云货品读取 | 已实测两品牌查询和续拉。服务端支持全量、按建档日和按修改日，同 SKU 更新原行 |

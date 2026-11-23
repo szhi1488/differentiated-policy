@@ -395,6 +395,7 @@
 }
 .workspace .form-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -570,6 +571,8 @@
   padding: 8px 0;
 }
 
+.policy-end-dialog,
+.policy-end-confirm-dialog,
 .submission-coverage-dialog {
   --policy-line: #e3ebf7;
   --policy-muted: #556784;
@@ -577,9 +580,77 @@
   flex-direction: column;
   max-height: 88dvh;
 }
+.policy-end-dialog .el-dialog__body,
+.policy-end-confirm-dialog .el-dialog__body,
 .submission-coverage-dialog .el-dialog__body {
   overflow-y: auto;
   min-width: 0;
+}
+.policy-end-layer.el-overlay {
+  background: rgb(23 45 75 / 15%);
+}
+.policy-end-review-layer.el-overlay {
+  background: rgb(23 45 75 / 18%);
+}
+.policy-end-dialog,
+.policy-end-confirm-dialog {
+  --el-dialog-padding-primary: 0px;
+  --el-dialog-border-radius: 12px;
+  --end-dialog-gutter: 22px;
+}
+/* 批量调整在桌面使用独立的候选区和明细区，标题与提交操作保持可见。 */
+.policy-end-dialog {
+  height: min(80dvh, 760px);
+}
+.policy-end-confirm-dialog {
+  min-height: min(46dvh, 400px);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__body {
+  flex: 1;
+}
+@media (max-width: 760px) {
+  .policy-end-dialog {
+    height: 88dvh;
+  }
+  .policy-end-confirm-dialog {
+    min-height: min(40dvh, 300px);
+  }
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__header {
+  flex: none;
+  padding: 14px 48px 14px var(--end-dialog-gutter);
+  border-bottom: 1px solid var(--policy-line);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__title {
+  color: #173a65;
+  font-size: 17px;
+  font-weight: 600;
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__headerbtn {
+  height: 52px;
+  width: 44px;
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__footer {
+  flex: none;
+  padding: 12px var(--end-dialog-gutter);
+  border-top: 1px solid var(--policy-line);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__body {
+  min-height: 0;
+  padding: 16px var(--end-dialog-gutter);
+  overscroll-behavior: contain;
+}
+@media (max-width: 660px) {
+  .policy-end-dialog,
+  .policy-end-confirm-dialog {
+    --end-dialog-gutter: 14px;
+  }
+}
+@media (max-height: 600px) {
+  .policy-end-dialog,
+  .policy-end-confirm-dialog {
+    max-height: calc(100dvh - 16px);
+  }
 }
 .submission-coverage-dialog .el-alert {
   margin-bottom: 12px;

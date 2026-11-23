@@ -257,6 +257,26 @@ class PolicyApplicabilityEvaluatorTest {
                 new PolicyDraftRequest.Choice(
                         scope, ranges.get(0).through(), "SELECT", null, List.of("6", "3"));
         var saved = draft.withConsent(PolicyConfirmation.confirm(preview, List.of(first, second)));
+        var timeline =
+                new PolicyTimelineBuilder(
+                        "RETAIL",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L),
+                        PolicyFormValidation.time(date(24, "00:00:00")),
+                        PolicyFormValidation.time(date(24, "23:59:59")),
+                        PolicyFormValidation.time(date(26, "12:00:00")),
+                        null);
+        for (var old : List.of(olderCombined, national, local))
+            timeline.include(old, Long.parseLong(old.id()), AS_OF.minusDays(3), AS_OF.minusDays(2));
+        timeline.include(saved, 7, AS_OF, AS_OF.plusDays(1));
+        var segments = timeline.tracks().get(0).segments();
+        assertThat(segments.get(0).adoptedAuditLogIds()).containsExactly("6", "3");
+        assertThat(segments.get(0).excludedAuditLogIds()).contains("7");
+        assertThat(segments.get(1).adoptedAuditLogIds()).containsExactly("7");
+        assertThat(segments.get(1).startAt()).isEqualTo(date(25, "00:00:00"));
         for (var day : List.of(24, 25)) {
             var query =
                     new PolicyApplicabilityEvaluator(
@@ -343,6 +363,295 @@ class PolicyApplicabilityEvaluatorTest {
                 new PolicyApplicabilityEvaluator(policy("7", 23, 25, "SALES", BOTH, PDD), AS_OF);
         add(changed, old);
         assertThat(PolicyConfirmation.requiresResubmission(saved, changed.result())).isTrue();
+    }
+
+    @Test
+    void timelineKeepsExcludedBillionRoundAndReplaysEveryChangeLikePointQueries() {
+        var scope =
+                new com.company.policy.vo.PolicyApplicability.Scope(
+                        "PDD", null, 81L, "12GB", "256GB");
+        var keepOld =
+                new Decision(
+                        scope,
+                        date(10, "00:00:00"),
+                        date(15, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("201", "202"),
+                        List.of("201"));
+        var stack =
+                new Decision(
+                        scope,
+                        date(16, "00:00:00"),
+                        date(17, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("201", "202"),
+                        List.of("201", "202"));
+        var base = policy("201", 1, 20, null, List.of(), PDD);
+        var other =
+                policy("202", 10, 17, null, List.of(), card("SPECIFIED", "PDD", 0, WHITE))
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(keepOld, stack)));
+        var clock = LocalDateTime.parse("2026-11-23T12:00:00");
+        var day = LocalDateTime.parse("2026-11-12T00:00:00");
+        var timeline =
+                new PolicyTimelineBuilder(
+                        "BILLION",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L, 8002L),
+                        day,
+                        day.plusHours(23),
+                        clock,
+                        null);
+        timeline.include(base, 81, AS_OF.minusDays(2), AS_OF);
+        timeline.include(other, 82, AS_OF.minusDays(1), AS_OF);
+        var track = timeline.tracks().get(0);
+        assertThat(track.goodsIds()).isEmpty();
+        assertThat(track.policies()).hasSize(2);
+        assertThat(track.policies().get(1).selections().get(0).quantity()).isZero();
+        assertThat(track.policies().get(1).policyThrough()).isEqualTo(date(17, "23:59:59"));
+        assertThat(track.segments()).hasSize(4);
+        assertThat(track.segments()).allMatch(s -> s.configurationDecision());
+        assertThat(track.segments().get(1).excludedAuditLogIds()).containsExactly("82");
+        assertThat(track.segments().get(1).endAt()).isEqualTo(date(16, "00:00:00"));
+        assertThat(track.segments().get(2).adoptedAuditLogIds()).containsExactly("82", "81");
+        var future =
+                new PolicyTimelineBuilder(
+                        "BILLION",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L, 8002L),
+                        day,
+                        day.plusHours(23),
+                        AS_OF,
+                        null);
+        future.include(base, 81, AS_OF.minusDays(2), AS_OF);
+        future.include(other, 82, AS_OF.minusDays(1), AS_OF);
+        var projected = future.tracks().get(0);
+        assertThat(projected.segments()).isEmpty();
+        assertThat(projected.plannedSegments()).isEqualTo(track.segments());
+        for (var part : track.segments()) {
+            for (var at :
+                    List.of(
+                            PolicyFormValidation.time(part.startAt()),
+                            PolicyFormValidation.time(part.endAt()).minusSeconds(1))) {
+                var point = new PolicyApplicabilityEvaluator("BILLION", scope, at);
+                point.include(base, 81, AS_OF.minusDays(2), AS_OF);
+                point.include(other, 82, AS_OF.minusDays(1), AS_OF);
+                for (long id : List.of(8001L, 8002L)) {
+                    assertThat(point.effectivePolicies(scope, id))
+                            .extracting(p -> p.auditLogId())
+                            .containsExactlyElementsOf(part.adoptedAuditLogIds());
+                }
+            }
+        }
+        var onlyOld =
+                other.withConsent(
+                        new PolicyConsent(
+                                2,
+                                List.of(),
+                                List.of(
+                                        new Decision(
+                                                scope,
+                                                date(10, "00:00:00"),
+                                                date(17, "23:59:59"),
+                                                Action.STACK_OR_CHOOSE,
+                                                List.of(),
+                                                List.of("201", "202"),
+                                                List.of("201")))));
+        var single =
+                new PolicyTimelineBuilder(
+                        "BILLION",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L, 8002L),
+                        day,
+                        day,
+                        clock,
+                        null);
+        single.include(base, 81, AS_OF.minusDays(2), AS_OF);
+        single.include(onlyOld, 82, AS_OF.minusDays(1), AS_OF);
+        assertThat(single.tracks().get(0).segments())
+                .noneMatch(s -> s.adoptedAuditLogIds().contains("82"));
+        assertThat(single.tracks().get(0).policies()).hasSize(2);
+    }
+
+    @Test
+    void mixedBillionTimelineKeepsProductAndConfigurationDecisionBoundaries() {
+        var scope =
+                new com.company.policy.vo.PolicyApplicability.Scope(
+                        "PDD", null, 81L, "12GB", "256GB");
+        var keepOld =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(6, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("201", "202"),
+                        List.of("201"));
+        var old = policy("201", 1, 8, null, List.of(), PDD).withConsent(null);
+        var white = card("COMMON", "PDD", null, WHITE);
+        var newer =
+                policy("202", 1, 6, null, List.of(), white)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(keepOld)));
+        var clock = PolicyFormValidation.time(date(20, "12:00:00"));
+        var timeline =
+                new PolicyTimelineBuilder(
+                        "BILLION",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L, 8002L),
+                        AS_OF,
+                        clock,
+                        clock,
+                        PolicyFormValidation.time(date(3, "00:00:00")));
+        timeline.include(old, 81, AS_OF, PolicyFormValidation.time(date(2, "00:00:00")));
+        timeline.include(
+                newer, 82, AS_OF.plusDays(2), PolicyFormValidation.time(date(5, "00:00:00")));
+        timeline.include(
+                policy("203", 12, 15, null, List.of(), white),
+                83,
+                AS_OF.plusDays(9),
+                PolicyFormValidation.time(date(13, "00:00:00")));
+
+        var tracks = timeline.tracks();
+        assertThat(tracks).hasSize(2);
+        for (var track : tracks) {
+            var segments = track.segments();
+            var first = segments.get(0);
+            assertThat(first.configurationDecision()).isFalse();
+            assertThat(first.adoptedAuditLogIds()).isEmpty();
+            if (track.goodsIds().contains("8001")) {
+                assertThat(first.excludedAuditLogIds()).containsExactly("82", "81");
+                var prior = segments.get(1);
+                assertThat(prior.configurationDecision()).isFalse();
+                assertThat(prior.endAt()).isEqualTo(date(5, "00:00:00"));
+                assertThat(prior.adoptedAuditLogIds()).containsExactly("81");
+                assertThat(prior.excludedAuditLogIds()).containsExactly("82");
+            } else {
+                assertThat(first.excludedAuditLogIds()).containsExactly("82");
+            }
+            // 新单获批后，两个颜色的采用和未采用名单均按配置决定。
+            var shared =
+                    segments.stream()
+                            .filter(s -> s.startAt().equals(date(5, "00:00:00")))
+                            .findFirst()
+                            .orElseThrow();
+            assertThat(shared.configurationDecision()).isTrue();
+            assertThat(shared.adoptedAuditLogIds()).containsExactly("81");
+            assertThat(shared.excludedAuditLogIds()).containsExactly("82");
+            // 新单已申报、尚未到获批时刻，其他日期的旧单不能改变其配置范围。
+            var waiting = segments.get(segments.size() - 2);
+            assertThat(waiting.startAt()).isEqualTo(date(12, "00:00:00"));
+            assertThat(waiting.configurationDecision()).isTrue();
+            assertThat(waiting.excludedAuditLogIds()).containsExactly("83");
+            assertThat(segments.get(segments.size() - 1).adoptedAuditLogIds())
+                    .containsExactly("83");
+        }
+    }
+
+    @Test
+    void retailTimelineMergesIdenticalColorsButSplitsDifferentSelectionsAndStopsAtAsOf() {
+        var shared =
+                policy("10", 1, 25, "SALES", NATIONAL, card("COMMON", "PDD", null, BLACK, WHITE));
+        var clock = LocalDateTime.parse("2026-11-12T12:00:00");
+        var timeline =
+                new PolicyTimelineBuilder(
+                        "RETAIL",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L, 8002L),
+                        clock.toLocalDate().atStartOfDay(),
+                        clock,
+                        clock,
+                        null);
+        timeline.include(shared, 10, AS_OF, AS_OF);
+        var together = timeline.tracks().get(0);
+        assertThat(together.goodsIds()).containsExactly("8001", "8002");
+        assertThat(together.policies().get(0).selections().get(0).products()).hasSize(2);
+        assertThat(together.segments().get(0).endAt()).isNull();
+        var late = policy("11", 10, 18, "SALES", NATIONAL, PDD);
+        var approved = LocalDateTime.parse("2026-11-11T10:30:00");
+        timeline.include(late, 11, AS_OF.plusDays(1), approved);
+        var tracks = timeline.tracks();
+        assertThat(tracks).hasSize(2);
+        assertThat(tracks.get(0).goodsIds()).containsExactly("8001");
+        var periods = tracks.get(0).segments();
+        assertThat(periods).noneMatch(s -> s.configurationDecision());
+        assertThat(periods.get(1).excludedAuditLogIds()).containsExactly("11");
+        assertThat(periods.get(1).endAt()).isEqualTo(date(11, "10:30:00"));
+        assertThat(periods.get(2).adoptedAuditLogIds()).containsExactly("11");
+        var scope =
+                new com.company.policy.vo.PolicyApplicability.Scope("PDD", 8001L, null, null, null);
+        for (var part : periods) {
+            var point =
+                    new PolicyApplicabilityEvaluator(
+                            "RETAIL", scope, PolicyFormValidation.time(part.startAt()));
+            point.include(shared, 10, AS_OF, AS_OF);
+            point.include(late, 11, AS_OF.plusDays(1), approved);
+            assertThat(point.effectivePolicies(scope, 8001L))
+                    .extracting(p -> p.auditLogId())
+                    .containsExactlyElementsOf(part.adoptedAuditLogIds());
+        }
+    }
+
+    @Test
+    void historicalTimelineRequiresCutoverForLegacyAndReturnsContextOutsideTheFilter() {
+        var query = PolicyFormValidation.time(date(3, "10:00:00"));
+        var clock = PolicyFormValidation.time(date(23, "12:00:00"));
+        var cutoff = query.minusYears(1);
+        var track =
+                new PolicyTimelineBuilder(
+                        "RETAIL",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L),
+                        query,
+                        query,
+                        clock,
+                        cutoff);
+        var base = policy("1", 1, 20, "SALES", NATIONAL, PDD);
+        var late = policy("2", 10, 12, "SALES", NATIONAL, PDD);
+        track.include(base, 1, AS_OF, AS_OF);
+        track.include(late, 2, AS_OF.plusHours(1), AS_OF.plusHours(1));
+        var result = track.tracks().get(0);
+        assertThat(result.policies())
+                .extracting(p -> p.matchesQuery())
+                .containsExactly(true, false);
+        assertThat(result.segments().get(1).adoptedAuditLogIds()).containsExactly("2");
+        assertThat(result.segments().get(2).adoptedAuditLogIds()).containsExactly("1");
+
+        var uncertain =
+                new PolicyTimelineBuilder(
+                        "RETAIL",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L),
+                        query,
+                        query,
+                        clock,
+                        null);
+        uncertain.include(base.withConsent(null), 1, AS_OF, AS_OF);
+        assertThatThrownBy(uncertain::tracks)
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("POLICY_CUTOVER_REQUIRED"));
     }
 
     private static String date(int day, String time) {

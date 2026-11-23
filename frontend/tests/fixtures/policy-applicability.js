@@ -1,6 +1,18 @@
 const time = (day, hour) => '2026-11-' + day + 'T' + hour + '+08:00'
 export const direct = { status: 'DIRECT', canDirectSubmit: true, scopes: [] }
 
+export const endOption = {
+  target: {
+    policyId: '518',
+    auditLogId: '99',
+    previousEnd: '2026-12-31T23:59:59+08:00',
+  },
+  policyCode: 'ZC-000518',
+  perspective: 'BILLION',
+  earliestEnd: '2026-12-01T08:59:59+08:00',
+  latestEnd: '2026-12-31T23:59:58+08:00',
+}
+
 export function retailColorScope(goodsId, colorName, oldId = '118') {
   const [item] = matchedPreview(false, oldId).scopes
   item.scope.goodsId = goodsId

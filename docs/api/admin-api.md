@@ -1,6 +1,6 @@
 # 采购管理员审核与有效政策接口
 
-更新日期：2026-11-20。以下七个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
+更新日期：2026-11-23。以下八个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -11,6 +11,7 @@
 | POST | `/api/admin/policies/{id}/review` | 通过或驳回当前待审轮次 |
 | GET | `/api/admin/policies/{id}/override-preview` | 查看待审轮次假设此刻通过后的覆盖情况 |
 | GET | `/api/admin/policies/effective` | 查询渠道、平台和商品在指定时点适用的政策 |
+| GET | `/api/admin/policies/subsidy-timeline` | 按机型版本、RAM、ROM、日期及可选平台读取两渠道的实际补贴历史和按已通过决定计算的后续采用安排。[参数和响应](page-api-plan.md#查询补贴历史) |
 
 ## 列表与详情
 
@@ -41,9 +42,9 @@
 }
 ```
 
-`decision` 取 `APPROVE` 或 `REJECT`，意见选填，最多 512 字。服务端确定审核人及审核时间，并在同一事务更新主表和当前待审轮次。响应包含 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。审核记录保留，驳回后可原单重提。
+`decision` 取 `APPROVE` 或 `REJECT`，意见选填，最多 512 字。一次决定覆盖当前申请及其本轮随单提交的全部缩短、延期调整。整批驳回时沿用原政策的有效期，整批获批时在同一事务落实各项调整。服务端确定审核人及审核时间并更新主表和当前待审轮次。响应包含 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。审核记录保留，驳回后可原单重提。
 
-管理页点击「通过」发送 `APPROVE`，`reviewRemark` 为 null。服务端核验权限、状态、版本、轮次，并在机型锁内复核批准时仍有效的组合。结果相同可继续通过；新增未确认组合返回 `POLICY_RECONFIRM_REQUIRED`，已过截止日返回 `POLICY_NO_EFFECTIVE_PERIOD`，两者均保留待审状态。管理员可沿用驳回，由原申请人处理。[复核与生效查询](#覆盖预览与有效政策)
+管理页点击「通过」发送 `APPROVE`，`reviewRemark` 为 null。服务端核验权限、状态、版本、轮次，并在机型锁内复核批准时仍有效的组合。结果相同可继续通过；组合或时间调整目标需要重新确认时返回 `POLICY_RECONFIRM_REQUIRED`，本申请已无可生效时段时返回 `POLICY_NO_EFFECTIVE_PERIOD`，两者均保留待审状态。管理员可沿用驳回，由原申请人处理。[复核与生效查询](#覆盖预览与有效政策)
 
 ## 历轮审核
 
@@ -54,6 +55,9 @@
 `auditStatus` 使用审核日志枚举：`SUBMITTED` 对应页面「待审核」（申请主表状态为 `PENDING`），`APPROVED` 对应「已通过」，`REJECTED` 对应「已驳回」。待审核的意见显示「待审核」；已通过无需填写意见，空值在列表显示「—」，详情隐藏该项并保留审核人和时间；已驳回且意见为空时显示「未填写审核意见」。历史非空意见继续展示，接口及保存逻辑不变。
 
 ## 覆盖预览与有效政策
+
+发起单本轮的 `snapshot.consent.endAdjustments` 列出各目标旧单和获批轮次、原截止、新截止、逐单原因和证明文件。独立调整申请另在 `snapshot.form.goodsForm.timeAdjustment` 保存其自身调整。目标可以与本次申请完全没有交集。批准前，对本单和选中旧单涉及的机型加锁，复核每张旧单的原截止和申请人的平台分工。任何一张失去资格或依据已变化，整批保持待审，须驳回后重新确认。获批缩短后，旧单详情通过 `approvedEnd` 返回批准来源、原因和实际截止。随单延期在同一事务生成关联原单的已通过延期单，时点和时间轴按延长段已确认的政策组合展示。管理员可从发起申请的对应审核轮次下载证明文件。[整单提前结束](policy-api.md#整单提前结束) · [按发起单或旧单核对快照](../sql/database-design.md#在-navicat-核对整单提前结束记录)
+
 
 待审单的 `override-preview` 携带 `recordVersion` 和 `submissionVersion`。响应包含 `applicability`（按当前假设通过时点计算的整单分段）、`consent`（本轮提交时的决定）、`requiresResubmission` 与 `nextAction`。正常审核为 `REVIEW`。已出现未确认组合或已无可生效时段时为 `REJECT_FOR_RESUBMISSION`。管理员可通过原审核接口驳回，原申请人编辑、重新确认并重提。
 

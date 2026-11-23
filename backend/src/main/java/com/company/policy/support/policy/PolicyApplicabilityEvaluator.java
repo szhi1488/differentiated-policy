@@ -1,11 +1,14 @@
 package com.company.policy.support.policy;
 
+import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
-import com.company.policy.dto.PolicyDraftRequest.Target;
 import com.company.policy.entity.PolicyConsent.Decision;
+import com.company.policy.entity.PolicyConsent.EndAdjustment;
+import com.company.policy.entity.PolicyConsent.Target;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyApplicability.Action;
+import com.company.policy.vo.PolicyApplicability.AdjustmentOption;
 import com.company.policy.vo.PolicyApplicability.Group;
 import com.company.policy.vo.PolicyApplicability.Policy;
 import com.company.policy.vo.PolicyApplicability.Product;
@@ -16,7 +19,6 @@ import com.company.policy.vo.PolicyApplicability.Selection;
 import com.company.policy.vo.PolicyApplicability.Status;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -32,13 +34,16 @@ import java.util.TreeSet;
 public final class PolicyApplicabilityEvaluator {
     private static final LocalDateTime OPEN_END = LocalDateTime.of(9999, 12, 31, 23, 59, 59);
 
-    private record Window(LocalDateTime from, LocalDateTime through) {
+    record Window(LocalDateTime from, LocalDateTime through) {
         static Window of(Snapshot snapshot, LocalDateTime approvedAt) {
             var start = PolicyFormValidation.time(snapshot.form().startTime());
-            var endDate = PolicyFormValidation.time(snapshot.form().endTime()).toLocalDate();
             return new Window(
-                    start.isAfter(approvedAt) ? start : approvedAt,
-                    endDate.atTime(LocalTime.of(23, 59, 59)));
+                    start.isAfter(approvedAt) ? start : approvedAt, originalThrough(snapshot));
+        }
+
+        static LocalDateTime originalThrough(Snapshot snapshot) {
+            return PolicyApplicabilityEvaluator.originalThrough(
+                    snapshot.form().endTime(), snapshot.sourcePolicyCode());
         }
 
         boolean expired() {
@@ -52,15 +57,31 @@ public final class PolicyApplicabilityEvaluator {
         }
     }
 
-    private record Round(
+    public static LocalDateTime originalThrough(Snapshot snapshot) {
+        return Window.originalThrough(snapshot);
+    }
+
+    public static LocalDateTime originalThrough(String endTime, String sourcePolicyCode) {
+        var end = PolicyFormValidation.time(endTime);
+        return sourcePolicyCode != null ? end : end.toLocalDate().atTime(23, 59, 59);
+    }
+
+    record Round(
             Policy policy,
             Window window,
+            Window original,
+            Boolean estimated,
             LocalDateTime submittedAt,
             long auditOrder,
             boolean legacy,
-            List<Decision> decisions) {
+            List<Decision> decisions,
+            String batchKey) {
         String id() {
             return policy.policyId();
+        }
+
+        boolean namedBy(java.util.Collection<String> ids) {
+            return ids.contains(id()) || (batchKey != null && ids.contains(batchKey));
         }
     }
 
@@ -72,11 +93,14 @@ public final class PolicyApplicabilityEvaluator {
         }
     }
 
-    private static final Comparator<Round> NEWEST =
+    static final Comparator<Round> NEWEST =
             Comparator.comparing(Round::submittedAt)
                     .thenComparingLong(Round::auditOrder)
+                    .thenComparing(Round::id)
                     .reversed();
 
+    private final PolicyEndTimes approvedRules = new PolicyEndTimes();
+    private List<EndAdjustment> proposedCuts = List.of();
     private final boolean retail;
     private final LocalDateTime asOf;
     private final Window requested;
@@ -89,25 +113,78 @@ public final class PolicyApplicabilityEvaluator {
 
     public PolicyApplicabilityEvaluator(
             Snapshot draft, LocalDateTime asOf, LocalDateTime submittedAt, long auditOrder) {
+        this(List.of(draft), asOf, submittedAt, auditOrder);
+    }
+
+    /** 同渠道的本次原单和所有延期段共用时段边界，同一交叉只产生一份决定。 */
+    public PolicyApplicabilityEvaluator(
+            List<Snapshot> proposals,
+            LocalDateTime asOf,
+            LocalDateTime submittedAt,
+            long auditOrder) {
         this.asOf = asOf;
+        var draft = proposals.get(0);
         this.retail = "RETAIL".equals(draft.form().perspective());
-        this.requested = Window.of(draft, asOf);
-        if (!requested.expired()) {
-            addSelections(draft, null, submittedAt, null, requested, auditOrder, false);
+        proposedCuts = draft.consent() == null ? List.of() : draft.consent().endAdjustments();
+        var first = Window.of(draft, asOf);
+        var start = first.from;
+        var end = first.through;
+        for (var item : proposals) {
+            var window = Window.of(item, asOf);
+            if (window.from.isBefore(start)) start = window.from;
+            if (window.through.isAfter(end)) end = window.through;
+            if (!window.expired())
+                addSelections(item, null, submittedAt, null, window, auditOrder, false);
         }
+        this.requested = new Window(start, end);
     }
 
     /** 时点查询从空范围起算，仅纳入实际获批的轮次。 */
     public PolicyApplicabilityEvaluator(String channel, Scope scope, LocalDateTime at) {
+        this(channel, List.of(scope), at);
+    }
+
+    PolicyApplicabilityEvaluator(String channel, List<Scope> scopes, LocalDateTime at) {
         this.asOf = at;
         this.retail = "RETAIL".equals(channel);
         this.requested = new Window(at, at);
-        rounds.put(scope, new ArrayList<>());
+        scopes.forEach(scope -> rounds.put(scope, new ArrayList<>()));
+    }
+
+    public void includeApprovedEnd(String auditId, LocalDateTime actualEnd) {
+        approvedRules.cap(auditId, actualEnd);
+    }
+
+    List<Round> roundsFor(Scope scope) {
+        return approvedRules.apply(rounds.get(scope));
+    }
+
+    // 切换前旧单可延续至切换前一秒。图中还需保留原单期内从未获选的记录。
+    void includeTimeline(
+            Snapshot snapshot,
+            long auditId,
+            LocalDateTime submittedAt,
+            LocalDateTime approvedAt,
+            LocalDateTime cutover) {
+        var window = Window.of(snapshot, approvedAt);
+        boolean legacy =
+                snapshot.consent() == null && (cutover == null || approvedAt.isBefore(cutover));
+        if (legacy && cutover != null && window.through.isBefore(cutover.minusSeconds(1))) {
+            window = new Window(window.from, cutover.minusSeconds(1));
+        }
+        addSelections(snapshot, auditId, submittedAt, approvedAt, window, auditId, legacy);
     }
 
     public List<Policy> effectivePolicies(Scope scope, long queriedGoodsId) {
         var active = new TreeSet<>(NEWEST);
-        active.addAll(rounds.get(scope));
+        roundsFor(scope).stream()
+                .filter(r -> !requested.intersect(r.window).expired())
+                .forEach(active::add);
+        return effectivePolicies(retail, active, queriedGoodsId, asOf);
+    }
+
+    static List<Policy> effectivePolicies(
+            boolean retail, SortedSet<Round> active, long queriedGoodsId, LocalDateTime at) {
         // 只有旧轮次时仍按具体商品选一，不将其他颜色的旧政策扩展到被查商品。
         if (active.stream().allMatch(Round::legacy)) {
             var goodsId = Long.toString(queriedGoodsId);
@@ -123,14 +200,14 @@ public final class PolicyApplicabilityEvaluator {
         }
         // 零售新轮次冻结了该段的完整执行名单，即使提交该决定的政策本身未被勾选也要应用。
         if (retail) {
-            var point = time(asOf);
+            var point = time(at);
             for (var round : active) {
                 for (var decision : round.decisions) {
                     if (decision.action() == Action.SELECT_RETAIL_POLICIES
                             && decision.from().compareTo(point) <= 0
                             && decision.through().compareTo(point) >= 0) {
                         return active.stream()
-                                .filter(r -> decision.selectedPolicyIds().contains(r.id()))
+                                .filter(r -> r.namedBy(decision.selectedPolicyIds()))
                                 .map(Round::policy)
                                 .toList();
                     }
@@ -138,7 +215,7 @@ public final class PolicyApplicabilityEvaluator {
             }
         }
         var baseline = historicalBaseline(active);
-        var selected = retail ? legacyRetailWinners(baseline) : billionCandidates(asOf, baseline);
+        var selected = retail ? legacyRetailWinners(baseline) : billionCandidates(at, baseline);
         return active.stream().filter(r -> selected.contains(r.id())).map(Round::policy).toList();
     }
 
@@ -219,7 +296,7 @@ public final class PolicyApplicabilityEvaluator {
         }
         var decisionsByScope = new HashMap<Scope, List<Decision>>();
         if (!proposed && snapshot.consent() != null) {
-            if (snapshot.consent().ruleVersion() != 1 && snapshot.consent().ruleVersion() != 2) {
+            if (!snapshot.consent().supported()) {
                 throw new IllegalStateException("无法识别该轮适用范围规则版本。");
             }
             for (var decision : snapshot.consent().decisions()) {
@@ -230,6 +307,10 @@ public final class PolicyApplicabilityEvaluator {
                 }
             }
         }
+        var original =
+                new Window(
+                        PolicyFormValidation.time(snapshot.form().startTime()),
+                        Window.originalThrough(snapshot));
         for (var group : selections.entrySet()) {
             var policy =
                     new Policy(
@@ -249,22 +330,28 @@ public final class PolicyApplicabilityEvaluator {
                     new Round(
                             policy,
                             window,
+                            original,
+                            snapshot.form().estimated(),
                             submittedAt,
                             auditOrder,
                             legacy,
-                            decisionsByScope.getOrDefault(group.getKey(), List.of()));
+                            decisionsByScope.getOrDefault(group.getKey(), List.of()),
+                            snapshot.consent() == null
+                                    ? null
+                                    : snapshot.consent().batchPolicyKey());
             rounds.computeIfAbsent(group.getKey(), ignored -> new ArrayList<>()).add(round);
         }
     }
 
-    private Scope scope(String platform, Target target) {
+    private Scope scope(String platform, PolicyDraftRequest.Target target) {
         return retail
                 ? new Scope(platform, Long.valueOf(target.goodsId()), null, null, null)
                 : new Scope(
                         platform, null, Long.valueOf(target.spuId()), target.ram(), target.rom());
     }
 
-    private static Product product(Target target, ApplicantCatalogResponse good) {
+    private static Product product(
+            PolicyDraftRequest.Target target, ApplicantCatalogResponse good) {
         if (good != null
                 && !(target.spuId().equals(good.spuId())
                         && target.ram().equals(good.ram())
@@ -283,20 +370,37 @@ public final class PolicyApplicabilityEvaluator {
     }
 
     public PolicyApplicability result() {
+        return result(Map.of());
+    }
+
+    public PolicyApplicability result(Map<Target, AdjustmentOption> options) {
+        var rules = approvedRules.withProposals(proposedCuts, options);
         var matches = new ArrayList<ScopeResult>();
-        rounds.forEach(
-                (scope, policies) -> {
-                    if (policies.size() > 1) {
-                        matches.add(
-                                new ScopeResult(
-                                        scope,
-                                        policies.stream()
-                                                .sorted(NEWEST)
-                                                .map(Round::policy)
-                                                .toList(),
-                                        segments(policies)));
-                    }
-                });
+        for (var item : rounds.entrySet()) {
+            var scope = item.getKey();
+            var roundsInScope = rules.apply(item.getValue());
+            var proposals = roundsInScope.stream().filter(r -> r.policy.proposed()).toList();
+            var policies =
+                    roundsInScope.stream()
+                            .filter(
+                                    r ->
+                                            proposals.stream()
+                                                    .anyMatch(
+                                                            p ->
+                                                                    !p.window
+                                                                            .intersect(r.window)
+                                                                            .expired()))
+                            .toList();
+            if (policies.size() > 1) {
+                var overlap = segments(policies);
+                if (overlap.isEmpty()) continue;
+                matches.add(
+                        new ScopeResult(
+                                scope,
+                                policies.stream().sorted(NEWEST).map(Round::policy).toList(),
+                                overlap));
+            }
+        }
         var status =
                 requested.expired()
                         ? Status.NO_EFFECTIVE_PERIOD
@@ -308,12 +412,13 @@ public final class PolicyApplicabilityEvaluator {
                 time(requested.through),
                 status,
                 status == Status.DIRECT,
-                matches);
+                matches,
+                List.copyOf(options.values()));
     }
 
     private List<Segment> segments(List<Round> policies) {
         var boundaries = new TreeMap<LocalDateTime, Boundary>();
-        for (var prior : policies.subList(1, policies.size())) {
+        for (var prior : policies) {
             var overlap = requested.intersect(prior.window);
             boundaries.computeIfAbsent(overlap.from, ignored -> new Boundary()).starting.add(prior);
             // 较早百亿轮次的二选一可能只在交集中的几天有效。
@@ -337,12 +442,13 @@ public final class PolicyApplicabilityEvaluator {
                     .add(prior);
         }
         var active = new TreeSet<>(NEWEST);
-        active.add(policies.get(0));
         var segments = new ArrayList<Segment>();
         LocalDateTime previous = null;
         for (var entry : boundaries.entrySet()) {
             var boundary = entry.getKey();
-            if (previous != null && active.size() > 1) {
+            if (previous != null
+                    && active.size() > 1
+                    && active.stream().anyMatch(r -> r.policy.proposed())) {
                 var end = boundary.minusSeconds(1);
                 segments.add(
                         retail
@@ -423,7 +529,7 @@ public final class PolicyApplicabilityEvaluator {
                 }
             }
         }
-        return active.stream().map(Round::id).filter(id -> !excluded.contains(id)).toList();
+        return active.stream().filter(r -> !r.namedBy(excluded)).map(Round::id).toList();
     }
 
     // 历史零售轮次没有新版区间决定时，按当时的逐场景规则回查。
@@ -438,7 +544,7 @@ public final class PolicyApplicabilityEvaluator {
         return winners.values().stream().distinct().toList();
     }
 
-    private static String time(LocalDateTime value) {
+    static String time(LocalDateTime value) {
         return value == null ? null : value.format(PolicyFormValidation.TIME);
     }
 }
