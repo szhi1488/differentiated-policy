@@ -37,6 +37,7 @@ class LocalConfigLoadingTest {
                     Map.entry("SERVER_ADDRESS", "server.address"),
                     Map.entry("SERVER_PORT", "server.port"),
                     Map.entry("POLICY_STORAGE_ROOT", "policy.storage.root"),
+                    Map.entry("POLICY_APPLICABILITY_CUTOVER_AT", "policy.applicability-cutover-at"),
                     Map.entry(
                             "HTTP_CONNECT_TIMEOUT_SECONDS",
                             "external.http.connect-timeout-seconds"),
@@ -142,6 +143,7 @@ class LocalConfigLoadingTest {
         settings.put("DB_URL", "jdbc:mysql://database.example.test:3306/config_test");
         settings.put("SERVER_ADDRESS", "127.0.0.2");
         settings.put("SERVER_PORT", "18080");
+        settings.put("POLICY_APPLICABILITY_CUTOVER_AT", "2026-01-01T00:00:00+08:00");
         settings.put(
                 "POLICY_STORAGE_ROOT",
                 workspace.resolve("storage with spaces").toString().replace('\\', '/'));

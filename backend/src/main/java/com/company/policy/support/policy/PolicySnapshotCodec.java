@@ -27,7 +27,8 @@ public final class PolicySnapshotCodec {
                         snapshot.applicantName(),
                         snapshot.submissionVersion(),
                         storeForm(snapshot.form()),
-                        map(snapshot.goods(), PolicySnapshotCodec::storeGoods));
+                        map(snapshot.goods(), PolicySnapshotCodec::storeGoods),
+                        snapshot.consent());
         try {
             return json.writeValueAsString(stored);
         } catch (JsonProcessingException error) {
@@ -51,7 +52,8 @@ public final class PolicySnapshotCodec {
                     stored.applicantName(),
                     stored.submissionVersion(),
                     readForm(stored.form()),
-                    map(stored.goods(), PolicySnapshotCodec::readGoods));
+                    map(stored.goods(), PolicySnapshotCodec::readGoods),
+                    stored.consent());
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法读取政策提交快照。", error);
         }
@@ -67,6 +69,7 @@ public final class PolicySnapshotCodec {
                 value.selectedPlatforms(),
                 value.verifyType(),
                 value.sceneType(),
+                value.sceneTypes(),
                 value.estimated(),
                 value.startTime(),
                 value.endTime(),
@@ -79,12 +82,14 @@ public final class PolicySnapshotCodec {
         if (value == null) {
             return null;
         }
+        var scenes = PolicyScenes.fromLegacy(value.sceneTypes(), value.sceneType());
         return new PolicyDraftRequest(
                 value.recordVersion(),
                 value.perspective(),
                 value.selectedPlatforms(),
                 value.verifyType(),
-                value.sceneType(),
+                PolicyScenes.single(scenes),
+                scenes,
                 value.estimated(),
                 value.startTime(),
                 value.endTime(),

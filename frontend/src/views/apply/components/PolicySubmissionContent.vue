@@ -1,12 +1,7 @@
 <script setup>
 import { computed } from 'vue'
-import {
-  CHANNEL_LABELS,
-  PLATFORM_LABELS,
-  SCENE_LABELS,
-  VERIFY_LABELS,
-} from '../../../constants/policy'
-import { displayValue, policyTime } from '../../../utils/policy-adapter'
+import { CHANNEL_LABELS, PLATFORM_LABELS, VERIFY_LABELS } from '../../../constants/policy'
+import { displayValue, policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import { policyAttachmentDownloadUrl } from '../../../api/attachments'
 import AttachmentDownload from '../../../components/AttachmentDownload.vue'
 import PolicySubmissionGoods from './PolicySubmissionGoods.vue'
@@ -35,7 +30,7 @@ const time = (value) => policyTime(value).replace('T', ' ')
           {{ VERIFY_LABELS[form.verifyType] ?? '未填写' }}
         </el-descriptions-item>
         <el-descriptions-item label="补贴场景">
-          {{ SCENE_LABELS[form.sceneType] ?? '未填写' }}
+          {{ policySceneLabel(form, '未填写') }}
         </el-descriptions-item>
         <el-descriptions-item label="是否预估">
           {{ displayValue(form.estimated) }}

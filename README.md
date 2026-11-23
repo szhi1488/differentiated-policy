@@ -45,6 +45,7 @@
 | 配置项 | 用途与默认行为 |
 | --- | --- |
 | `SERVER_ADDRESS`、`SERVER_PORT` | 默认监听 `127.0.0.1:8080`；局域网或部署环境按需填写，修改端口时同步 `/api` 代理目标 |
+| `POLICY_APPLICABILITY_CUTOVER_AT` | 新规则首次上线的北京时间（含该秒），格式 `YYYY-MM-DDTHH:mm:ss+08:00`。有旧单的环境按实际发布时间配置，所有实例及后续重启沿用同一值。 |
 | `POLICY_STORAGE_ROOT` | 附件存储根目录，不含 `attachments`；Windows 使用正斜杠，部署使用稳定绝对路径。本机已明确配置原项目 `data` 目录；留空仍兼容从项目根目录或 `backend/` 启动 |
 | `JACKYUN_IMPORT_SCHEDULING_ENABLED`、`JACKYUN_CLEAN_SCHEDULING_ENABLED` | 默认均为 `true`，控制导入和清洗后台任务；设为 `false` 后不自动领取或处理对应任务，不会自动取消已保存的任务 |
 | `JACKYUN_IMPORT_POLL_INTERVAL_MS`、`JACKYUN_CLEAN_POLL_INTERVAL_MS` | 后台任务检查间隔，默认均为 2000 毫秒，允许 1000～60000；导入接口请求间隔仍由 `JACKYUN_IMPORT_INTERVAL_SECONDS` 控制 |
@@ -115,7 +116,7 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 ## 吉客云商品导入
 
-1. 已有项目库升级申请人分工时，在 Navicat 选中项目库，整份运行[平台分工升级脚本](docs/sql/upgrade_user_platform_assignments.sql)。脚本自动建表或移除旧版跨渠道唯一索引，末行显示「完成」后即可使用新版用户管理分配平台。历次升级请按当前结构核对，分别完成[商品名称与政策名升级](docs/sql/database-design.md#已有十四表库升级商品名称与政策名)和[清洗自动排除升级](docs/sql/database-design.md#已有十四表库升级清洗自动排除)。首次部署则按[空库建表步骤](docs/sql/database-design.md#1-在-navicat-建表)建立十五张表后启动后端。空库首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。
+1. 已有项目库启用零售场景多选前，按[Navicat 升级与核对方法](docs/sql/database-design.md#已有库升级零售场景多选)升级政策主表。已有项目库升级申请人分工时，在 Navicat 选中项目库，整份运行[平台分工升级脚本](docs/sql/upgrade_user_platform_assignments.sql)。脚本自动建表或移除旧版跨渠道唯一索引，末行显示「完成」后即可使用新版用户管理分配平台。历次升级请按当前结构核对，分别完成[商品名称与政策名升级](docs/sql/database-design.md#已有十四表库升级商品名称与政策名)和[清洗自动排除升级](docs/sql/database-design.md#已有十四表库升级清洗自动排除)。首次部署则按[空库建表步骤](docs/sql/database-design.md#1-在-navicat-建表)建立十五张表后启动后端。空库首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。`FEISHU_TENANT_KEY` 仅用于本系统的飞书登录及权限校验，不发送给吉客云。`JACKYUN_SOURCE_KEY` 是稳定的本地商品账套标识，默认 `jackyun`，与飞书企业标识无关。
 3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
 

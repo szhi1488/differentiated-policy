@@ -60,6 +60,7 @@ jackyun:
   clean-poll-interval-ms: ${JACKYUN_CLEAN_POLL_INTERVAL_MS:2000}
   request-timeout-seconds: ${JACKYUN_REQUEST_TIMEOUT_SECONDS:20}
 policy:
+  applicability-cutover-at: ${POLICY_APPLICABILITY_CUTOVER_AT:}
   storage:
     root: ${POLICY_STORAGE_ROOT:}
 external:

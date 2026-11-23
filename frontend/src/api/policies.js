@@ -31,8 +31,8 @@ export function previewPolicySubmission(id, recordVersion, signal) {
   return request(itemPath(id) + '/submission-preview?' + params, { signal })
 }
 
-export function submitPolicy(id, recordVersion, confirmationToken, signal) {
-  return write(`${itemPath(id)}/submit`, 'POST', { recordVersion, confirmationToken }, {}, signal)
+export function submitPolicy(id, body, signal) {
+  return write(`${itemPath(id)}/submit`, 'POST', body, {}, signal)
 }
 
 export function readPolicy(id, signal) {

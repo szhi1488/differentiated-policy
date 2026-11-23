@@ -91,7 +91,7 @@ CREATE TABLE `policy_apply` (
   `channel_type` VARCHAR(20) NOT NULL,
   `platforms` TEXT DEFAULT NULL,
   `write_off_type` VARCHAR(20) DEFAULT NULL,
-  `scene` VARCHAR(20) DEFAULT NULL,
+  `scene_types` TEXT DEFAULT NULL,
   `is_estimated` TINYINT DEFAULT NULL,
   `start_time` DATETIME DEFAULT NULL,
   `end_time` DATETIME DEFAULT NULL,
@@ -114,11 +114,10 @@ CREATE TABLE `policy_apply` (
   CONSTRAINT `fk_apply_applicant`
     FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
   CONSTRAINT `ck_apply_channel` CHECK (`channel_type` IN ('RETAIL', 'BILLION')),
-  CONSTRAINT `ck_apply_retail_fields` CHECK (
+  CONSTRAINT `ck_apply_retail_basics` CHECK (
     (`write_off_type` IS NULL OR `write_off_type` IN ('SALES', 'ACTIVATION'))
-    AND (`scene` IS NULL OR `scene` IN ('NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB'))
     AND (`is_estimated` IS NULL OR `is_estimated` IN (0, 1))
-    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene` IS NULL AND `is_estimated` IS NULL))
+    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene_types` IS NULL AND `is_estimated` IS NULL))
   ),
   CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`),
   CONSTRAINT `ck_apply_status_version` CHECK (

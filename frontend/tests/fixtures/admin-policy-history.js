@@ -29,7 +29,9 @@ export function historySnapshot(version) {
       perspective: 'RETAIL',
       selectedPlatforms: ['JD'],
       verifyType: 'SALES',
-      sceneType: 'SELF_SUB',
+      ...(version === 1
+        ? { sceneType: 'SELF_SUB' }
+        : { sceneTypes: ['NATIONAL_SUB', 'LOCAL_SUB'] }),
       estimated: false,
       startTime: '2026-11-16T00:00:00+08:00',
       endTime: '2026-12-16T00:00:00+08:00',

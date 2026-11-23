@@ -41,6 +41,7 @@ export const policyIsEditable = (status) => status === 'DRAFT' || status === 'RE
 export const PLATFORM_LABELS = Object.fromEntries(RETAIL_PLATFORMS)
 export const VERIFY_LABELS = { SALES: '销售维度', ACTIVATION: '激活维度' }
 export const SCENE_LABELS = { NATIONAL_SUB: '国补', LOCAL_SUB: '地补', SELF_SUB: '自补' }
+export const SCENE_CODES = Object.keys(SCENE_LABELS)
 export const PRICE_BASE_LABELS = {
   RETAIL_PRICE: '零售价',
   POLICY_PRICE: '政策价',

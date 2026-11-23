@@ -7,9 +7,9 @@ import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
-import com.company.policy.vo.PolicyReviewResponse.Coverage;
 import com.company.policy.vo.PolicyReviewResponse.Detail;
 import com.company.policy.vo.PolicyReviewResponse.Effective;
+import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
 import io.swagger.v3.oas.annotations.Operation;
@@ -110,8 +110,8 @@ public class PolicyReviewController {
     }
 
     @GetMapping("/{id}/override-preview")
-    @Operation(summary = "查看当前待审轮次覆盖预览", description = "按假设此刻审核通过计算，实际生效以审核记录和查询时点为准。")
-    public Coverage preview(
+    @Operation(summary = "查看当前待审轮次覆盖预览", description = "按本轮实际提交顺序和假设通过时间复核，返回分段、冻结决定及下一步操作。")
+    public OverridePreview preview(
             @PathVariable long id,
             @RequestParam int recordVersion,
             @RequestParam int submissionVersion,
@@ -121,7 +121,9 @@ public class PolicyReviewController {
     }
 
     @GetMapping("/effective")
-    @Operation(summary = "查询渠道、平台及商品在指定时点适用的政策", description = "在审核通过和开始时间均已达到的申请中，按提交时间倒序选取一份。")
+    @Operation(
+            summary = "查询渠道、平台及商品在指定时点适用的政策",
+            description = "按北京时间及本轮确认决定返回所有实际适用政策，单一结果兼容 winner 和 snapshot。")
     public Effective effective(
             @RequestParam String perspective,
             @RequestParam String platformCode,

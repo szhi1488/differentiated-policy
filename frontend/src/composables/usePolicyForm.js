@@ -248,7 +248,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       return
     }
     if (
-      ['verifyType', 'scene', 'estimated', 'startTime', 'endTime', 'remark', 'links'].includes(
+      ['verifyType', 'scenes', 'estimated', 'startTime', 'endTime', 'remark', 'links'].includes(
         field,
       )
     ) {

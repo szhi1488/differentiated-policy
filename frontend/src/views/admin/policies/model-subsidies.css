@@ -63,7 +63,8 @@
 }
 .model-subsidy-query-note {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   color: #9a7a43;
   background: #fffcf6;
@@ -72,6 +73,42 @@
   border-radius: 0 0 9px 9px;
   font-size: 11px;
   line-height: 1.7;
+}
+.model-subsidy-query-note .model-subsidy-example {
+  font-size: 12px;
+  margin-left: auto;
+}
+.model-subsidy-estimate {
+  display: inline-block;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #594184;
+  background: #eeeafa;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.model-subsidy-fill-key {
+  width: 12px;
+  height: 8px;
+  border: 1px solid #71829a;
+  background: #f4f6f9;
+  border-radius: 2px;
+}
+.model-subsidy-fill-key.used {
+  background: #566a84;
+}
+.model-subsidy-source.inspected {
+  box-shadow: inset 3px 0 #6585b5;
+}
+.model-subsidy-source-periods {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #536981;
+}
+.model-subsidy-source-periods summary {
+  cursor: pointer;
 }
 .model-subsidy-query-note svg {
   flex: none;
@@ -102,68 +139,38 @@
 }
 .model-subsidy-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 255px;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 29%);
+  grid-template-areas: 'charts detail';
   align-items: start;
   gap: 16px;
 }
-.model-subsidy-point-card {
-  padding: 2px 17px;
-}
-.model-subsidy-point-card .el-collapse {
-  border: 0;
-}
-.model-subsidy-point-card .el-collapse-item__header {
-  font-size: 14px;
-  color: #273c58;
-  font-weight: 600;
-}
-.model-subsidy-point-card .el-collapse-item__wrap {
-  border-bottom: 0;
-}
-.model-subsidy-point-time {
-  font-size: 11px;
-  color: #627c9e;
-  font-variant-numeric: tabular-nums;
-}
-.model-subsidy-point-channel {
-  margin-top: 13px;
-}
-.model-subsidy-point-channel h3 {
-  font-size: 11px;
-  color: #8a98ae;
-  font-weight: 500;
-  margin-bottom: 7px;
-}
-.model-subsidy-point-channel ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 6px;
-}
-.model-subsidy-point-channel li {
+.model-subsidy-section-heading,
+.model-subsidy-section-heading h2 {
   display: flex;
   align-items: center;
+  gap: 9px;
+}
+.model-subsidy-section-heading {
   justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  color: #556d8d;
+  flex-wrap: wrap;
 }
-.model-subsidy-point-channel li > span {
-  flex: none;
+.model-subsidy-section-heading svg {
+  color: #347cff;
 }
-.model-subsidy-point-channel small {
-  display: block;
-  color: #98a4b5;
-  font-size: 10px;
+.model-subsidy-detail-at {
+  font-size: 12px;
+  color: #5d6e85;
+  margin: 12px 0;
+  font-variant-numeric: tabular-nums;
 }
-.model-subsidy-point-channel .el-button {
-  font-size: 11px;
-  white-space: normal;
-  text-align: right;
-  line-height: 1.5;
+.model-subsidy-source .fixed {
+  color: #275eaa;
+}
+.model-subsidy-source .ratio {
+  color: #965912;
 }
 .model-subsidy-charts {
+  grid-area: charts;
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -195,6 +202,7 @@
 }
 .model-subsidy-legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 13px;
   font-size: 11px;
   color: #6b7b94;
@@ -212,100 +220,95 @@
 .model-subsidy-legend svg.ratio {
   color: #ed963c;
 }
-.model-subsidy-details {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-}
 .model-subsidy-detail-card {
+  grid-area: detail;
   padding: 17px;
+  scroll-margin-top: 72px;
 }
-.model-subsidy-detail-card > header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 14px;
-}
-.model-subsidy-selected-plan {
-  display: grid;
-  gap: 9px;
-  padding: 15px 12px;
+.model-subsidy-detail-summary {
+  margin: 14px 0;
+  padding: 13px 14px;
   border-radius: 6px;
+  background: #f0f5fe;
+  color: #365578;
 }
-.model-subsidy-selected-plan.fixed {
-  background: #f0f5ff;
-  color: #3869ad;
-}
-.model-subsidy-selected-plan.ratio {
-  background: #fff6eb;
-  color: #aa702c;
-}
-.model-subsidy-selected-plan > span {
-  font-size: 11px;
-}
-.model-subsidy-selected-plan strong {
-  font-size: 21px;
-  font-weight: 600;
-}
-.model-subsidy-selected-plan small {
-  font-size: 11px;
-}
-.model-subsidy-detail-fields {
-  display: grid;
-  gap: 13px;
-  margin: 19px 0;
-}
-.model-subsidy-detail-fields > div {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 9px;
-  align-items: start;
-  font-size: 11px;
-  line-height: 1.8;
-}
-.model-subsidy-detail-fields dt {
-  color: #8a98ae;
-}
-.model-subsidy-detail-fields dd {
-  margin: 0;
-  color: #415777;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-.model-subsidy-goods {
-  border-top: 1px solid #edf1f7;
-  padding-top: 15px;
-}
-.model-subsidy-goods h3 {
+.model-subsidy-detail-summary > span {
   font-size: 12px;
-  color: #5b6e8a;
-  font-weight: 500;
 }
-.model-subsidy-goods ul {
+.model-subsidy-detail-summary h3 {
+  margin: 6px 0;
+  color: #264e84;
+  font-size: 19px;
+}
+.model-subsidy-detail-summary p,
+.model-subsidy-source p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.model-subsidy-detail-card dl {
   margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 9px;
-}
-.model-subsidy-goods li {
   display: grid;
   gap: 4px;
-  font-size: 11px;
-  color: #536b8a;
+  font-size: 12px;
+  line-height: 1.6;
 }
-.model-subsidy-goods small {
-  color: #95a1b2;
-  font-size: 10px;
-  overflow-wrap: anywhere;
+.model-subsidy-detail-card dl > div {
+  display: grid;
+  grid-template-columns: 4.3em minmax(0, 1fr);
+  gap: 7px;
+}
+.model-subsidy-detail-card dt {
+  color: #65758c;
+}
+.model-subsidy-detail-card dd {
+  margin: 0;
+  color: #344c69;
+  font-variant-numeric: tabular-nums;
+}
+.model-subsidy-decision-note {
+  border-left: 2px solid #8cace1;
+  padding-left: 9px;
+  margin: 12px 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #536981;
+}
+.model-subsidy-source-heading {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #e2eaf5;
+  font-size: 13px;
+  color: #283e5b;
+}
+.model-subsidy-source-heading small {
+  font-size: 11px;
+  color: #64768a;
+  font-weight: 400;
+  margin-left: 4px;
+}
+.model-subsidy-source {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f7f9fc;
+  border-radius: 5px;
+  color: #455e78;
+}
+.model-subsidy-source.muted {
+  background: #f5f5f5;
+}
+.model-subsidy-source header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  font-size: 13px;
 }
 @media (max-width: 1100px) {
   .model-subsidy-workspace {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .model-subsidy-details {
-    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr);
+    grid-template-areas: 'charts' 'detail';
   }
 }
 @media (max-width: 650px) {
@@ -329,9 +332,6 @@
   .model-subsidy-query-note {
     margin-inline: -12px;
     padding-inline: 12px;
-  }
-  .model-subsidy-details {
-    grid-template-columns: minmax(0, 1fr);
   }
   .model-subsidy-chart-header {
     padding-inline: 12px;

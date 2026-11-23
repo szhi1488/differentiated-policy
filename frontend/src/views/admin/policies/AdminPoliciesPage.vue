@@ -15,6 +15,7 @@ import {
   SCENE_LABELS,
   VERIFY_LABELS,
 } from '../../../constants/policy'
+import { policySceneLabel } from '../../../utils/policy-adapter'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 import AdminPolicyHistory from './AdminPolicyHistory.vue'
 import './admin-policies.css'
@@ -231,7 +232,7 @@ function reloadReview() {
             <template #default="{ row }">{{ VERIFY_LABELS[row.verifyType] ?? '—' }}</template>
           </el-table-column>
           <el-table-column label="涉及场景" min-width="84">
-            <template #default="{ row }">{{ SCENE_LABELS[row.sceneType] ?? '—' }}</template>
+            <template #default="{ row }">{{ policySceneLabel(row) }}</template>
           </el-table-column>
           <el-table-column prop="applicant" label="提交人" min-width="76" />
           <el-table-column prop="submittedAt" label="提交时间" min-width="164" />

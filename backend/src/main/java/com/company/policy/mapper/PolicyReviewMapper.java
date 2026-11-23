@@ -3,6 +3,7 @@ package com.company.policy.mapper;
 import com.company.policy.dto.PolicyReviewQuery;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
+import com.company.policy.vo.PolicyApplicability.Scope;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
@@ -20,7 +21,8 @@ public interface PolicyReviewMapper {
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.perspective')), 'null') AS channel_type,
             JSON_EXTRACT(snapshot_data, '$.form.selectedPlatforms') AS platforms,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.verifyType')), 'null') AS write_off_type,
-            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.sceneType')), 'null') AS scene
+            COALESCE(JSON_EXTRACT(snapshot_data, '$.form.sceneTypes'),
+                     JSON_EXTRACT(snapshot_data, '$.form.sceneType')) AS scene_types
           FROM policy_audit_log
         ) a
           ON a.policy_id = p.id AND a.tenant_key = p.tenant_key AND a.version = p.current_version
@@ -28,7 +30,7 @@ public interface PolicyReviewMapper {
     String COLUMNS =
             """
         p.id, p.policy_no, p.tenant_key, p.applicant_id, a.applicant_name,
-        a.channel_type, a.platforms, a.write_off_type, a.scene,
+        a.channel_type, a.platforms, a.write_off_type, a.scene_types,
         p.status, p.record_version, p.current_version, a.created_at AS created_at
         """;
     String SUBMITTED =
@@ -41,7 +43,7 @@ public interface PolicyReviewMapper {
         <if test="q.perspective != null">AND a.channel_type = #{q.perspective}</if>
         <if test="q.platformCode != null">AND JSON_CONTAINS(a.platforms, JSON_QUOTE(#{q.platformCode}))</if>
         <if test="q.verifyType != null">AND a.write_off_type = #{q.verifyType}</if>
-        <if test="q.sceneType != null">AND a.scene = #{q.sceneType}</if>
+        <if test="q.sceneType != null">AND JSON_CONTAINS(a.scene_types, JSON_QUOTE(#{q.sceneType}))</if>
         <if test="q.applicant != null">AND LOWER(a.applicant_name) LIKE LOWER(#{q.applicant}) ESCAPE '!'</if>
         <if test="q.submittedFrom != null">AND a.created_at &gt;= #{q.submittedFrom}</if>
         <if test="q.submittedBefore != null">AND a.created_at &lt; #{q.submittedBefore}</if>
@@ -86,7 +88,7 @@ public interface PolicyReviewMapper {
     @Select(
             """
         <script>
-        SELECT a.id, a.snapshot_data
+        SELECT a.id, a.snapshot_data, a.created_at, a.audit_time
         FROM policy_audit_log a
         JOIN policy_apply p ON p.id = a.policy_id AND p.tenant_key = a.tenant_key
         WHERE p.tenant_key = #{tenantKey} AND p.is_deleted = 0
@@ -96,6 +98,55 @@ public interface PolicyReviewMapper {
         </script>
         """)
     List<PolicyAuditLog> coverageSnapshots(String tenantKey, List<Long> auditIds);
+
+    // 限定公司、当前已通过轮次、交叉日期与本次实际选品范围。不同颜色的百亿商品按配置命中。
+    @Select(
+            """
+        <script>
+        SELECT DISTINCT a.id
+        FROM policy_apply p
+        JOIN policy_audit_log a ON a.policy_id = p.id AND a.version = p.current_version AND a.tenant_key = p.tenant_key
+        JOIN policy_goods_detail d ON d.policy_id = p.id AND d.version = a.version
+        WHERE p.tenant_key = #{tenantKey} AND p.channel_type = #{channel} AND p.is_deleted = 0
+          AND p.id != #{draftId} AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
+          AND a.audit_time &lt;= #{asOf}
+          AND LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
+          AND (<if test="includeExpiredLegacy">JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL OR </if>
+               LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
+        <choose>
+          <when test="channel == 'RETAIL'">
+            AND (d.goods_id, d.platform_code) IN
+            <foreach collection="scopes" item="s" open="(" separator="," close=")">(#{s.goodsId}, #{s.platformCode})</foreach>
+          </when>
+          <otherwise>
+            AND (d.spu_id, d.ram, d.rom, d.platform_code) IN
+            <foreach collection="scopes" item="s" open="(" separator="," close=")">(#{s.spuId}, #{s.ram}, #{s.rom}, #{s.platformCode})</foreach>
+          </otherwise>
+        </choose>
+        </script>
+        """)
+    List<Long> overlappingAuditIds(
+            String tenantKey,
+            long draftId,
+            String channel,
+            LocalDateTime asOf,
+            String firstDate,
+            String lastDate,
+            List<Scope> scopes,
+            boolean includeExpiredLegacy);
+
+    @Select(
+            """
+        <script>SELECT id FROM spu WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY id FOR UPDATE</script>
+        """)
+    List<Long> lockScopeModels(List<Long> ids);
+
+    @Select("SELECT spu_id, ram, rom FROM goods WHERE id = #{goodsId}")
+    Configuration configuration(long goodsId);
+
+    record Configuration(long spuId, String ram, String rom) {}
 
     @Update(
             """

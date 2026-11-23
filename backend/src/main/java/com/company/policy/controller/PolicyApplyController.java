@@ -103,7 +103,8 @@ public class PolicyApplyController {
     @GetMapping("/{id}/submission-preview")
     @Operation(
             summary = "申请人确认提交范围",
-            description = "校验本人草稿或已驳回申请及记录版本，按本人、渠道、平台及商品对照预计生效时点已通过的本人历史政策。")
+            description =
+                    "校验本人草稿或已驳回申请及负责平台。applicability 按公司已通过快照的首尾日期试算分段组合，canDirectSubmit 为预览结论。confirmationToken 对应本次整单判定。")
     public PolicyResponse.SubmissionPreview preview(
             @PathVariable long id,
             @RequestParam Integer recordVersion,
@@ -115,14 +116,10 @@ public class PolicyApplyController {
     @Operation(
             summary = "提交已保存的申请",
             description =
-                    "须提交 recordVersion 和申请人核对的 confirmationToken。商品或本人政策对照结果变化返回 409，须重新预览。后端读取已保存表单并复核商品，原单转 PENDING 且新增本轮快照和平台明细。")
+                    "直提只需 recordVersion；有交叉时提交 confirmationToken 和各段 decisions。零售每段提交 SELECT 和 selectedPolicyIds，完整场景组合与核销类型相同的政策最多选一张。选择缺失、无效或范围变化返回 409。成功转 PENDING 并保存本轮快照和明细。")
     public PolicyResponse submit(
             @PathVariable long id, @RequestBody Submission body, HttpServletRequest request) {
-        return policies.submit(
-                sessions.requireLogin(request).user(),
-                id,
-                body.recordVersion(),
-                body.confirmationToken());
+        return policies.submit(sessions.requireLogin(request).user(), id, body);
     }
 
     @GetMapping("/{id}")

@@ -46,6 +46,7 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
   await wrapper.get('[aria-label="审核政策 ZC-000005"]').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain('第二轮最新备注')
+  expect(wrapper.text()).toContain('国补、地补')
   expect(fetch.mock.calls.some(([path]) => path.includes('audit-logs'))).toBe(false)
   await wrapper.get('#tab-history').trigger('click')
   await flushPromises()
@@ -58,6 +59,8 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
   await flushPromises()
   const history = wrapper.get('.admin-policy-history')
   expect(history.text()).toContain('第一轮原始备注')
+  expect(history.text()).toContain('自补')
+  expect(history.text()).not.toContain('国补、地补')
   expect(history.text()).toContain('历史机型名称')
   expect(history.text()).toContain('0.10 元')
   expect(history.text()).toContain('历史审核员')
@@ -90,6 +93,7 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
   await wrapper.get('#tab-current').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain('第二轮最新备注')
+  expect(wrapper.text()).toContain('国补、地补')
   expect(button(wrapper, '通过')).toBeDefined()
   expect(fetch.mock.calls.every(([, options]) => !options.method || options.method === 'GET')).toBe(
     true,

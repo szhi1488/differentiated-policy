@@ -1,5 +1,6 @@
 package com.company.policy.entity;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
 /** policy_audit_log.snapshot_data 的持久化格式。已有提交和新提交共用这些字段名； 列表筛选、历史附件与补贴对照都依赖其 JSON 结构。 */
@@ -10,13 +11,15 @@ public record PolicySnapshotData(
         String applicantName,
         int submissionVersion,
         Form form,
-        List<Goods> goods) {
+        List<Goods> goods,
+        @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent) {
     public record Form(
             Integer recordVersion,
             String perspective,
             List<String> selectedPlatforms,
             String verifyType,
             String sceneType,
+            List<String> sceneTypes,
             Boolean estimated,
             String startTime,
             String endTime,

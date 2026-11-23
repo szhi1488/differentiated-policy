@@ -4,6 +4,7 @@ import {
   CHANNEL_LABELS,
   VERIFY_LABELS,
   SCENE_LABELS,
+  SCENE_CODES,
 } from '../../../constants/policy'
 defineProps({
   form: { type: Object, required: true },
@@ -86,15 +87,24 @@ defineEmits(['update-field', 'switch-channel', 'toggle-platform', 'select-all', 
           </el-radio-group>
         </el-form-item>
         <el-form-item label="涉及场景" required>
-          <el-radio-group
-            :model-value="form.scene"
-            @update:model-value="$emit('update-field', 'scene', $event)"
-            aria-label="涉及场景"
-          >
-            <el-radio v-for="(label, code) in SCENE_LABELS" :key="code" :value="code">
-              {{ label }}
-            </el-radio>
-          </el-radio-group>
+          <div class="policy-scene-options" role="group" aria-label="涉及场景">
+            <el-checkbox
+              :model-value="form.scenes.length === SCENE_CODES.length"
+              :indeterminate="form.scenes.length > 0 && form.scenes.length < SCENE_CODES.length"
+              @change="$emit('update-field', 'scenes', $event ? [...SCENE_CODES] : [])"
+            >
+              全部
+            </el-checkbox>
+            <el-checkbox-group
+              :model-value="form.scenes"
+              aria-label="具体场景"
+              @update:model-value="$emit('update-field', 'scenes', $event)"
+            >
+              <el-checkbox v-for="(label, code) in SCENE_LABELS" :key="code" :value="code">
+                {{ label }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
         </el-form-item>
         <el-form-item label="是否为预估政策" required>
           <el-radio-group

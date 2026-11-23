@@ -5,9 +5,9 @@ import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
-import com.company.policy.vo.PolicyReviewResponse.Coverage;
 import com.company.policy.vo.PolicyReviewResponse.Detail;
 import com.company.policy.vo.PolicyReviewResponse.Effective;
+import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
 
@@ -23,7 +23,7 @@ public interface PolicyReviewService {
     Review review(CurrentUserResponse session, long id, PolicyReviewRequest request);
 
     /** 预览当前待审轮次在此刻获批时对同渠道、同平台商品政策的覆盖结果。 */
-    Coverage preview(
+    OverridePreview preview(
             CurrentUserResponse session, long id, int recordVersion, int submissionVersion);
 
     /** 查询指定时点、渠道、平台和商品的有效政策，省略时点时使用当前时间。 */

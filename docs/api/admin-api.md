@@ -1,6 +1,6 @@
 # 采购管理员审核与有效政策接口
 
-更新日期：2026-11-16。以下七个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
+更新日期：2026-11-20。以下七个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -19,6 +19,8 @@
 详情的 `policy` 提供记录版本、提交轮次、审核状态和 `reviewable`；`snapshot` 保存本轮提交内容；`audit` 保存当前审核结果。省略 `includeCoverage` 时兼容旧客户端，待审核和已通过详情包含 `coverage`。
 
 管理员列表、筛选、状态数量统计及详情的 `policy` 摘要统一按 `current_version` 关联最近正式提交快照，读取其中的申请人、渠道、整单平台、核销类型及场景。驳回后申请人保存编辑内容只影响本人可回填的主表，管理员继续展示和筛选原提交内容；重提事务成功后才切换到新轮次。状态、并发版本、归属和审核权限仍按有效主表判断。快照中的可空核销类型和场景返回 null，不将 JSON null 显示为字符串。接口路径及响应字段保持兼容。
+
+查询参数 `sceneType` 仍指定一个场景。列表、总数和各状态计数均按最新提交快照是否包含该场景筛选，一份多选政策只计一条。摘要与详情使用 `sceneTypes` 展示实际选择。旧快照用 `form.sceneType` 匹配，单选仍返回兼容字段，百亿场景为空。
 
 目标库已具备政策三表和正式提交数据后，在 Navicat 对照主表与最近提交快照，核对筛选结果、状态计数及查询计划。驳回修改保存后按旧提交条件应命中，重提成功后切换到新条件。目标库结果和执行计划待用户核对。
 
@@ -41,7 +43,7 @@
 
 `decision` 取 `APPROVE` 或 `REJECT`，意见选填，最多 512 字。服务端确定审核人及审核时间，并在同一事务更新主表和当前待审轮次。响应包含 `id`、`status`、`recordVersion`、`submissionVersion`、`reviewTime`。审核记录保留，驳回后可原单重提。
 
-管理页点击「通过」发送 `APPROVE`，`reviewRemark` 为 null。管理员核对本轮申请内容，服务端按实际权限、状态、版本和轮次更新。写入冲突或结果未知时须重新读取。预计覆盖范围由申请人在正式提交前核对。[提交契约](policy-api.md)
+管理页点击「通过」发送 `APPROVE`，`reviewRemark` 为 null。服务端核验权限、状态、版本、轮次，并在机型锁内复核批准时仍有效的组合。结果相同可继续通过；新增未确认组合返回 `POLICY_RECONFIRM_REQUIRED`，已过截止日返回 `POLICY_NO_EFFECTIVE_PERIOD`，两者均保留待审状态。管理员可沿用驳回，由原申请人处理。[复核与生效查询](#覆盖预览与有效政策)
 
 ## 历轮审核
 
@@ -53,23 +55,15 @@
 
 ## 覆盖预览与有效政策
 
-预览请求携带 `recordVersion` 和 `submissionVersion`。返回比较时点 `at`、该申请最早满足生效条件的时点 `effectiveFrom`，以及每个商品和平台的结果 `items`。
+待审单的 `override-preview` 携带 `recordVersion` 和 `submissionVersion`。响应包含 `applicability`（按当前假设通过时点计算的整单分段）、`consent`（本轮提交时的决定）、`requiresResubmission` 与 `nextAction`。正常审核为 `REVIEW`。已出现未确认组合或已无可生效时段时为 `REJECT_FOR_RESUBMISSION`。管理员可通过原审核接口驳回，原申请人编辑、重新确认并重提。
 
-| 场景 | 结果 |
-| --- | --- |
-| 待审核 | `NEW` 新增，`REPLACES` 覆盖现有政策，`RETAINED` 由较新的申请继续适用 |
-| 已通过 | `SCHEDULED` 等待本申请开始时间，`EFFECTIVE` 当前生效，`SUPERSEDED` 已被较新申请覆盖 |
+`APPROVE` 在机型行锁内按实际审核时刻再次判定。组合变化返回 409 `POLICY_RECONFIRM_REQUIRED`，已到期返回 409 `POLICY_NO_EFFECTIVE_PERIOD`。两种情况均保持待审，管理员可查看预览或执行驳回。只复核仍可生效的时段。零售同组新增候选也需要重新确认。旧版待审零售单已确认的时段、分组和候选与新预览一致时可继续审核。旧版拆分多场景导致分组变化时，由原申请人按新版分组重提。
 
-条目包含 `platformCode`、`goodsId`、`outcome` 及对照政策 `winner`。`winner.auditLogId` 是该匹配提交轮次的审核日志 ID，以字符串返回，供单轮快照与附件读取；不使用该申请另一个轮次替代。确认审核使用实际通过时间。预览按当时已通过的记录计算。
+`GET /api/admin/policies/effective` 必须提供 `perspective`、`platformCode`、`goodsId`。可选 `at` 使用北京时间 `YYYY-MM-DDTHH:mm:ss+08:00`，默认当前时刻。手写 URL 时将加号编码为 `%2B`。
 
-每条 `items` 增加可空 `existingSubsidy`，提供命中已通过快照中同商品同平台的补贴方案（方式、固定金额、上限、比例和基数）。无对照政策或缺少对应方案时为 null。后端按命中的日志 ID 去重后一次批量读取，已通过详情命中自身时复用本轮快照；仍按有效主表的企业、删除状态、已通过状态和日志审核状态过滤。
+响应的 `policies[]` 是该时点的全部适用政策。每项的 `winner` 给出单号和日志 ID，`snapshot` 是提交快照，`selections` 提供该平台及商品范围内的补贴和指定商品颜色。单一结果另填顶层 `winner` 与 `snapshot`；叠加时这两个字段为 null，查无政策时数组为空。新版零售按该平台、商品和时段内最近正式提交且已获批的区间决定，返回冻结的 `selectedPolicyIds` 对应政策，允许只含旧单。该段结束后按其他仍适用的决定计算。没有新版决定的历史时点按原规则回查。百亿二选一只在确认的配置、平台和交叉时段内生效，后续查询和后续新申请都继承该段的选择。
 
-申请人预览通过本人申请接口读取整单适用范围和命中旧补贴。[范围与对照](../business/override-engine.md#4-申请人提交前确认覆盖范围)
-
-
-`GET /api/admin/policies/effective` 必须提供 `perspective`、`platformCode`、`goodsId`。可选 `at` 格式为 `YYYY-MM-DDTHH:mm:ss+08:00`，默认当前北京时间。手写查询字符串时，时区中的 `+` 编码为 `%2B`。
-
-响应包含查询时点 `at`、生效政策 `winner` 和该轮 `snapshot`。`winner` 包含 `id`、`policyCode`、`auditLogId`、`submissionVersion`、`submittedAt` 和 `effectiveFrom`。没有符合条件的政策时，`winner` 和 `snapshot` 均为 null。各申请按其独立开始时间、审核通过时间和本轮提交顺序解析，参考到期时间供展示。[覆盖规则](../business/override-engine.md)
+旧单在上线时刻起按原快照日期到期退出。查上线前的时点沿用旧单有效口径；业务上线时在各实例配置同一个 `POLICY_APPLICABILITY_CUTOVER_AT`。未配置且指定过去的时点涉及旧轮次时返回 409 `POLICY_CUTOVER_REQUIRED`，配置实际时刻后重查。[环境配置](../architecture/environment-configuration.md)
 
 ## 错误
 

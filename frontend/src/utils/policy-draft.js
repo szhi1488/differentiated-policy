@@ -1,4 +1,10 @@
-import { decimalText, policyApiTime, policyTime, stringId } from './policy-adapter'
+import {
+  decimalText,
+  policyApiTime,
+  policyTime,
+  selectedPolicyScenes,
+  stringId,
+} from './policy-adapter'
 import { createForm, createSubsidy } from './policy-form'
 
 export function applicantGood(item) {
@@ -69,7 +75,7 @@ export function policyDraft(form, recordVersion) {
     perspective: form.channel,
     selectedPlatforms: [...form.platforms],
     verifyType: retail ? form.verifyType : null,
-    sceneType: retail ? form.scene : null,
+    sceneTypes: retail ? [...form.scenes] : null,
     estimated: retail ? form.estimated : null,
     startTime: policyApiTime(form.startTime),
     endTime: policyApiTime(form.endTime),
@@ -94,7 +100,7 @@ export function restorePolicyForm(detail) {
     channel: source.perspective,
     platforms: [...source.selectedPlatforms],
     verifyType: source.verifyType,
-    scene: source.sceneType,
+    scenes: source.perspective === 'RETAIL' ? [...selectedPolicyScenes(source)] : null,
     estimated: source.estimated,
     startTime: policyTime(source.startTime),
     endTime: policyTime(source.endTime),

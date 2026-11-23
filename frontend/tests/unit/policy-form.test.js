@@ -15,7 +15,7 @@ describe('申请表单的渠道和平台明细', () => {
     changeChannel(form, 'BILLION')
     expect(form.platforms).toEqual([])
     expect(form.cards).toEqual([])
-    expect([form.verifyType, form.scene, form.estimated]).toEqual([null, null, null])
+    expect([form.verifyType, form.scenes, form.estimated]).toEqual([null, null, null])
     expect(BILLION_PLATFORMS.map(([code]) => code)).toEqual(['PDD', 'TAOBAO', 'UNICOM'])
     expect(RETAIL_PLATFORMS).toHaveLength(10)
     changeChannel(form, 'RETAIL')

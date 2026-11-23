@@ -13,7 +13,7 @@ public class PolicyApply {
     private String channelType;
     private String platforms;
     private String writeOffType;
-    private String scene;
+    private String sceneTypes;
     private Boolean isEstimated;
     private LocalDateTime startTime;
     private LocalDateTime endTime;

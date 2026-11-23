@@ -41,7 +41,9 @@ class PolicySnapshotCodecTest {
         var json = new ObjectMapper();
         var codec = new PolicySnapshotCodec();
         var expected = json.readTree(LEGACY);
-        ((ObjectNode) expected.get("form")).remove("otherExplanation");
+        var form = (ObjectNode) expected.get("form");
+        form.remove("otherExplanation");
+        form.putArray("sceneTypes").add("LOCAL_SUB");
 
         var snapshot = codec.read(LEGACY);
         assertThat(json.<JsonNode>valueToTree(snapshot)).isEqualTo(expected);

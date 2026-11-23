@@ -1,6 +1,7 @@
 package com.company.policy.vo;
 
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
+import com.company.policy.entity.PolicyConsent;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import java.util.List;
@@ -17,6 +18,7 @@ public final class PolicyReviewResponse {
             List<String> platforms,
             String verifyType,
             String sceneType,
+            List<String> sceneTypes,
             String submittedAt,
             String status,
             int recordVersion,
@@ -53,5 +55,14 @@ public final class PolicyReviewResponse {
             String submittedAt,
             String effectiveFrom) {}
 
-    public record Effective(String at, Winner winner, Snapshot snapshot) {}
+    public record Applied(
+            Winner winner, Snapshot snapshot, List<PolicyApplicability.Selection> selections) {}
+
+    public record Effective(String at, Winner winner, Snapshot snapshot, List<Applied> policies) {}
+
+    public record OverridePreview(
+            PolicyApplicability applicability,
+            PolicyConsent consent,
+            boolean requiresResubmission,
+            String nextAction) {}
 }

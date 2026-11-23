@@ -26,13 +26,13 @@ public interface PolicyApplyService {
     /** 核对版本后，删除本人从未正式提交过的草稿。 */
     void deleteDraft(CurrentUserResponse session, long id, Integer recordVersion);
 
-    /** 读取本人拟提交的整单与本人历史政策的对照结果和确认标识。 */
+    /** 读取本人拟提交整单在当前负责平台的区间判定和本轮确认标识。 */
     PolicyResponse.SubmissionPreview preview(
             CurrentUserResponse session, long id, Integer recordVersion);
 
     /** 校验已保存的申请并正式提交，生成本轮提交快照和商品明细。 */
     PolicyResponse submit(
-            CurrentUserResponse session, long id, Integer recordVersion, String confirmationToken);
+            CurrentUserResponse session, long id, PolicyDraftRequest.Submission request);
 
     /** 读取本人申请详情，可编辑状态返回当前表单，待审或已通过状态返回提交快照。 */
     Detail detail(CurrentUserResponse session, long id);

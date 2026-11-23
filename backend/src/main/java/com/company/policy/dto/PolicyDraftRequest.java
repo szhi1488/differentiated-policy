@@ -1,5 +1,6 @@
 package com.company.policy.dto;
 
+import com.company.policy.vo.PolicyApplicability.Scope;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -19,7 +20,8 @@ public record PolicyDraftRequest(
                 String perspective,
         List<String> selectedPlatforms,
         String verifyType,
-        String sceneType,
+        @Schema(description = "兼容旧单选请求，仅单选时返回该值") String sceneType,
+        @Schema(description = "零售所选场景，国补、地补、自补可多选；百亿为空") List<String> sceneTypes,
         Boolean estimated,
         @Schema(example = "2026-11-10T09:00:00+08:00") String startTime,
         @Schema(example = "2026-11-20T18:00:00+08:00") String endTime,
@@ -67,7 +69,17 @@ public record PolicyDraftRequest(
 
     public record Submission(
             @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
-            String confirmationToken) {}
+            String confirmationToken,
+            List<Choice> decisions) {}
+
+    public record Choice(
+            Scope scope,
+            String through,
+            @Schema(allowableValues = {"SELECT", "STACK", "CHOOSE_ONE", "RETURN_TO_EDIT"})
+                    String choice,
+            String policyId,
+            @Schema(description = "零售 SELECT 必填，至少一张，同一完整场景组合和核销类型最多一张")
+                    List<String> selectedPolicyIds) {}
 
     public static final class IntOnly extends StdScalarDeserializer<Integer> {
         public IntOnly() {

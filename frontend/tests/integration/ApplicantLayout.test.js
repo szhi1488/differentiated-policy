@@ -16,6 +16,7 @@ import { createWorkspaceRouter } from '../../src/router'
 import { createMemoryHistory } from 'vue-router'
 import { createAuthSession, authSession } from '../../src/composables/useAuthSession'
 import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
+import { direct, matchedPreview } from '../fixtures/policy-applicability'
 import { createForm, policyModelKey } from '../../src/utils/policy-form'
 
 const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
@@ -78,6 +79,7 @@ let draft
 let savedStatus
 let version
 let fetchMock
+let applicability
 let submitFailure
 let submitResponseMode
 let auditRounds
@@ -89,6 +91,7 @@ beforeEach(() => {
   draft = null
   savedStatus = 'DRAFT'
   version = 0
+  applicability = direct
   submitFailure = null
   submitResponseMode = null
   auditRounds = []
@@ -189,19 +192,9 @@ beforeEach(() => {
         return reply({ code: 'POLICY_VALIDATION_FAILED', message: submitFailure }, 400)
       }
       expect(Number(url.searchParams.get('recordVersion'))).toBe(version)
-      const items = draft.goodsForm.cards.flatMap((card) =>
-        card.targets.flatMap(({ goodsId }) =>
-          card.platformAssignments.map(({ platformCode }) => ({
-            goodsId,
-            platformCode,
-            outcome: 'NEW',
-            winner: null,
-          })),
-        ),
-      )
       return reply({
         snapshot: { form: draft, goods: rows },
-        coverage: { items, effectiveFrom: '2026-11-20T12:00:00+08:00' },
+        applicability,
         confirmationToken: 'scope-' + version,
       })
     }
@@ -209,9 +202,18 @@ beforeEach(() => {
       if (submitFailure) {
         return reply({ code: 'POLICY_VALIDATION_FAILED', message: submitFailure }, 400)
       }
+      if (submitResponseMode === 'no-longer-matched') {
+        submitResponseMode = null
+        applicability = direct
+        return reply({ code: 'POLICY_COVERAGE_CHANGED', message: '交叉范围变化' }, 409)
+      }
       if (submitResponseMode === 'changed') {
         submitResponseMode = null
-        return reply({ code: 'POLICY_COVERAGE_CHANGED', message: '覆盖范围已变化' }, 409)
+        applicability = matchedPreview(false, '238')
+        const code = JSON.parse(init.body).decisions
+          ? 'POLICY_COVERAGE_CHANGED'
+          : 'POLICY_CONFIRMATION_REQUIRED'
+        return reply({ code, message: '覆盖范围已变化' }, 409)
       }
       if (submitResponseMode === 'unknown') {
         return reply({ message: '服务暂时不可用' }, 503)
@@ -254,7 +256,6 @@ function button(text) {
 async function confirmFormSubmission() {
   await wrapper.get('form').trigger('submit')
   await flushPromises()
-  await button('确认整单并提交').trigger('click')
 }
 
 async function selectPlatform(name) {
@@ -339,42 +340,101 @@ describe('申请人工作台组件协作', () => {
     expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('收起菜单后仍保留')
   })
 
-  it('核对范围时返回编辑保留草稿和选品，筛选空结果后仍按整单提交', async () => {
+  it('返回编辑保留已保存草稿、商品及附件，直至逐段确认执行政策', async () => {
+    applicability = matchedPreview()
     await render()
     await selectPlatform('京东')
     await addModel()
-    await wrapper.get('form').trigger('submit')
+    await wrapper.get('[aria-label="特别备注"]').setValue('待重新核对')
+    const input = wrapper.get('input[type=file]')
+    Object.defineProperty(input.element, 'files', {
+      value: [new File(['%PDF-1.7'], '审批资料.pdf')],
+    })
+    await input.trigger('change')
     await flushPromises()
-    expect(wrapper.text()).toContain('本人历史政策对照')
+    await confirmFormSubmission()
+    expect(button('确认整单并提交').element.disabled).toBe(true)
     await button('返回编辑').trigger('click')
     await flushPromises()
     expect(savedStatus).toBe('DRAFT')
-    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    expect(wrapper.get('[aria-label="特别备注"]').element.value).toBe('待重新核对')
+    expect(wrapper.text()).toContain('审批资料.pdf')
     expect(wrapper.find('.policy-model-card').exists()).toBe(true)
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-    await wrapper.get('[aria-label="覆盖商品关键词"]').setValue('不会命中的颜色')
-    expect(wrapper.text()).toContain('没有符合条件的对照结果')
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    await confirmFormSubmission()
+    await wrapper.get('.scope-segment input[value="118"]').setValue(true)
+    await wrapper.get('.scope-segment input[value="119"]').setValue(true)
+    await wrapper.get('[aria-label="覆盖商品关键词"]').setValue('不会命中的商品')
+    expect(wrapper.text()).toContain('没有符合条件的交叉时段')
     await button('确认整单并提交').trigger('click')
     await flushPromises()
+    const posted = JSON.parse(fetchMock.mock.calls.find(([url]) => url.endsWith('/submit'))[1].body)
+    expect(posted.confirmationToken).toBe('scope-2')
+    expect(posted.decisions.map((d) => d.selectedPolicyIds)).toEqual([['118'], ['119']])
     expect(savedStatus).toBe('PENDING')
   })
 
-  it('确认期间旧政策变化时重新展示范围，取消后不重发提交', async () => {
+  it.each([false, true])(
+    '直提或确认后范围变化，清除所有旧决定并展示最新时段（原先有命中 %s）',
+    async (hit) => {
+      if (hit) {
+        applicability = matchedPreview()
+      }
+      await render()
+      await selectPlatform('京东')
+      await addModel()
+      submitResponseMode = 'changed'
+      await confirmFormSubmission()
+      if (hit) {
+        await wrapper.get('.scope-segment input[value="118"]').setValue(true)
+        await wrapper.get('.scope-segment input[value="119"]').setValue(true)
+        await button('确认整单并提交').trigger('click')
+        await flushPromises()
+      }
+      expect(wrapper.text()).toContain('适用范围已变化')
+      expect(wrapper.text()).toContain('ZC-000238')
+      expect(button('确认整单并提交').element.disabled).toBe(true)
+      expect(
+        fetchMock.mock.calls.filter(([url]) => url.includes('/submission-preview?')),
+      ).toHaveLength(2)
+      await button('返回编辑').trigger('click')
+      await flushPromises()
+      expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(1)
+      expect(savedStatus).toBe('DRAFT')
+    },
+  )
+
+  it('交叉段全部消失后按最新直提结果提交，不再携带旧决定', async () => {
+    applicability = matchedPreview()
     await render()
     await selectPlatform('京东')
     await addModel()
-    submitResponseMode = 'changed'
+    submitResponseMode = 'no-longer-matched'
     await confirmFormSubmission()
+    await wrapper.get('.scope-segment input[value="118"]').setValue(true)
+    await wrapper.get('.scope-segment input[value="119"]').setValue(true)
+    await button('确认整单并提交').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('商品或本人历史政策已变化，请重新核对整单范围')
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url.includes('/submission-preview?')),
-    ).toHaveLength(2)
-    await button('返回编辑').trigger('click')
-    await flushPromises()
-    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))).toHaveLength(1)
-    expect(savedStatus).toBe('DRAFT')
+    const submits = fetchMock.mock.calls.filter(([url]) => url.endsWith('/submit'))
+    expect(submits).toHaveLength(2)
+    expect(JSON.parse(submits[1][1].body)).toEqual({ recordVersion: 1 })
+    expect(savedStatus).toBe('PENDING')
+  })
+
+  it('过期或缺失新预览结果时保留草稿供修改', async () => {
+    await render()
+    await selectPlatform('京东')
+    await addModel()
+    for (const result of [
+      { status: 'NO_EFFECTIVE_PERIOD', canDirectSubmit: false, scopes: [] },
+      null,
+    ]) {
+      applicability = result
+      await confirmFormSubmission()
+      expect(savedStatus).toBe('DRAFT')
+      expect(wrapper.find('.submission-coverage-dialog').exists()).toBe(false)
+      expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/submit'))).toBe(false)
+    }
   })
 
   it.each([null, 'confirmed'])(
@@ -637,6 +697,34 @@ describe('申请人工作台组件协作', () => {
     expect(router.currentRoute.value.query.policyId).toBe('321')
   })
 
+  it('零售场景可全选、清空或单独取消，保存后回填并在本人详情显示', async () => {
+    await render('/apply')
+    const inputs = () => wrapper.get('[aria-label="涉及场景"]').findAll('input[type="checkbox"]')
+    const checked = () => inputs().map((item) => item.element.checked)
+    expect(checked()).toEqual([false, true, false, false])
+    await inputs()[0].setValue(true)
+    expect(checked()).toEqual([true, true, true, true])
+    await button('保存草稿').trigger('click')
+    await flushPromises()
+    expect(draft.sceneTypes).toEqual(['NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB'])
+    await inputs()[0].setValue(false)
+    expect(checked()).toEqual([false, false, false, false])
+    await inputs()[0].setValue(true)
+    await inputs()[2].setValue(false)
+    await button('保存草稿').trigger('click')
+    await flushPromises()
+    expect(draft.sceneTypes).toEqual(['NATIONAL_SUB', 'SELF_SUB'])
+    wrapper.unmount()
+    wrapper = null
+    const router = await render('/apply?policyId=321')
+    expect(checked()).toEqual([false, true, false, true])
+    await router.push('/apply/submissions')
+    await flushPromises()
+    await button('详情').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('国补、自补')
+  })
+
   it('申请人仅查看当前申请和驳回原因，并以最新版本重新提交原单', async () => {
     draft = {
       perspective: 'RETAIL',
@@ -693,7 +781,7 @@ describe('申请人工作台组件协作', () => {
     await flushPromises()
     expect(document.body.textContent).toContain('申请已提交，等待审核')
     expect(fetchMock.mock.calls.find(([url]) => url.endsWith('/321/submit'))[1].body).toBe(
-      '{"recordVersion":4,"confirmationToken":"scope-4"}',
+      '{"recordVersion":4}',
     )
     expect(router.currentRoute.value.fullPath).toBe('/apply')
     expect(wrapper.findComponent(ElForm).props('model')).toEqual(createForm())
@@ -961,7 +1049,7 @@ describe('申请人工作台组件协作', () => {
     await flushPromises()
     expect(document.body.textContent).toContain('申请已提交，等待审核')
     expect(fetchMock.mock.calls.find(([url]) => url.endsWith('/321/submit'))[1].body).toBe(
-      '{"recordVersion":2,"confirmationToken":"scope-2"}',
+      '{"recordVersion":2}',
     )
     expect(draft.goodsForm.cards[0].targets.some(({ goodsId }) => goodsId === white.goodsId)).toBe(
       false,

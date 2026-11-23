@@ -55,7 +55,7 @@ export function createForm() {
     channel: 'RETAIL',
     platforms: [],
     verifyType: 'SALES',
-    scene: 'NATIONAL_SUB',
+    scenes: ['NATIONAL_SUB'],
     estimated: false,
     startTime: '',
     endTime: '',
@@ -70,7 +70,7 @@ export function changeChannel(form, channel) {
   form.platforms = []
   form.cards = []
   form.verifyType = channel === 'RETAIL' ? 'SALES' : null
-  form.scene = channel === 'RETAIL' ? 'NATIONAL_SUB' : null
+  form.scenes = channel === 'RETAIL' ? ['NATIONAL_SUB'] : null
   form.estimated = channel === 'RETAIL' ? false : null
 }
 export function changeSubsidy(subsidy, mode) {

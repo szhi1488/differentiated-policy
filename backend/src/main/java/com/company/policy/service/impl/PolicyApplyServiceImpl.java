@@ -21,10 +21,13 @@ import com.company.policy.service.AttachmentService;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyApplyService;
 import com.company.policy.service.PolicyCoverageService;
+import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyFormValidation;
+import com.company.policy.support.policy.PolicyScenes;
 import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
@@ -131,6 +134,12 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         var owner = access.requireApplicant(session);
         var entry = owned(owner, id);
         checkEditable(entry, request.recordVersion());
+        if ("RETAIL".equals(request.perspective()) && request.sceneTypes() == null) {
+            var savedScenes = PolicyScenes.read(json, entry.getSceneTypes());
+            if (savedScenes != null && savedScenes.size() > 1) {
+                throw conflict("POLICY_SCENES_CHANGED", "当前申请有多个场景，请刷新页面后重新保存。");
+            }
+        }
         var form = PolicyFormValidation.validate(request, false);
         requirePlatforms(owner, form, true);
         writeForm(entry, form);
@@ -162,18 +171,26 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         var form = PolicyFormValidation.validate(readForm(entry), true);
         requirePlatforms(owner, form, false);
         var prepared = prepare(entry, form, targetIds(form));
-        return preview(entry, prepared, now());
+        var asOf = now();
+        var result = coverage.applicability(entry, prepared.snapshot(), asOf);
+        return new SubmissionPreview(
+                prepared.snapshot(),
+                coverage.previewDraft(entry, prepared.snapshot(), prepared.lines(), asOf),
+                confirmationToken(entry, prepared.snapshot(), result),
+                result);
     }
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public PolicyResponse submit(
-            CurrentUserResponse session, long id, Integer recordVersion, String confirmationToken) {
+            CurrentUserResponse session, long id, PolicyDraftRequest.Submission request) {
+        var recordVersion = request.recordVersion();
         var owner = access.requireApplicant(session);
         var entry = owned(owner, id);
         checkEditable(entry, recordVersion);
         var form = PolicyFormValidation.validate(readForm(entry), true);
         requirePlatforms(owner, form, true);
+        coverage.lockScope(form);
         var ids = targetIds(form);
 
         // 与商品编辑和删除使用同一组行锁，先按商品 ID 顺序锁定，再读取最新配置。
@@ -184,14 +201,18 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             }
         }
         var prepared = prepare(entry, form, ids);
-        if (confirmationToken == null || confirmationToken.isBlank()) {
-            throw invalid("请先核对并确认整单覆盖范围。");
-        }
         var now = now();
-        if (!preview(entry, prepared, now).confirmationToken().equals(confirmationToken)) {
-            throw conflict("POLICY_COVERAGE_CHANGED", "商品或本人历史政策已变化，请重新核对后提交。");
+        var result = coverage.applicability(entry, prepared.snapshot(), now);
+        var token = request.confirmationToken();
+        if (token != null && !confirmationToken(entry, prepared.snapshot(), result).equals(token)) {
+            throw conflict("POLICY_COVERAGE_CHANGED", "适用范围已变化，请重新预览并核对本次组合。");
         }
-        var snapshot = prepared.snapshot();
+        if (result.status() == PolicyApplicability.Status.NEEDS_CONFIRMATION && token == null) {
+            throw conflict("POLICY_CONFIRMATION_REQUIRED", "请先预览并确认本次交叉时段。");
+        }
+        var snapshot =
+                prepared.snapshot()
+                        .withConsent(PolicyConfirmation.confirm(result, request.decisions()));
         var lines = prepared.lines();
         int version = snapshot.submissionVersion();
         checkUpdated(policies.markSubmitted(entry, now));
@@ -270,23 +291,37 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return new PreparedSubmission(snapshot, lines);
     }
 
-    private SubmissionPreview preview(
-            PolicyApply entry, PreparedSubmission prepared, LocalDateTime at) {
-        var result = coverage.previewDraft(entry, prepared.snapshot(), prepared.lines(), at);
-        // 表单版本固定选品和新补贴，命中日志固定对应轮次的旧补贴。自然推进的时钟不参与比较。
-        String contents =
+    private String confirmationToken(
+            PolicyApply entry, Snapshot snapshot, PolicyApplicability result) {
+        // 正在生效的首段按相对起点比较，用户阅读期间自然推进的秒数不会使确认失效。
+        var ranges =
+                PolicyConfirmation.ranges(result).stream()
+                        .map(
+                                d ->
+                                        List.of(
+                                                d.scope(),
+                                                d.from().equals(result.effectiveFrom())
+                                                        ? "START"
+                                                        : d.from(),
+                                                d.through(),
+                                                d.action(),
+                                                d.groups(),
+                                                d.eligiblePolicyIds()))
+                        .toList();
+        var contents =
                 encode(
                         List.of(
-                                entry.getId(),
+                                snapshot.id(),
                                 entry.getRecordVersion(),
-                                prepared.snapshot().goods(),
-                                result.items()));
+                                snapshot.goods(),
+                                result.status(),
+                                PolicyConfirmation.comparedRounds(result),
+                                ranges));
         try {
             var digest =
                     MessageDigest.getInstance("SHA-256")
                             .digest(contents.getBytes(StandardCharsets.UTF_8));
-            return new SubmissionPreview(
-                    prepared.snapshot(), result, HexFormat.of().formatHex(digest));
+            return HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException error) {
             throw new IllegalStateException(error);
         }
@@ -463,7 +498,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         entry.setChannelType(form.perspective());
         entry.setPlatforms(encode(form.selectedPlatforms()));
         entry.setWriteOffType(form.verifyType());
-        entry.setScene(form.sceneType());
+        entry.setSceneTypes(form.sceneTypes() == null ? null : encode(form.sceneTypes()));
         entry.setIsEstimated(form.estimated());
         entry.setStartTime(PolicyFormValidation.time(form.startTime()));
         entry.setEndTime(PolicyFormValidation.time(form.endTime()));
@@ -473,13 +508,15 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     }
 
     private PolicyDraftRequest readForm(PolicyApply entry) {
+        var scenes = PolicyScenes.read(json, entry.getSceneTypes());
         var goods = decode(entry.getGoodsFormJson(), new TypeReference<GoodsForm>() {});
         return new PolicyDraftRequest(
                 null,
                 entry.getChannelType(),
                 entries(decode(entry.getPlatforms(), new TypeReference<List<String>>() {})),
                 entry.getWriteOffType(),
-                entry.getScene(),
+                PolicyScenes.single(scenes),
+                scenes,
                 entry.getIsEstimated(),
                 formatTime(entry.getStartTime()),
                 formatTime(entry.getEndTime()),
@@ -520,7 +557,8 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 snapshot.applicantName(),
                 snapshot.submissionVersion(),
                 snapshot.form(),
-                snapshot.goods());
+                snapshot.goods(),
+                snapshot.consent());
     }
 
     private static String creationCode(UserInfo owner, String key) {

@@ -61,6 +61,16 @@
   width: 100%;
   min-width: 0;
 }
+.workspace .policy-scene-options,
+.workspace .policy-scene-options .el-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+}
+.workspace .policy-scene-options .el-checkbox {
+  margin-right: 0;
+}
 .workspace .platform-options {
   display: flex;
   flex-wrap: wrap;

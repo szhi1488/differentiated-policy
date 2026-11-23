@@ -19,16 +19,19 @@ import com.company.policy.mapper.PolicyReviewMapper;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.PolicyReviewService;
+import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyFormValidation;
+import com.company.policy.support.policy.PolicyScenes;
 import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Snapshot;
-import com.company.policy.vo.PolicyReviewResponse.Coverage;
 import com.company.policy.vo.PolicyReviewResponse.Detail;
 import com.company.policy.vo.PolicyReviewResponse.Effective;
+import com.company.policy.vo.PolicyReviewResponse.OverridePreview;
 import com.company.policy.vo.PolicyReviewResponse.Page;
 import com.company.policy.vo.PolicyReviewResponse.Review;
 import com.company.policy.vo.PolicyReviewResponse.Summary;
@@ -151,7 +154,31 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if (remark != null && remark.codePointCount(0, remark.length()) > 512) {
             throw invalid("审核意见最多 512 字。");
         }
-        var time = now();
+        if ("APPROVED".equals(status)) {
+            var log = current(entry);
+            var snapshot = snapshot(log);
+            coverage.lockScope(snapshot.form());
+            var time = now();
+            var preview = preview(entry, log, snapshot, time);
+            if (preview.requiresResubmission()) {
+                boolean expired =
+                        preview.applicability().status()
+                                == PolicyApplicability.Status.NO_EFFECTIVE_PERIOD;
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        expired ? "POLICY_NO_EFFECTIVE_PERIOD" : "POLICY_RECONFIRM_REQUIRED",
+                        expired
+                                ? "该轮已无可生效时段，请驳回，由原申请人调整日期后重提。"
+                                : "当前组合与申请人确认范围不同，请查看覆盖预览并驳回，由原申请人重新确认后提交。");
+            }
+            return finishReview(entry, admin, status, remark, time);
+        }
+        return finishReview(entry, admin, status, remark, now());
+    }
+
+    private Review finishReview(
+            PolicyApply entry, UserInfo admin, String status, String remark, LocalDateTime time) {
+        long id = entry.getId();
         var tenant = admin.getTenantKey();
         int version = entry.getCurrentVersion();
         int record = entry.getRecordVersion();
@@ -172,12 +199,23 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     }
 
     @Override
-    public Coverage preview(
+    public OverridePreview preview(
             CurrentUserResponse session, long id, int recordVersion, int submissionVersion) {
         var entry = find(access.requirePolicyAdmin(session), id);
         checkPending(entry, recordVersion, submissionVersion);
         var log = current(entry);
-        return coverage.submitted(entry, log, snapshot(log));
+        return preview(entry, log, snapshot(log), now());
+    }
+
+    private OverridePreview preview(
+            PolicyApply entry, PolicyAuditLog log, Snapshot snapshot, LocalDateTime at) {
+        var result = coverage.applicability(entry, snapshot, at, log.getCreatedAt(), log.getId());
+        var changed = PolicyConfirmation.requiresResubmission(snapshot.consent(), result);
+        return new OverridePreview(
+                result,
+                snapshot.consent(),
+                changed,
+                changed ? "REJECT_FOR_RESUBMISSION" : "REVIEW");
     }
 
     @Override
@@ -198,25 +236,8 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if (goodsId < 1) {
             throw invalid("商品 ID 须为正整数。");
         }
-        var time = at == null ? now() : PolicyFormValidation.time(at);
-        var matches =
-                reviews.winners(
-                        admin.getTenantKey(),
-                        perspective,
-                        time,
-                        null,
-                        null,
-                        platformCode,
-                        goodsId,
-                        null);
-        if (matches.isEmpty()) {
-            return new Effective(formatTime(time), null, null);
-        }
-        var match = matches.get(0);
-        return new Effective(
-                formatTime(time),
-                PolicyCoverageServiceImpl.winner(match),
-                snapshot(reviews.current(match.policyId(), admin.getTenantKey(), match.version())));
+        var time = at == null ? null : PolicyFormValidation.time(at);
+        return coverage.effective(admin.getTenantKey(), perspective, platformCode, goodsId, time);
     }
 
     @Override
@@ -258,6 +279,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     }
 
     private Summary summary(PolicyApply entry, LocalDateTime submittedAt, UserInfo admin) {
+        var scenes = PolicyScenes.read(json, entry.getSceneTypes());
         return new Summary(
                 entry.getId().toString(),
                 policyNumber(entry.getId()),
@@ -265,7 +287,8 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 entry.getChannelType(),
                 decode(entry.getPlatforms(), new TypeReference<List<String>>() {}),
                 entry.getWriteOffType(),
-                entry.getScene(),
+                PolicyScenes.single(scenes),
+                scenes,
                 formatTime(submittedAt),
                 entry.getStatus(),
                 entry.getRecordVersion(),

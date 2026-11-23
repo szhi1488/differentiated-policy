@@ -9,6 +9,7 @@ import {
 } from '../api/policies'
 import { policyIsEditable } from '../constants/policy'
 import { RequestError } from '../api/request'
+import { readSubmissionPreview } from '../utils/policy-applicability'
 import { createRequestId } from '../utils/request-id'
 import { policyDraft, restorePolicyForm } from '../utils/policy-draft'
 
@@ -43,14 +44,14 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) 
     noticeType.value = type
   }
 
-  function confirmSubmission(accepted = false) {
-    finishConfirmation?.(accepted === true)
+  function confirmSubmission(decisions = null) {
+    finishConfirmation?.(decisions)
     finishConfirmation = undefined
     submissionPreview.value = null
   }
 
   function clear() {
-    confirmSubmission(false)
+    confirmSubmission()
     operation?.abort()
     operation = undefined
     pendingCreate = undefined
@@ -148,6 +149,7 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) 
         return true
       }
       let changed = false
+      let retriedDirect = false
       let submitted
       while (true) {
         phase = 'preview'
@@ -156,34 +158,47 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) 
         if (controller.signal.aborted) {
           return
         }
-        if (
-          !preview?.confirmationToken ||
-          !preview.coverage?.items?.length ||
-          !preview.snapshot?.form?.goodsForm
-        ) {
-          throw new Error('未能读取整单覆盖范围，请重试。')
-        }
-        const accepted = await new Promise((resolve) => {
-          finishConfirmation = resolve
-          submissionPreview.value = { ...preview, changed }
-        })
-        if (!accepted || controller.signal.aborted) {
-          return
+        const scopePreview = readSubmissionPreview(preview)
+        const request = { recordVersion }
+        if (scopePreview) {
+          const decisions = await new Promise((resolve) => {
+            finishConfirmation = resolve
+            submissionPreview.value = { ...scopePreview, changed }
+          })
+          if (controller.signal.aborted) {
+            return
+          }
+          if (!decisions) {
+            show('已返回编辑，表单和附件已保留。', 'info')
+            return
+          }
+          retriedDirect = false
+          request.confirmationToken = preview.confirmationToken
+          request.decisions = decisions
+        } else if (changed) {
+          // 新预览已无交集时仍可直提；范围连续变化时把控制权交回申请人。
+          if (retriedDirect) {
+            show('适用范围连续变化，表单和附件已保留。请再次提交以核对最新结果。')
+            return
+          }
+          retriedDirect = true
         }
         phase = 'submit'
         try {
-          submitted = await submitPolicy(
-            id,
-            recordVersion,
-            preview.confirmationToken,
-            controller.signal,
-          )
-          if (!submitted?.id) {
-            throw new RequestError('提交响应缺少申请信息。', 'parse')
+          submitted = await submitPolicy(id, request, controller.signal)
+          if (
+            submitted?.id !== id ||
+            submitted.status !== 'PENDING' ||
+            submitted.submissionVersion !== record.value.submissionVersion + 1
+          ) {
+            throw new RequestError('提交响应缺少本轮待审核结果。', 'parse')
           }
           break
         } catch (error) {
-          if (error.code !== 'POLICY_COVERAGE_CHANGED' || controller.signal.aborted) {
+          if (
+            !['POLICY_COVERAGE_CHANGED', 'POLICY_CONFIRMATION_REQUIRED'].includes(error.code) ||
+            controller.signal.aborted
+          ) {
             throw error
           }
           changed = true
@@ -196,6 +211,10 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) 
       }
     } catch (error) {
       if (controller.signal.aborted) {
+        return
+      }
+      if (error.code === 'POLICY_RETURN_TO_EDIT' || error.code === 'POLICY_NO_EFFECTIVE_PERIOD') {
+        show(error.message)
         return
       }
       if (error.code === 'POLICY_PLATFORM_FORBIDDEN') {

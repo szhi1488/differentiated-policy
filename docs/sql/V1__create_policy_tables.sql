@@ -342,7 +342,7 @@ CREATE TABLE `policy_apply` (
   `channel_type` VARCHAR(20) NOT NULL COMMENT 'RETAIL-零售，BILLION-百亿',
   `platforms` JSON DEFAULT NULL COMMENT '整单已选平台编码数组',
   `write_off_type` VARCHAR(20) DEFAULT NULL COMMENT 'SALES-销售维度，ACTIVATION-激活维度',
-  `scene` VARCHAR(20) DEFAULT NULL COMMENT 'NATIONAL_SUB-国补，LOCAL_SUB-地补，SELF_SUB-自补',
+  `scene_types` JSON DEFAULT NULL COMMENT '零售实际选中的国补、地补、自补编码数组，未填及百亿为 SQL NULL',
   `is_estimated` TINYINT DEFAULT NULL COMMENT '0-否，1-是，百亿为 NULL',
   `start_time` DATETIME DEFAULT NULL COMMENT '政策开始时间，北京时间',
   `end_time` DATETIME DEFAULT NULL COMMENT '政策结束时间，北京时间',
@@ -368,11 +368,18 @@ CREATE TABLE `policy_apply` (
   CONSTRAINT `ck_apply_platforms` CHECK (`platforms` IS NULL OR JSON_TYPE(`platforms`) = 'ARRAY'),
   CONSTRAINT `ck_apply_goods_form` CHECK (`goods_form_json` IS NULL OR JSON_TYPE(`goods_form_json`) = 'OBJECT'),
   CONSTRAINT `ck_apply_attachments` CHECK (`attachment_urls` IS NULL OR JSON_TYPE(`attachment_urls`) = 'ARRAY'),
-  CONSTRAINT `ck_apply_retail_fields` CHECK (
+  CONSTRAINT `ck_apply_scene_types` CHECK (
+    `scene_types` IS NULL OR (
+      `channel_type` = 'RETAIL' AND JSON_TYPE(`scene_types`) = 'ARRAY'
+      AND JSON_DEPTH(`scene_types`) = 2 AND JSON_LENGTH(`scene_types`) BETWEEN 1 AND 3
+      AND JSON_LENGTH(`scene_types`) = JSON_CONTAINS(`scene_types`, '"NATIONAL_SUB"')
+        + JSON_CONTAINS(`scene_types`, '"LOCAL_SUB"') + JSON_CONTAINS(`scene_types`, '"SELF_SUB"')
+    )
+  ),
+  CONSTRAINT `ck_apply_retail_basics` CHECK (
     (`write_off_type` IS NULL OR `write_off_type` IN ('SALES', 'ACTIVATION'))
-    AND (`scene` IS NULL OR `scene` IN ('NATIONAL_SUB', 'LOCAL_SUB', 'SELF_SUB'))
     AND (`is_estimated` IS NULL OR `is_estimated` IN (0, 1))
-    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene` IS NULL AND `is_estimated` IS NULL))
+    AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `is_estimated` IS NULL))
   ),
   CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`),
   CONSTRAINT `ck_apply_status_version` CHECK (

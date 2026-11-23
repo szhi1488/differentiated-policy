@@ -17,7 +17,7 @@ public interface PolicyApplyMapper {
     String COLUMNS =
             """
         id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,
-        scene, is_estimated, start_time, end_time, remark, goods_form_json, attachment_urls,
+        scene_types, is_estimated, start_time, end_time, remark, goods_form_json, attachment_urls,
         status, current_version, record_version
         """;
     String OWNED =
@@ -58,11 +58,11 @@ public interface PolicyApplyMapper {
             """
         INSERT INTO policy_apply (
             policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms,
-            write_off_type, scene, is_estimated, start_time, end_time, remark,
+            write_off_type, scene_types, is_estimated, start_time, end_time, remark,
             goods_form_json, attachment_urls, created_at, updated_at
         ) VALUES (
             #{entry.policyNo}, #{entry.tenantKey}, #{entry.applicantId}, #{entry.applicantName},
-            #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.scene},
+            #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.sceneTypes},
             #{entry.isEstimated}, #{entry.startTime}, #{entry.endTime}, #{entry.remark},
             #{entry.goodsFormJson}, #{entry.attachmentUrls}, #{now}, #{now}
         )
@@ -73,7 +73,7 @@ public interface PolicyApplyMapper {
     @Update(
             """
         UPDATE policy_apply SET channel_type = #{entry.channelType}, platforms = #{entry.platforms},
-            write_off_type = #{entry.writeOffType}, scene = #{entry.scene}, is_estimated = #{entry.isEstimated},
+            write_off_type = #{entry.writeOffType}, scene_types = #{entry.sceneTypes}, is_estimated = #{entry.isEstimated},
             start_time = #{entry.startTime}, end_time = #{entry.endTime}, remark = #{entry.remark},
             goods_form_json = #{entry.goodsFormJson},
             attachment_urls = #{entry.attachmentUrls}, record_version = record_version + 1, updated_at = #{now}

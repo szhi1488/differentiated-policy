@@ -16,6 +16,19 @@ export const displayValue = (value, empty = '未填写') =>
         ? '是'
         : '否'
       : String(value)
+/** 旧提交只保存 sceneType，回填和展示均沿用该轮的单个场景。 */
+export function selectedPolicyScenes({ sceneTypes, sceneType }) {
+  return sceneTypes ?? (sceneType ? [sceneType] : [])
+}
+
+export function policySceneLabel(policy, empty = '—') {
+  return (
+    selectedPolicyScenes(policy)
+      .map((code) => SCENE_LABELS[code] ?? code)
+      .join('、') || empty
+  )
+}
+
 export function stringId(value) {
   if (value === null || value === undefined || value === '') {
     return null

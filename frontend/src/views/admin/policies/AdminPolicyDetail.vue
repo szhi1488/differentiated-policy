@@ -3,13 +3,8 @@ import { policyAttachmentDownloadUrl } from '../../../api/attachments'
 import { computed } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import AttachmentDownload from '../../../components/AttachmentDownload.vue'
-import {
-  CHANNEL_LABELS,
-  PLATFORM_LABELS,
-  SCENE_LABELS,
-  VERIFY_LABELS,
-} from '../../../constants/policy'
-import { policyTime } from '../../../utils/policy-adapter'
+import { CHANNEL_LABELS, PLATFORM_LABELS, VERIFY_LABELS } from '../../../constants/policy'
+import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 import { subsidyText } from '../../../utils/policy-coverage'
 
@@ -91,13 +86,12 @@ function platformNames(codes) {
 }
 
 const basicFields = computed(() => {
-  const { perspective, selectedPlatforms, verifyType, sceneType, estimated, startTime, endTime } =
-    form.value
+  const { perspective, selectedPlatforms, verifyType, estimated, startTime, endTime } = form.value
   return [
     ['渠道', CHANNEL_LABELS[perspective]],
     ['整单平台', platformNames(selectedPlatforms)],
     ['核销类型', VERIFY_LABELS[verifyType] ?? '—'],
-    ['涉及场景', SCENE_LABELS[sceneType] ?? '—'],
+    ['涉及场景', policySceneLabel(form.value)],
     ['预估政策', typeof estimated === 'boolean' ? (estimated ? '是' : '否') : '—'],
     ['开始时间', time(startTime)],
     ['到期时间', time(endTime)],

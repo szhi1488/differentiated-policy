@@ -349,29 +349,12 @@ function updateTime(value) {
         </el-button>
       </footer>
     </el-form>
-    <el-dialog
+    <PolicySubmissionCoverage
       v-if="submissionPreview"
-      :model-value="true"
-      title="确认政策适用范围"
-      class="submission-coverage-dialog"
-      width="min(1200px, calc(100% - 24px))"
-      align-center
-      :close-on-click-modal="false"
-      @update:model-value="confirmSubmission(false)"
-    >
-      <el-alert
-        v-if="submissionPreview.changed"
-        title="商品或本人历史政策已变化，请重新核对整单范围。"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
-      <PolicySubmissionCoverage :detail="submissionPreview" />
-      <template #footer>
-        <el-button @click="confirmSubmission(false)">返回编辑</el-button>
-        <el-button type="primary" @click="confirmSubmission(true)">确认整单并提交</el-button>
-      </template>
-    </el-dialog>
+      :preview="submissionPreview"
+      @confirm="confirmSubmission"
+      @edit="confirmSubmission()"
+    />
     <div v-if="loadError || conflict || readOnly" class="form-actions">
       <el-button v-if="loadError || conflict" :disabled="busy || confirming" @click="reload">
         读取服务端版本

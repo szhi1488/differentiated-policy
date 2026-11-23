@@ -35,7 +35,7 @@
 
 首提与重提共用同一个申请 ID 和提交接口，每次成功新增一个提交轮次。不开放待审撤回、通过后修改或删除。
 
-前后端须配套发布。旧版页面只发送记录版本，缺少确认标识的正式提交会被拒绝。已有草稿与已驳回申请可刷新页面后继续，历史提交沿用原快照。
+无冲突的整单可以直接提交。涉及冲突的申请需要逐段决定，确认页面按下文的 `decisions` 格式提交全部选择。
 
 ## 删除未提交草稿
 
@@ -51,6 +51,8 @@
 
 首次保存与更新使用同一套表单字段。创建最小请求为 `{ "perspective": "RETAIL" }`，创建时省略 `recordVersion`，服务端生成 ID、单号、申请人、状态和版本。创建不能携带任意状态、审核人、提交版本。页面通过 `Idempotency-Key` 发送首次保存 UUID。服务端按本人和该标识生成内部创建幂等标识，继续保存在现有 `policy_no` 字段；对外 `policyCode` 由申请 ID 生成为 `ZC-000005` 这样的短单号，最少六位且不截断更长 ID。同一标识和同一表单可重放未变化的首次草稿，其他冲突返回 409。首次保存结果未知时，页面复用原请求，拿到申请 ID 后再保存后续编辑。
 
+零售请求用 `sceneTypes` 传实际勾选项，「全部」展开为三个编码。空数组可保存草稿，提交至少选一项；未知、重复、空元素或新旧字段冲突均返回 400。百亿传 null 或省略。旧单选请求可继续传 `sceneType`，响应仅在选中一项时附带该标量。旧页面仅传标量或缺失数组，尝试覆盖已有多选零售草稿时返回 409 `POLICY_SCENES_CHANGED`，刷新新版后再保存。本人详情、管理员详情及历轮快照均返回该轮的选择；旧快照读取时将原单值映射成单元素数组。
+
 草稿保存整体替换当前表单，须传 `recordVersion`。平台减少时同步校验卡片适用平台及方案分配。正式明细由后端在提交时生成。
 
 | DTO 字段 | 数据库 | 规则 |
@@ -58,9 +60,9 @@
 | `perspective` | `channel_type` | `RETAIL` / `BILLION`，创建必填 |
 | `selectedPlatforms` | `platforms` | 具体编码数组，去重，不含 ALL |
 | `verifyType` | `write_off_type` | 零售 SALES / ACTIVATION；百亿 null |
-| `sceneType` | `scene` | 零售 NATIONAL_SUB / LOCAL_SUB / SELF_SUB；百亿 null |
+| `sceneTypes` | `scene_types` | 零售实际选中的场景编码数组，按 NATIONAL_SUB、LOCAL_SUB、SELF_SUB 排序；未选及百亿返回 null |
 | `estimated` | `is_estimated` | 零售布尔，映射 0/1；百亿 null |
-| `startTime`、`endTime` | `start_time`、`end_time` | 申请开始时间、参考到期时间。草稿可空，同时有值时 start < end |
+| `startTime`、`endTime` | `start_time`、`end_time` | 申请起止时刻。草稿可空，同时有值时须满足 start < end。分段判定按截止日期计算，含当日 23:59:59 |
 | `specialRemark` | `remark` | 可空；必填口径待确认 |
 | `attachmentInfo` | `attachment_urls` | 可空数组，最多 10 个 `{ "type": "FILE", "id": "UUID", "originalName": "文件名" }` 和一个 `{ "type": "LINK", "url": "https://…" }`。核验本人文件并以存储名称为准；外部链接限 HTTP/HTTPS，无登录信息 |
 | `goodsForm` | `goods_form_json` | 商品卡、选品、平台联动、方案及平台分配 |
@@ -80,7 +82,7 @@
   "perspective": "RETAIL",
   "selectedPlatforms": ["PDD"],
   "verifyType": "SALES",
-  "sceneType": "NATIONAL_SUB",
+  "sceneTypes": ["NATIONAL_SUB", "LOCAL_SUB"],
   "estimated": false,
   "startTime": "2026-11-10T09:00:00+08:00",
   "endTime": "2026-11-20T18:00:00+08:00",
@@ -107,21 +109,70 @@
 }
 ```
 
-前端通过白名单适配当前 `channel/platforms/scene/mode/priceBase` 等字段。将 `remark/links` 分别映射为特别备注及外部链接项。申请内容仅保留一个特别备注字段，旧请求或旧快照中的 `otherExplanation` 作为兼容字段忽略。文件绑定和下载权限见 [附件接口](attachment-api.md)。
+前端通过白名单适配当前 `channel/platforms/scenes/mode/priceBase` 等字段。将 `remark/links` 分别映射为特别备注及外部链接项。申请内容仅保留一个特别备注字段，旧请求或旧快照中的 `otherExplanation` 作为兼容字段忽略。文件绑定和下载权限见 [附件接口](attachment-api.md)。
 
 ## 保存与提交响应
 
 创建或保存返回至少 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`。其中 `policyCode` 由已有申请 ID 格式化为 `ZC-` 加最少六位数字，重提时保持不变；`submissionVersion` 映射 `current_version`，仅供并发和后台日志使用，申请人页面不展示。`policy_no` 沿用内部创建幂等标识，不调整表结构或改写既有数据。新旧申请、管理员列表、详情、覆盖引用和快照响应统一返回短单号；旧快照仅在读取响应时适配编号，原始快照保持不变。详情还返回 `applicantName`、`form` 和目录展示用的 `goods`。草稿和已驳回申请从 `#/apply?policyId=<id>` 回填当前表单。待审及已通过内容读取当前轮次快照，页面按只读展示。
 
-提交前，使用保存返回的版本请求 `submission-preview`。仅本人可访问，适用 `DRAFT` 和 `REJECTED`。响应的 `snapshot` 是当前保存版本的拟提交内容，`coverage.items` 按已鉴权申请的申请人 ID、渠道、平台及具体商品查询，只返回本人在对照时点已通过且满足开始时间的最新一轮政策单号及其补贴。本人无匹配时，该项为 NEW，winner 与 existingSubsidy 均为 null。他人政策的变更不影响本次确认标识。`confirmationToken` 标识读到的整单范围。预览为只读，退出窗口保留已保存的内容。
+提交前用保存返回的版本请求只读 `submission-preview`，限本人 `DRAFT` 和 `REJECTED`。`snapshot` 是该保存版本的拟提交内容，`applicability` 是确认页和提交使用的整单分段结果，`confirmationToken` 标识本次预览。已有 `coverage.items` 为旧客户端保留，仍按本人、渠道、平台及具体商品返回单时点对照；新判定会纳入当前负责平台上前任负责人的有效旧单。
 
-申请人确认后发送以下请求，`confirmationToken` 使用本次预览实际返回的值。
+### 按日期试算适用范围
+
+同一 GET 响应新增 `applicability`。服务端在同一只读事务内核验草稿归属、记录版本、当前平台分工及在售商品。历史候选取本公司同渠道、同适用平台上已通过的当前提交轮次，包含已移交平台前任负责人的记录，以及已经提前获批的未来政策。只向申请人返回命中范围的商品、补贴、政策单号及轮次。待审核、驳回、草稿和已删除记录均不进入组合。
+
+| 字段 | 含义 |
+| --- | --- |
+| `dateBasis` | `SNAPSHOT_DATES`。新单用已保存表单，历史政策取获批快照的起止日期。上线时旧单同步采用快照截止日期。 |
+| `asOf / effectiveFrom / effectiveThrough` | 北京时间精确到秒。新单假设在 `asOf` 通过，取申请开始与该时刻较晚者作为起点；截止到结束日 23:59:59。历史单使用实际审核通过时间。 |
+| `status / canDirectSubmit` | `DIRECT / true` 表示整单有可生效时段且没有任何命中；`NEEDS_CONFIRMATION / false` 表示至少一段需要核对；`NO_EFFECTIVE_PERIOD / false` 表示假设此刻审核已晚于截止。正式提交在事务内再次执行该判定。 |
+| `scopes[].scope` | 仅返回命中的范围。零售按 `platformCode + goodsId`；百亿按 `platformCode + spuId + ram + rom`。商品和机型 ID 使用字符串。 |
+| `scopes[].policies[]` | 每个范围内每份政策的当前轮次只出现一次，带 `policyId / policyCode / submissionVersion / auditLogId`、起效时间、核销类型、场景和所选商品行。拟提交轮次的 `proposed=true`，审核时间及日志 ID 为空。每条 `selections[]` 对应一张卡在该范围的商品及实际平台方案；`SPECIFIED` 单列商品、颜色及该平台数量，区分 0 与空值。 |
+| `scopes[].segments[]` | `from / through` 均含该秒，仅列时间上确有历史交集的段。零售 `groups[]` 给出完整的 `sceneTypes`、`verifyType` 和本组全部候选 `policyIds`，预览时 `winnerPolicyId` 为空；`eligiblePolicyIds` 给出该段去重后的政策 ID，可在同一范围的 `policies` 找到对应轮次和补贴。 |
+
+| 分段动作 `action` | 申请人需要核对的内容 |
+| --- | --- |
+| `SELECT_RETAIL_POLICIES` | 零售在本段至少选一张，每个完整场景组合与核销类型组最多一张，可只选旧单或跨组选多张。 |
+| `STACK_OR_CHOOSE` | 百亿同配置出现交集，列出该段参与的政策，由申请人选择叠加或只用其中一份。不同颜色也可命中，指定商品在自己的卡片行显示。 |
+
+例如新单 ZC-000113 覆盖 11 月 1–25 日，另两份不同场景的旧单 ZC-000114、ZC-000115 分别覆盖 3–8 日和 15–20 日。两段 `eligiblePolicyIds` 分别引用 113 与 114、113 与 115 的申请 ID，8 日和 20 日的最后一秒均在各自段内。旧单 114 和 115 不会出现在同一段。确认页按 `applicability` 展示这两个交叉段，`coverage` 保留供旧接口调用方读取。服务端通过 `confirmationToken` 识别本次区间判定，另行核验每段选择。
+
+### 正式提交
+
+整单可直提时，发送 `{ "recordVersion": 3 }` 即可。有任一交叉段时，送回本次预览的 `confirmationToken`，并按以下格式为每段提交一个决定。将对应的 `scope` 和 `through` 原样送回，零售使用 `selectedPolicyIds` 数组，百亿选一时使用单值 `policyId`。
+
+确认页合并普通商品只改变展示和操作次数。若零售京东同配置白、黑两件商品在同一时段结果相同，点一次确认要生成两条 `decisions`，分别送回各自的 `scope.goodsId` 和原段 `through`。百亿整段以接口返回的配置 `scope` 提交一个决定，特殊商品的颜色和数量随该段展示。[颜色分组验收](../business/override-engine.md#6-决策表与验收案例)
 
 ```json
-{ "recordVersion": 3, "confirmationToken": "<预览返回的确认标识>" }
+{
+  "recordVersion": 3,
+  "confirmationToken": "<本次预览标识>",
+  "decisions": [{
+    "scope": {"platformCode":"PDD","goodsId":null,"spuId":"81","ram":"12GB","rom":"256GB"},
+    "through": "2026-11-20T23:59:59+08:00",
+    "choice":"CHOOSE_ONE",
+    "policyId":"113"
+  }]
+}
 ```
 
-点击「提交申请」时，页面先创建或更新草稿，再读取适用范围。只有点击「确认整单并提交」才发送正式提交请求。提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照及商品适用明细，并转 PENDING；示例响应：
+| 分段动作 | 接受时的 `choice` |
+| --- | --- |
+| `SELECT_RETAIL_POLICIES` | `SELECT` 加 `selectedPolicyIds`，例如 `["7","6"]`。只用旧单时也发送数组，例如 `["3"]`。 |
+| `STACK_OR_CHOOSE` | `STACK`，或 `CHOOSE_ONE` 加一个候选 `policyId` |
+
+以京东 Reno17 Pro 三色验收为例，三个商品均在第一段勾选 006＋007、第二段只勾 003。申请页显示两项确认，提交请求有六条 `decisions`。下表列出其中一个商品的两条决定，其余两件分别使用预览返回的自身 `scope`。数组元素使用字符串形式的申请 ID。[完整候选和页面截图](../business/override-engine.md#京东-reno17-pro-逐段选单示例)
+
+| `scope` 对应范围 | `through` | `choice` | `selectedPolicyIds` |
+| --- | --- | --- | --- |
+| 京东、该商品 ID | `2026-11-24T23:59:59+08:00` | `SELECT` | `["6","7"]` |
+| 京东、该商品 ID | `2026-11-25T23:59:59+08:00` | `SELECT` | `["3"]` |
+
+零售允许在当前段单用任一候选，也可返回编辑。若客户端已发送 `RETURN_TO_EDIT`，服务端也保留原状态、表单及附件。缺段、额外范围、空选择、重复 ID、越界或零售同组选多张均返回 409 `POLICY_CONFIRMATION_REQUIRED`。成功后 `snapshot.consent` 保存规则版本 2、对照单号 ID 和审核轮次、各段候选和最终选中 ID。直提轮次保存空的决定列表。旧快照继续按原内容读取。
+
+零售确认页和提交接口须配套更新。已打开的旧预览须刷新后重新选择。已通过的旧版决定仍可回查。审核旧版待审单时，仍可生效的时段、分组及候选均一致，可沿用已有确认。分组或候选变化时由管理员驳回、申请人重新确认。此次修改使用已有快照字段，无需执行 SQL。
+
+提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照及商品适用明细，并转 PENDING；示例响应：
 
 ```json
 {
@@ -173,7 +224,10 @@
 | 403 | POLICY_ACCESS_DENIED | 当前账号不是本公司有效申请人 |
 | 404 | POLICY_NOT_FOUND | 不存在、已删除或非本人申请 |
 | 404 | POLICY_AUDIT_NOT_FOUND | 该申请下不存在指定审核记录 |
-| 409 | POLICY_COVERAGE_CHANGED | 本人历史政策对照或所选商品资料变化，重新获取整单预览并确认 |
+| 409 | POLICY_CONFIRMATION_REQUIRED | 获取本轮预览，补全所有分段的合法选择 |
+| 409 | POLICY_RETURN_TO_EDIT | 返回编辑，原草稿或驳回单及附件已保留 |
+| 409 | POLICY_NO_EFFECTIVE_PERIOD | 截止日已过，返回编辑调整日期 |
+| 409 | POLICY_COVERAGE_CHANGED | 整单适用范围、对照轮次或所选商品资料变化，重新获取预览并确认 |
 | 409 | POLICY_VERSION_CONFLICT / POLICY_STATE_CONFLICT | 版本过期、重复提交、不允许状态 |
 | 409 | POLICY_GOODS_CHANGED | 选中商品下架、删除或配置变化 |
 | 409 | POLICY_CREATE_CONFLICT | 首次保存标识已用于其他内容或申请已变化 |
@@ -183,4 +237,4 @@
 
 ## 申请人负责平台
 
-`GET /api/policies/platforms` 返回当前有效申请人的 `[{perspective, platformCode}]`，尚未分配返回空数组。新建、保存草稿、驳回重提的覆盖预览和正式提交均校验整单所选平台归属，卡片平台须属于整单。初次提交同样经过预览及正式提交复核。未授权的平台返回 403 `POLICY_PLATFORM_FORBIDDEN`。平台移交与草稿、提交写入共用申请人行锁；确认后失去权限不能写入审核记录。空平台草稿可保存，正式提交要求至少一个平台。历史查询、快照和本人覆盖对照继续按原申请人及渠道读取。
+`GET /api/policies/platforms` 返回当前有效申请人的 `[{perspective, platformCode}]`，尚未分配返回空数组。新建、保存草稿、驳回重提的覆盖预览和正式提交均校验整单所选平台归属，卡片平台须属于整单。初次提交同样经过预览及正式提交复核。未授权的平台返回 403 `POLICY_PLATFORM_FORBIDDEN`。平台移交与草稿、提交写入共用申请人行锁；确认后失去权限不能写入审核记录。空平台草稿可保存，正式提交要求至少一个平台。本人列表、详情及附件归属沿用原申请人。接手人的正式预览按公司、渠道和实际平台读取已通过历史，纳入原负责人的有效记录。

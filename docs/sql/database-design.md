@@ -16,6 +16,15 @@
 
 在 Navicat 按段执行[自动排除约束增量脚本](upgrade_catalog_direct_exclusions.sql)。核对 `source_goods_item.ck_source_clean_excluded` 允许记录无人工审核人的规则排除，`catalog_clean_job_item.ck_clean_item_outcome` 允许 `EXCLUDED`，且两项约束均已启用。两条 ALTER 分别提交，中断后核对已完成项并继续。升级保留既往任务结果。新版后端运行清洗后，可用脚本末尾查询核对该任务的自动排除数。
 
+### 已有库升级零售场景多选
+
+1. 使用 MySQL 8.0.16 或以上。停止后端写入并备份，确认所选项目库已有政策主表和审核日志，在 Navicat 同一连接整份运行[零售场景多选升级脚本](upgrade_policy_scene_types.sql)。新建空库直接使用当前基线。
+2. 脚本添加 `policy_apply.scene_types`，按行将旧值转成一个元素的 JSON 数组；旧空值保留 SQL NULL。迁移包含逻辑删除行，并显式保留原更新时间。场景检查限制渠道、数组类型、允许的编码与唯一性。逐行对照通过后才移除旧列。历史提交快照原文、政策轮次及商品明细继续保留。
+3. 在结果集中找到 `upgrade_result = 完成`。首次升级 `scene_differences = 0`，`billion_scene_errors = 0`，政策和快照各自的前后行数相等。已完成的库重跑时，旧列已移除，`scene_differences` 为 NULL。末尾可查看新旧快照字段及管理员场景筛选的执行计划。中断后保持停写，核对错误再重跑；出现非零差异时保留旧列，先核对数据。需要整体回退时在停写期间恢复备份及配套应用版本。
+4. 确认结果后启动配套前后端。用旧单选草稿核对原场景，再保存一份「国补、地补」申请并重开。正式提交后，管理员分别按国补、地补均可找到该单，自补筛选不命中。驳回后修改场景仅影响草稿，重提后管理员看到新组合，首轮快照仍显示原组合。两个页面同时编辑同一草稿，后保存的旧版本应返回 409。
+
+本次结构变更用于保存零售的实际选择，范围为主表场景列及约束。「全部」保存三个场景编码；百亿的场景为 SQL NULL。逐段决定复用审核日志原有的 `snapshot_data`，旧轮次保留原始 JSON。确认页合并同配置颜色只影响展示，零售商品明细仍按本轮实际选中的平台和商品 ID 保存。[快照兼容](../api/policy-api.md#提交快照的存储与兼容)
+
 ### 已有库升级申请人平台分工
 
 已有项目库须有 `user_info` 表和 `uk_user_id_tenant` 索引。停止后端写入并备份后，在 Navicat 选中项目库，整份运行同一个[平台分工升级脚本](upgrade_user_platform_assignments.sql)。脚本自动识别下列三种情况。
@@ -133,7 +142,7 @@
 | 身份与历史 | 同租户账号外键、每单每轮唯一、明细关联本轮、外键限制删除 | 校验有效身份和权限，正常业务过滤主表逻辑删除，保护每轮快照与历史明细 |
 | 平台与颜色 | 正式明细平台编码、商品复合外键、同轮同平台同商品唯一 | 校验渠道与整单平台、卡片与方案分配、选中商品在售、同平台跨卡重复选中同一商品 |
 | 数量和补贴 | 快照和草稿使用 JSON 对象 | 指定颜色按平台选填参考数量，留空保存为 NULL，填写 0 原样保存。补贴仅保存所选方式的参数，金额按 `DECIMAL(10,2)`、比例按 `DECIMAL(5,2)` 百分数的精度校验 |
-| 日期和提交完整性 | 同时提供两个时间时要求开始早于参考到期 | 草稿保留未填项，提交完整校验。时间为北京时间，精确到秒。后续政策按最新申请覆盖，参考到期时间用于展示 |
+| 日期和提交完整性 | 同时填写时校验开始时刻早于表单结束时刻 | 草稿保留未填项，提交完整校验。时间为北京时间，精确到秒。规则上线起按获批快照的截止日期判定，结束日有效至 23:59:59 |
 
 ### 权限、历史与任务
 
@@ -363,9 +372,9 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | channel_type | VARCHAR(20) | 否 | — | RETAIL 或 BILLION |
 | platforms | JSON | 是 | NULL | 整单平台编码数组 |
 | write_off_type | VARCHAR(20) | 是 | NULL | SALES 或 ACTIVATION |
-| scene | VARCHAR(20) | 是 | NULL | NATIONAL_SUB、LOCAL_SUB 或 SELF_SUB |
+| scene_types | JSON | 是 | NULL | 零售实际选择的场景数组，1–3 个互不重复的 NATIONAL_SUB、LOCAL_SUB、SELF_SUB；空草稿及百亿使用 SQL NULL |
 | is_estimated | TINYINT | 是 | NULL | 0 否、1 是，百亿为空 |
-| start_time、end_time | DATETIME | 是 | NULL | 开始时间、参考到期时间。北京时间，精确到秒 |
+| start_time、end_time | DATETIME | 是 | NULL | 开始时间、截止时间。北京时间，精确到秒，生效查询使用该轮快照 |
 | remark | TEXT | 是 | NULL | 特别备注，申请唯一备注字段 |
 | goods_form_json | JSON | 是 | NULL | 可回填的商品卡、选品、联动及方案 |
 | attachment_urls | JSON | 是 | NULL | 附件文件 ID 和外部链接列表 |
@@ -385,7 +394,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | policy_id | BIGINT | 否 | — | 关联 policy_apply.id |
 | tenant_key | VARCHAR(64) | 否 | — | 与申请及审核人相同 |
 | version | INT UNSIGNED | 否 | — | 提交轮次，从 1 开始 |
-| snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品和附件引用，由 Java 记录类 `PolicySnapshotData` 定义格式。[快照读写与旧数据兼容](../api/policy-api.md#提交快照的存储与兼容) |
+| snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品、附件引用及本轮适用范围决定（旧快照缺少 `consent`）。由 Java 记录类 `PolicySnapshotData` 定义格式。[快照读写与旧数据兼容](../api/policy-api.md#提交快照的存储与兼容) |
 | audit_status | VARCHAR(20) | 否 | SUBMITTED | SUBMITTED、APPROVED、REJECTED |
 | auditor_id | BIGINT | 是 | NULL | 同租户的审核人账号 |
 | auditor_name | VARCHAR(64) | 是 | NULL | 审核人姓名快照 |

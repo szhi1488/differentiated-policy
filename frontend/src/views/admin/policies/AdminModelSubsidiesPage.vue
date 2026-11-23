@@ -4,24 +4,25 @@ import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
 import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
+import ModelSubsidyResultDetail from './ModelSubsidyResultDetail.vue'
 import PolicySubsidyTimeline from '../../../components/PolicySubsidyTimeline.vue'
 import { useSubsidyTimelineNavigation } from '../../../composables/useSubsidyTimelineNavigation'
-import { CHANNEL_LABELS, PLATFORM_LABELS } from '../../../constants/policy'
+import { PLATFORM_LABELS } from '../../../constants/policy'
 import {
   createSubsidyPreviewSegments,
   SUBSIDY_PREVIEW_CONFIGS,
-  SUBSIDY_PREVIEW_DATES,
+  RETAIL_EXAMPLE,
+  previewDate,
   SUBSIDY_PREVIEW_MODELS,
 } from '../../../mocks/fixtures/model-subsidies'
 import {
-  timelinePlanDetail,
-  timelinePlanCaption,
   timelineContainsAt,
-  timelinePlanText,
-  timelineTimeText,
   timelineTimeFromValue,
   visibleTimelineSegments,
+  withPolicyUsePeriods,
 } from '../../../utils/subsidy-timeline'
+import { retailPolicyRows } from '../../../utils/retail-policy-timeline'
+import { timelineLastSecond } from '../../../utils/subsidy-timeline'
 import './model-subsidies.css'
 
 const brand = ref('OPPO')
@@ -29,11 +30,17 @@ const modelId = ref('find-x8')
 const configId = ref('16-512')
 const platformCode = ref('')
 const currentAt = ref(timelineTimeFromValue(Date.now()))
-const dates = ref([SUBSIDY_PREVIEW_DATES[0], currentAt.value.slice(0, 10)])
+const exampleDay = currentAt.value.slice(0, 10)
+const exampleStart = previewDate(exampleDay, -20)
+const dates = ref([exampleStart, exampleDay])
 const showIndependent = ref(false)
 const modelOptions = computed(() =>
   SUBSIDY_PREVIEW_MODELS.filter((model) => model.brand === brand.value),
 )
+const configOptions = computed(() => {
+  const currentModel = modelOptions.value.find((item) => item.id === modelId.value)
+  return SUBSIDY_PREVIEW_CONFIGS.filter((item) => currentModel?.configs.includes(item.id))
+})
 const initialSelection = () => ({
   modelId: modelId.value,
   configId: configId.value,
@@ -47,54 +54,95 @@ const model = computed(() =>
 const config = computed(() =>
   SUBSIDY_PREVIEW_CONFIGS.find((item) => item.id === applied.value.configId),
 )
-const range = computed(() => [
-  applied.value.range[0],
-  applied.value.range[1] > currentAt.value ? currentAt.value : applied.value.range[1],
-])
+const range = computed(() => {
+  const [from, through] = applied.value.range
+  // 固定日期的审核示例可完整回放；「当前时间」和普通查询仍取真实时钟。
+  return [from, applied.value.fullExample || through < currentAt.value ? through : currentAt.value]
+})
 const segments = computed(() =>
-  createSubsidyPreviewSegments(applied.value.modelId, applied.value.configId),
-)
-const visibleSegments = computed(() =>
-  visibleTimelineSegments(
-    segments.value,
-    range.value,
-    showIndependent.value,
-    applied.value.platformCode,
+  withPolicyUsePeriods(
+    createSubsidyPreviewSegments(applied.value.modelId, applied.value.configId, exampleDay),
   ),
 )
-const { cursorAt, zoom, setCursor, setZoom, resetZoom } = useSubsidyTimelineNavigation(range)
-const pointPanel = ref(['point'])
-const pointRows = computed(() => {
-  const scopes = new Map()
-  for (const segment of visibleSegments.value) {
-    const key = `${segment.channel}:${segment.platformCode}:${segment.scope}`
-    if (!scopes.has(key)) {
-      scopes.set(key, {
-        key,
-        channel: segment.channel,
-        platformCode: segment.platformCode,
-        scope: segment.scope,
-        segment: null,
-      })
+const scopeSegments = computed(() =>
+  segments.value.filter(
+    (segment) =>
+      (!applied.value.platformCode || segment.platformCode === applied.value.platformCode) &&
+      (showIndependent.value || segment.scope === 'NORMAL'),
+  ),
+)
+const retailRows = computed(() => retailPolicyRows(scopeSegments.value, range.value))
+// 查询日期决定命中的政策。共用坐标轴容纳这些原单的完整日期，初始指针仍定位查询时点。
+const axisRange = computed(() => {
+  let [from, through] = range.value
+  for (const row of retailRows.value) {
+    if (row.startAt < from) {
+      from = row.startAt
     }
-    if (timelineContainsAt(segment, cursorAt.value)) {
-      scopes.get(key).segment = segment
+    const last = timelineLastSecond(row.endAt)
+    if (last > through) {
+      through = last
     }
   }
-  return [...scopes.values()]
+  return [from, through]
 })
-const selectedId = ref('')
-const selected = computed(() => visibleSegments.value.find((item) => item.id === selectedId.value))
+const visibleSegments = computed(() =>
+  visibleTimelineSegments(scopeSegments.value, axisRange.value, true, ''),
+)
+const { cursorAt, zoom, setCursor, setZoom, resetZoom } = useSubsidyTimelineNavigation(
+  axisRange,
+  () => range.value[1],
+)
+const detailPanel = ref(null)
+const focusTrack = ref('')
+const inspectedPolicy = ref(null)
+const focusedScope = computed(() =>
+  visibleSegments.value.find((item) => item.trackId === focusTrack.value),
+)
+const activeSegment = computed(() =>
+  visibleSegments.value.find(
+    (item) =>
+      (!focusedScope.value || item.trackId === focusTrack.value) &&
+      timelineContainsAt(item, cursorAt.value),
+  ),
+)
+const selected = computed(() => {
+  const active = activeSegment.value
+  const row = inspectedPolicy.value
+  if (!row || !timelineContainsAt(row, cursorAt.value)) {
+    return active
+  }
+  const member = [...(active?.policies ?? []), ...(active?.excluded ?? [])].some(
+    (p) => p.policyCode === row.plan.policyCode,
+  )
+  if (member) {
+    return active
+  }
+  // 原单日期内、审核通过前也能点选。此时明细保留实际采用的其他政策。
+  const plan = { ...row.plan, usePeriod: null }
+  if (active) {
+    return { ...active, excluded: [...active.excluded, plan] }
+  }
+  const part = row.parts.find((p) => timelineContainsAt(p, cursorAt.value))
+  return {
+    ...row.segment,
+    ...part,
+    id: row.key,
+    decision: '该时点未采用',
+    note: '',
+    policies: [],
+    excluded: [plan],
+  }
+})
+const selectedId = computed(() => selected.value?.id ?? '')
 const channels = [
   {
     code: 'RETAIL',
     title: '零售补贴时间轴',
-    short: '零售',
   },
   {
     code: 'BILLION',
     title: '百亿补贴时间轴',
-    short: '百亿',
   },
 ]
 // 指针移动不改变商品范围，保持传给两张图的数据引用稳定，避免悬停时整图重绘。
@@ -110,35 +158,67 @@ const segmentsByChannel = computed(() =>
 watch(brand, () => {
   modelId.value = modelOptions.value[0].id
 })
-watch(
-  visibleSegments,
-  (items) => {
-    if (!items.some((item) => item.id === selectedId.value)) {
-      selectedId.value =
-        items.findLast(
-          (item) =>
-            item.channel === 'RETAIL' && item.platformCode === 'PDD' && item.scope === 'NORMAL',
-        )?.id ??
-        items[0]?.id ??
-        ''
-    }
-  },
-  { immediate: true },
-)
-
+watch(modelId, () => {
+  if (!configOptions.value.some((item) => item.id === configId.value)) {
+    configId.value = configOptions.value[0]?.id ?? ''
+  }
+})
+async function selectSegment(segment, policy = null) {
+  inspectedPolicy.value = policy
+  focusTrack.value = segment.trackId
+  if (!timelineContainsAt(segment, cursorAt.value)) {
+    setCursor(segment.startAt < axisRange.value[0] ? axisRange.value[0] : segment.startAt)
+  }
+  await nextTick()
+  const panel = detailPanel.value?.$el
+  const top = panel?.getBoundingClientRect().top
+  if (top < 0 || top >= window.innerHeight) {
+    panel.scrollIntoView({ block: 'start' })
+    panel.focus({ preventScroll: true })
+  }
+}
+function selectRetailPolicy(row, at) {
+  setCursor(at)
+  const part = row.parts.find((item) => timelineContainsAt(item, at))
+  if (part) {
+    selectSegment({ trackId: row.segment.trackId, ...part }, row)
+  }
+}
+watch(retailRows, () => {
+  inspectedPolicy.value = null
+})
 function search() {
   if (!dates.value?.[0] || !dates.value?.[1]) {
     ElMessage.warning('请选择完整的查询日期范围')
     return
   }
   currentAt.value = timelineTimeFromValue(Date.now())
-  applied.value = initialSelection()
+  focusTrack.value = ''
+  const selection = initialSelection()
+  // 手动查询固定案例时也可看完整所选区间，定位今天仍按实际时钟。
+  selection.fullExample =
+    selection.modelId === RETAIL_EXAMPLE.modelId && dates.value[1] > currentAt.value.slice(0, 10)
+  applied.value = selection
+}
+async function openRetailExample() {
+  brand.value = 'OPPO'
+  await nextTick()
+  modelId.value = RETAIL_EXAMPLE.modelId
+  configId.value = RETAIL_EXAMPLE.configId
+  platformCode.value = 'JD'
+  dates.value = [RETAIL_EXAMPLE.from, RETAIL_EXAMPLE.through]
+  focusTrack.value = ''
+  currentAt.value = timelineTimeFromValue(Date.now())
+  applied.value = { ...initialSelection(), fullExample: true }
+  await nextTick()
+  setCursor(RETAIL_EXAMPLE.from + 'T00:00:00')
 }
 async function locateCurrentTime() {
   currentAt.value = timelineTimeFromValue(Date.now())
   const today = currentAt.value.slice(0, 10)
   // 历史或未来日期范围也能定位此刻，仍按当前选择的机型配置展示静态示例。
   dates.value = [dates.value?.[0] && dates.value[0] <= today ? dates.value[0] : today, today]
+  focusTrack.value = ''
   applied.value = initialSelection()
   await nextTick()
   resetZoom()
@@ -150,7 +230,7 @@ function reset() {
   configId.value = '16-512'
   platformCode.value = ''
   currentAt.value = timelineTimeFromValue(Date.now())
-  dates.value = [SUBSIDY_PREVIEW_DATES[0], currentAt.value.slice(0, 10)]
+  dates.value = [exampleStart, currentAt.value.slice(0, 10)]
   showIndependent.value = false
   search()
 }
@@ -175,7 +255,7 @@ function reset() {
             <el-option
               v-for="item in modelOptions"
               :key="item.id"
-              :label="`${item.name} · ${item.edition}`"
+              :label="[item.name, item.edition].filter(Boolean).join(' · ')"
               :value="item.id"
             />
           </el-select>
@@ -183,7 +263,7 @@ function reset() {
         <el-form-item label="配置" class="model-subsidy-config-field">
           <el-select v-model="configId" aria-label="配置">
             <el-option
-              v-for="item in SUBSIDY_PREVIEW_CONFIGS"
+              v-for="item in configOptions"
               :key="item.id"
               :label="item.label"
               :value="item.id"
@@ -235,7 +315,10 @@ function reset() {
       </el-form>
       <div class="model-subsidy-query-note">
         <AppIcon name="alert" :size="14" />
-        <span>当前展示内置示例，仅供确认页面效果。</span>
+        <span>审核结果预览 · 以下单号、商品和补贴均为示例。</span>
+        <el-button link type="primary" class="model-subsidy-example" @click="openRetailExample">
+          查看京东逐段示例
+        </el-button>
       </div>
     </section>
 
@@ -261,18 +344,35 @@ function reset() {
                 <AppIcon name="legend" class="ratio" :size="14" />
                 比例补贴
               </span>
+              <template v-if="channel.code === 'RETAIL'">
+                <span class="model-subsidy-estimate">预估政策</span>
+                <span>
+                  <i class="model-subsidy-fill-key used" aria-hidden="true"></i>
+                  采用
+                </span>
+                <span>
+                  <i class="model-subsidy-fill-key" aria-hidden="true"></i>
+                  未采用
+                </span>
+              </template>
             </div>
           </header>
           <PolicySubsidyTimeline
-            v-if="segmentsByChannel[channel.code].length"
+            v-if="
+              channel.code === 'RETAIL' ? retailRows.length : segmentsByChannel[channel.code].length
+            "
             :segments="segmentsByChannel[channel.code]"
-            :range="range"
+            :retail-rows="channel.code === 'RETAIL' ? retailRows : null"
+            :plot-left="retailRows.length ? 204 : 108"
+            :range="axisRange"
             :selected-id="selectedId"
+            :policy-key="inspectedPolicy?.key"
             :current-at="currentAt"
             :cursor-at="cursorAt"
             :zoom="zoom"
             :label="`${channel.title}，${model.name}，${config.label}。点击色块查看完整明细。`"
-            @select="selectedId = $event.id"
+            @select="selectSegment"
+            @select-policy="selectRetailPolicy"
             @cursor-change="setCursor"
             @zoom-change="setZoom"
           />
@@ -280,106 +380,18 @@ function reset() {
         </section>
       </div>
 
-      <aside class="model-subsidy-details" aria-label="时点补贴及明细">
-        <section
-          class="model-subsidy-surface model-subsidy-point-card"
-          aria-label="所选时点各平台补贴"
-        >
-          <el-collapse v-model="pointPanel">
-            <el-collapse-item name="point" title="所选时点补贴">
-              <p class="model-subsidy-point-time" aria-live="polite">
-                {{ cursorAt ? timelineTimeText(cursorAt) : '暂无可查询时点' }}
-              </p>
-              <div
-                v-for="channel in channels"
-                :key="channel.code"
-                class="model-subsidy-point-channel"
-              >
-                <h3>{{ channel.short }}</h3>
-                <ul v-if="segmentsByChannel[channel.code].length">
-                  <li
-                    v-for="row in pointRows.filter((item) => item.channel === channel.code)"
-                    :key="row.key"
-                  >
-                    <span>
-                      {{ PLATFORM_LABELS[row.platformCode] }}
-                      <small v-if="row.scope === 'SPECIFIED'">独立商品</small>
-                    </span>
-                    <el-button
-                      v-if="row.segment"
-                      link
-                      :aria-label="`查看该时点${channel.short}${PLATFORM_LABELS[row.platformCode]}${row.scope === 'SPECIFIED' ? '独立商品' : ''}补贴`"
-                      @click="selectedId = row.segment.id"
-                    >
-                      {{ timelinePlanCaption(row.segment) }}
-                    </el-button>
-                    <small v-else>暂无适用政策</small>
-                  </li>
-                </ul>
-                <small v-else>暂无符合条件的补贴</small>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-        </section>
-        <section class="model-subsidy-surface model-subsidy-detail-card" aria-label="所选补贴明细">
-          <header>
-            <h2>补贴明细</h2>
-          </header>
-          <template v-if="selected">
-            <div
-              class="model-subsidy-selected-plan"
-              :class="selected.subsidyMode === 'FIXED' ? 'fixed' : 'ratio'"
-            >
-              <span>
-                {{ CHANNEL_LABELS[selected.channel] }} ·
-                {{ PLATFORM_LABELS[selected.platformCode] }}
-              </span>
-              <strong>{{ timelinePlanText(selected) }}</strong>
-              <small>{{ timelinePlanDetail(selected) }}</small>
-            </div>
-            <dl class="model-subsidy-detail-fields">
-              <div>
-                <dt>政策单号</dt>
-                <dd>{{ selected.policyCode }}</dd>
-              </div>
-              <div>
-                <dt>审核状态</dt>
-                <dd><el-tag type="success" size="small">已通过 · 示例</el-tag></dd>
-              </div>
-              <div>
-                <dt>适用开始</dt>
-                <dd>{{ timelineTimeText(selected.startAt) }}</dd>
-              </div>
-              <div>
-                <dt>适用结束</dt>
-                <dd>
-                  {{ selected.endAt ? timelineTimeText(selected.endAt) : '截至当前时点仍适用' }}
-                </dd>
-              </div>
-              <div>
-                <dt>选品范围</dt>
-                <dd>
-                  {{ selected.scope === 'SPECIFIED' ? '独立商品' : '配置商品组' }} ·
-                  {{ selected.goods.length }} 件
-                </dd>
-              </div>
-              <div v-if="selected.scope === 'SPECIFIED'">
-                <dt>参考数量</dt>
-                <dd>{{ selected.quantity ?? '未填写' }}</dd>
-              </div>
-            </dl>
-            <div class="model-subsidy-goods">
-              <h3>该段实际适用商品</h3>
-              <ul>
-                <li v-for="goods in selected.goods" :key="goods.id">
-                  <span>{{ goods.color }}</span>
-                </li>
-              </ul>
-            </div>
-          </template>
-          <el-empty v-else :image-size="56" description="暂无可展示的补贴明细" />
-        </section>
-      </aside>
+      <ModelSubsidyResultDetail
+        ref="detailPanel"
+        :segment="selected"
+        :policy-code="inspectedPolicy?.plan.policyCode"
+        :at="cursorAt"
+        :scope-label="
+          focusedScope
+            ? PLATFORM_LABELS[focusedScope.platformCode] + ' · ' + focusedScope.label
+            : ''
+        "
+        :configuration="[model.name, model.edition, config.label].filter(Boolean).join(' · ')"
+      />
     </div>
   </section>
 </template>
