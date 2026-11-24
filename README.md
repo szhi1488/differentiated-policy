@@ -24,13 +24,15 @@
 
 2026-11-11 Element Plus 替换验证：本轮 `npm.cmd run check` 通过 ESLint、Prettier、10 个测试文件中的 41 项测试及生产构建。组件回归覆盖渠道显隐、取消清除后保留内容、确认清除、平台独立回显、补贴互斥、菜单切换保留、日期秒精度与清空、附件暂存与移除、未接通提交的提示。按需导入并拆分登录页/申请工作台，构建未出现单个 JS 包超过 500 kB 的提示。用户授权后，已在真实浏览器检查 1440px 桌面、768px 平板和 390px 窄屏；修复窄屏时间截断、日期面板溢出和表格空状态行高，并验证日期选择确认、明细输入、渠道清除提示及菜单返回。使用本地临时组件预览，不代表真实飞书登录或业务提交联调；未运行后端检查。
 
+执行期生效、临期与截止提醒、平台交接及商品批次异常已接入。已有 E 阶段库先在 Navicat 增量升级再部署。测试群已验证连通性。[F 阶段验收与切换手册](docs/architecture/policy-workflow-phase-f.md)
+
 ## 本地启动
 
-政策审核名单配置、分流冻结及切换条件见 [B 阶段交付记录](docs/architecture/policy-workflow-phase-b.md)。产品运营初审、采购终审、个人待审、按轮附件及在途改派已接入后端 API。[C 阶段交付记录](docs/architecture/policy-workflow-phase-c.md)
+政策审核名单配置、分流冻结及切换条件见 [B 阶段交付记录](docs/architecture/policy-workflow-phase-b.md)。运营从飞书卡初审，采购在「差异化政策」终审。授权用户可按轮查看依据与附件，管理员可在途改派。[C 阶段交付记录](docs/architecture/policy-workflow-phase-c.md)
 
-管理员在「系统管理 → 政策审核设置」维护默认名单，两种工作台均可从「待我审核」办理分给自己的政策。飞书登录后可按原单、原轮和原节点回到站内办理页。[D 阶段工作台与本地验收](docs/architecture/policy-workflow-phase-d.md)
+管理员在「系统管理 → 政策审核设置」维护默认名单，需确认的单据由运营在飞书私聊卡上初审，通过后由本轮采购在「政策管理 → 差异化政策」终审。普通申请直接进入采购终审，终审通过即结束。[D 阶段工作台与本地验收](docs/architecture/policy-workflow-phase-d.md)
 
-`POLICY_REVIEW_WORKFLOW_ENABLED` 默认关闭。目标库升级、审核名单配置及站内办理入口验收完成后，在实际环境配置中设为 `true` 并重启后端。新提交和重提按轮审核，直接提交进入采购，需确认整单的申请先给产品运营。机器人私发审核卡、卡内通过或拒绝、决定后的群通知按 [E 阶段提示词 P23–P26](docs/architecture/policy-workflow-development-prompts.md)接入。
+提交与重提均按轮审核。先在「政策审核设置」配置产品运营和采购名单。无确认段且无随单时间调整时直接进入采购，需要确认的整单先向指定运营发送飞书交互卡。采购在「差异化政策」完成终审。飞书自动投递由 `POLICY_REVIEW_DELIVERY_ENABLED` 控制，默认关闭。内网部署使用 `FEISHU_POLICY_CALLBACK_MODE=long_connection` 接收卡片回调。已有二十二表库按现有投递约束核对是否需要增量。[飞书投递约束升级](docs/sql/upgrade_policy_review_delivery_cards.sql) · [内网自动发卡与卡上审核](docs/architecture/policy-workflow-phase-e.md#内网自动发卡与卡上审核)
 
 环境：Node.js 22.12+、npm、JDK 17、Maven 3.8+。本机检查为 Node.js 22.15.0、npm 10.9.2、JDK 17.0.6、Maven 3.8.4。
 
@@ -51,7 +53,6 @@
 | 配置项 | 用途与默认行为 |
 | --- | --- |
 | `SERVER_ADDRESS`、`SERVER_PORT` | 默认监听 `127.0.0.1:8080`；局域网或部署环境按需填写，修改端口时同步 `/api` 代理目标 |
-| `POLICY_APPLICABILITY_CUTOVER_AT` | 新规则首次上线的北京时间（含该秒），格式 `YYYY-MM-DDTHH:mm:ss+08:00`。有旧单的环境按实际发布时间配置，所有实例及后续重启沿用同一值。 |
 | `POLICY_STORAGE_ROOT` | 附件存储根目录，不含 `attachments`；Windows 使用正斜杠，部署使用稳定绝对路径。本机已明确配置原项目 `data` 目录；留空仍兼容从项目根目录或 `backend/` 启动 |
 | `JACKYUN_IMPORT_SCHEDULING_ENABLED`、`JACKYUN_CLEAN_SCHEDULING_ENABLED` | 默认均为 `true`，控制导入和清洗后台任务；设为 `false` 后不自动领取或处理对应任务，不会自动取消已保存的任务 |
 | `JACKYUN_IMPORT_POLL_INTERVAL_MS`、`JACKYUN_CLEAN_POLL_INTERVAL_MS` | 后台任务检查间隔，默认均为 2000 毫秒，允许 1000～60000；导入接口请求间隔仍由 `JACKYUN_IMPORT_INTERVAL_SECONDS` 控制 |

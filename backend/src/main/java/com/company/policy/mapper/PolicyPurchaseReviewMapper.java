@@ -10,7 +10,7 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface PolicyPurchaseReviewMapper {
-    record Permission(long policyId, Long memberId) {}
+    record Permission(long policyId, long memberId) {}
 
     String DECISION_JOINS =
             """
@@ -32,7 +32,7 @@ public interface PolicyPurchaseReviewMapper {
                          AND signer.user_id != u.id AND signer.user_id != p.applicant_id)))
         """;
 
-    // 列表、详情与写入复用采购办理条件。只有明确标为旧轮的提交才沿用原办理权。
+    // 列表、详情与写入都按本轮采购指派授权。
     @Select(
             """
         <script>
@@ -42,18 +42,18 @@ public interface PolicyPurchaseReviewMapper {
           AND a.version=p.current_version AND a.audit_status='SUBMITTED'
         JOIN user_info u ON u.id=#{userId} AND u.tenant_key=p.tenant_key AND u.role_type='ADMIN'
           AND u.is_deleted=0
-        LEFT JOIN policy_review_round r ON r.policy_id=p.id AND r.version=a.version AND r.tenant_key=p.tenant_key
-        LEFT JOIN policy_review_member m ON m.policy_id=r.policy_id AND m.version=r.version
+        JOIN policy_review_round r ON r.policy_id=p.id AND r.version=a.version AND r.tenant_key=p.tenant_key
+        JOIN policy_review_member m ON m.policy_id=r.policy_id AND m.version=r.version
           AND m.tenant_key=r.tenant_key AND m.group_code='PURCHASE' AND m.user_id=u.id AND m.member_status='ACTIVE'
         """
                     + DECISION_JOINS
                     + """
         WHERE p.tenant_key=#{tenant} AND p.status='PENDING' AND p.is_deleted=0 AND p.applicant_id != u.id
           AND p.id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
-          AND ((a.workflow_version=0 AND r.policy_id IS NULL) OR
+          AND
         """
                     + ASSIGNED_PURCHASE
-                    + ") </script>")
+                    + " </script>")
     @Options(flushCache = Options.FlushCachePolicy.TRUE, useCache = false)
     List<Permission> permissions(String tenant, long userId, List<Long> ids);
 

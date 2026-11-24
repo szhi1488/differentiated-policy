@@ -68,7 +68,7 @@ public interface PolicyAttachmentMapper {
             "SELECT p.status, a.id AS audit_id, "
                     + HISTORICAL_FILE
                     + " AS attached "
-                    + PolicyReviewInboxMapper.VISIBLE_ROUND)
+                    + PolicyReviewRoundMapper.VISIBLE_ROUND)
     Membership reviewRound(
             String tenant, long userId, long id, int version, FileReference reference);
 

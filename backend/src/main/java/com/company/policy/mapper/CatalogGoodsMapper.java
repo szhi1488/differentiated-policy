@@ -67,14 +67,9 @@ public interface CatalogGoodsMapper {
         """)
     Long lockDuplicateGoods(long spu, String ram, String rom, long color, Long excludedId);
 
-    String MATCH_COLUMNS =
-            "SELECT id, status, spu_id, ram, rom, color_id, goods_name, policy_name FROM goods ";
-
-    @Select(MATCH_COLUMNS + "WHERE id = #{id} FOR UPDATE")
+    @Select(
+            "SELECT id,status,spu_id,ram,rom,color_id,goods_name,policy_name FROM goods WHERE id=#{id} FOR UPDATE")
     Match lockMappedGoods(long id);
-
-    @Select(MATCH_COLUMNS + "WHERE sku_id = #{sku} FOR UPDATE")
-    Match lockGoodsBySku(String sku);
 
     @Insert(
             """

@@ -33,52 +33,47 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
             String summary,
             LocalDateTime at) {
         // 整批登记同事务提交。节点已办结或后来改派时，重放仍对应首次提交的收件人。
-        if (workflow.groupEventRegistered(tenant, id, version, "SUBMITTED") != 0) return;
+        if (workflow.eventRegistered(tenant, id, version, "SUBMITTED") != 0) return;
         var members = workflow.members(tenant, id, version);
         var product = active(members, "PRODUCT");
         var purchase = active(members, "PURCHASE");
         var current = productReview ? product : purchase;
         if (purchase.isEmpty() || current.isEmpty())
             throw new IllegalStateException("本轮缺少已冻结的审核人。");
-        var acting = current.stream().map(Member::userId).toList();
         var buyers = purchase.stream().map(Member::userId).toList();
-        // 重叠岗位只点名一次，办理优先；两组各自的冻结身份仍可查询。
-        var informed =
-                productReview
-                        ? buyers.stream().filter(user -> !acting.contains(user)).toList()
-                        : List.of();
         var stage = productReview ? "PRODUCT_REVIEW" : "PURCHASE_REVIEW";
-        workflow.register(
-                tenant,
-                id,
-                version,
-                "SUBMITTED",
-                "GROUP_MESSAGE",
-                0,
-                encode(
-                        Map.of(
-                                "stage",
-                                stage,
-                                "summary",
-                                summary,
-                                "instruction",
-                                productReview ? "请产品运营办理初审，采购请知悉。" : "请采购办理终审。",
-                                "actingUserIds",
-                                acting,
-                                "informedUserIds",
-                                informed,
-                                "purchaseReviewerUserIds",
-                                buyers)),
-                at);
+        if (!productReview)
+            workflow.register(
+                    tenant,
+                    id,
+                    version,
+                    "SUBMITTED",
+                    "GROUP_MESSAGE",
+                    0,
+                    encode(
+                            Map.of(
+                                    "stage",
+                                    stage,
+                                    "summary",
+                                    summary,
+                                    "instruction",
+                                    "请采购办理终审。",
+                                    "actingUserIds",
+                                    buyers,
+                                    "informedUserIds",
+                                    List.of(),
+                                    "purchaseReviewerUserIds",
+                                    buyers)),
+                    at);
         for (var member : current) {
             workflow.register(
                     tenant,
                     id,
                     version,
                     "SUBMITTED",
-                    "CREATE_TASK",
+                    productReview ? "SEND_CARD" : "CREATE_TASK",
                     member.id(),
-                    encode(Map.of("stage", stage, "userId", member.userId())),
+                    encode(Map.of("stage", stage, "userId", member.userId(), "summary", summary)),
                     at);
         }
     }
@@ -131,18 +126,18 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
             LocalDateTime at) {
         var event = group + "_DECIDED";
         // 群消息和每份个人动作同事务落库，重放须保留第一次决定时的指派。
-        if (workflow.groupEventRegistered(tenant, id, version, event) != 0) return;
+        if (workflow.eventRegistered(tenant, id, version, event) != 0) return;
         var members = workflow.members(tenant, id, version);
         for (var member : members) {
             if (!group.equals(member.groupCode())) continue;
             var outcome = member.memberStatus();
             if ("HANDLED".equals(outcome) || "PEER_HANDLED".equals(outcome)) {
-                workflow.register(
+                close(
                         tenant,
                         id,
                         version,
                         event,
-                        "CLOSE_TASK",
+                        group,
                         member.id(),
                         encode(
                                 Map.of(
@@ -150,6 +145,8 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
                                         member.userId(),
                                         "outcome",
                                         outcome,
+                                        "decision",
+                                        decision,
                                         "actorId",
                                         actorId,
                                         "reason",
@@ -201,29 +198,30 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
             List<Assignee> removed,
             LocalDateTime at) {
         var event = "REASSIGNED_" + recordVersion;
-        if (workflow.groupEventRegistered(tenant, id, version, event) != 0) return;
-        workflow.register(
-                tenant,
-                id,
-                version,
-                event,
-                "GROUP_MESSAGE",
-                0,
-                encode(
-                        Map.of(
-                                "stage",
-                                currentStage,
-                                "targetStage",
-                                targetStage,
-                                "actorId",
-                                actorId,
-                                "addedUserIds",
-                                added.stream().map(Assignee::userId).toList(),
-                                "removedUserIds",
-                                removed.stream().map(Assignee::userId).toList(),
-                                "reason",
-                                reason)),
-                at);
+        if (workflow.eventRegistered(tenant, id, version, event) != 0) return;
+        if (!"PRODUCT_REVIEW".equals(currentStage))
+            workflow.register(
+                    tenant,
+                    id,
+                    version,
+                    event,
+                    "GROUP_MESSAGE",
+                    0,
+                    encode(
+                            Map.of(
+                                    "stage",
+                                    currentStage,
+                                    "targetStage",
+                                    targetStage,
+                                    "actorId",
+                                    actorId,
+                                    "addedUserIds",
+                                    added.stream().map(Assignee::userId).toList(),
+                                    "removedUserIds",
+                                    removed.stream().map(Assignee::userId).toList(),
+                                    "reason",
+                                    reason)),
+                    at);
         if (!targetStage.equals(currentStage)) return;
         for (var member : added)
             workflow.register(
@@ -231,17 +229,17 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
                     id,
                     version,
                     event,
-                    "CREATE_TASK",
+                    "PRODUCT_REVIEW".equals(targetStage) ? "SEND_CARD" : "CREATE_TASK",
                     member.memberId(),
                     encode(Map.of("stage", targetStage, "userId", member.userId())),
                     at);
         for (var member : removed)
-            workflow.register(
+            close(
                     tenant,
                     id,
                     version,
                     event,
-                    "CLOSE_TASK",
+                    "PRODUCT_REVIEW".equals(targetStage) ? "PRODUCT" : "PURCHASE",
                     member.memberId(),
                     encode(
                             Map.of(
@@ -258,7 +256,20 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
                     at);
     }
 
-    private String encode(Object payload) {
+    private void close(
+            String tenant,
+            long id,
+            int version,
+            String event,
+            String group,
+            long member,
+            String payload,
+            LocalDateTime at) {
+        var action = "PRODUCT".equals(group) ? "UPDATE_CARD" : "CLOSE_TASK";
+        workflow.register(tenant, id, version, event, action, member, payload, at);
+    }
+
+    private String encode(Map<String, ?> payload) {
         try {
             return json.writeValueAsString(payload);
         } catch (JsonProcessingException error) {

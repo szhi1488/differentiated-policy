@@ -1,6 +1,6 @@
 # 后端环境配置、部署与后台任务
 
-更新日期：2026-11-23。本文记录当前实现及用户确认的配置规则。实际部署方式和正式域名仍以部署时确定的环境为准，不代表已经发布上线。
+更新于 2026-11-24。本文记录开发环境的实配和后续部署方式。项目仍在研发，正式发布待部署时验证。
 
 ## 配置文件与读取方式
 
@@ -28,9 +28,19 @@
 
 ### 政策通知群与审核人员
 
-在 `backend/.env.local.properties` 或部署环境中填写 `FEISHU_POLICY_CHAT_ID`，值为该环境的通知群 `chat_id`（`oc_` 开头）。变更后重启后端。后端已支持读取此项，飞书群发送和待办仍待业务接入。
+在 `backend/.env.local.properties` 或部署环境中填写 `FEISHU_POLICY_CHAT_ID`，值为该环境的通知群 `chat_id`（`oc_` 开头）。变更后重启后端。私聊卡、群消息和任务分别记录回执，开关与联调步骤见[E 阶段交付记录](policy-workflow-phase-e.md)。
 
-按已确认的开发方案，有配置权限的管理员在管理后台按姓名分别多选产品运营和采购，后续政策沿用名单。采购候选限本企业已启用的管理员。环境文件只指定消息的目标群，系统从本轮选中账号解析飞书 `open_id` 完成点名。[办理及选人规则](policy-workflow-feishu-technical-design.md#assignees)
+有配置权限的管理员在管理后台分别选择产品运营和采购。采购候选限本企业已启用的管理员。系统从本轮指派解析个人的飞书 `open_id`，初审卡逐人私发，初审结果发往本环境配置的业务群。[办理及选人规则](policy-workflow-feishu-technical-design.md#assignees)
+
+2026-11-24 核对本机配置时，自动投递 `POLICY_REVIEW_DELIVERY_ENABLED` 已启用。仓库样例和程序默认关闭自动投递。所有实例均对提交和重提执行按轮指派。F 阶段共用该开关。启用后按当前窗口登记执行期提醒；平台交接和商品批次通知在业务事务中登记，由同一后台领取。已有 E 阶段库先完成 [F 阶段增量升级](../sql/database-design.md#已有库升级执行期与业务提醒)。实际配置变更后须重启后端，发卡和群通知的送达情况可在「政策审核设置 → 飞书投递记录」按单号与轮次核对。[投递记录与人工核对](../api/policy-review-settings.md#飞书投递记录与人工核对)
+
+### 内网部署的飞书审核卡
+
+本机 ERP 前端入口为 `http://172.50.50.32:5173`。开发机和后续内网服务器都可以使用 `long_connection`，由常驻后端主动连接飞书，无需公网域名。飞书客户端查看卡内的 ERP 明细时，设备须能访问该内网地址。
+
+1. 在实际后端配置中指定 `FEISHU_POLICY_CALLBACK_MODE=long_connection`、`FEISHU_POLICY_ERP_URL=http://172.50.50.32:5173`，并将 `http://172.50.50.32:5173` 加入 `FEISHU_ALLOWED_ORIGINS`。使用同一自建应用的身份凭证。长连接模式的 `FEISHU_CALLBACK_ENCRYPT_KEY` 和 `FEISHU_CALLBACK_VERIFICATION_TOKEN` 可留空。迁机时将前端地址和白名单同步为同事实际能访问的地址。
+2. 启动新版后端，等日志出现「飞书卡片回调长连接已建立」，在同一飞书应用的「事件与回调 → 回调配置」选择「使用长连接接收回调」，保存 `card.action.trigger` 订阅，并按控制台提示发布。`5173` 提供前端页面，回调配置走已建立的连接。
+3. 自动投递开启后，服务重启便会处理符合条件的待发记录，默认每 3000 毫秒轮询一次。如需只验证一张运营卡，先在常驻后端的实际配置中将 `POLICY_REVIEW_DELIVERY_ENABLED` 设为 `false`，重启后端，再按投递编号运行单卡命令。单卡验证时 `FEISHU_POLICY_CHAT_ID` 可留空，发送群结果通知时再填写机器人所在业务群的 `chat_id`。[单卡验证与回执核对](policy-workflow-phase-e.md#内网发送一张初审卡)
 
 ## 环境参数清单
 
@@ -43,8 +53,11 @@
 | `FEISHU_APP_ID` | 当前环境的飞书应用 ID，必填，无内置测试 ID |
 | `FEISHU_APP_SECRET` | 同一飞书应用的密钥，必填，仅服务端保存 |
 | `FEISHU_TENANT_KEY` | 当前环境的飞书企业标识，必填，不兼容旧配置名 |
-| `FEISHU_POLICY_CHAT_ID` | 当前环境的政策通知群 `chat_id`（`oc_…`）。测试环境填测试群，正式环境填正式群。可留空，已接入服务端配置读取，群消息与待办发送按开发技术书另行接入。 |
-| `POLICY_REVIEW_WORKFLOW_ENABLED` | 默认为 `false`。部署二十二表基线、维护审核名单并完成初审办理验收后，所有实例统一设为 `true`，使后续首提和重提按轮指派。既有轮次以持久化标记判断权限。飞书外部投递另按后续阶段启用。 |
+| `FEISHU_POLICY_CHAT_ID` | 当前环境的政策通知群 `chat_id`（`oc_…`）。缺配时群消息记录失败，可在修正后逐项补发。 |
+| `FEISHU_POLICY_ERP_URL` | 飞书客户端能打开的 ERP 前端根地址，可带部署子目录。自动投递与单卡命令使用相同校验。长连接模式支持已列入 `FEISHU_ALLOWED_ORIGINS` 的 HTTP 来源，加密 HTTP 回调模式要求 ERP 地址使用 HTTPS。 |
+| `FEISHU_POLICY_CALLBACK_MODE` | 默认 `http`。仅有内网地址时可设为 `long_connection`，由运行中的 ERP 主动向飞书建立加密连接。回调接收和外发调度分别受此项与 `POLICY_REVIEW_DELIVERY_ENABLED` 控制。[内网自动发卡与卡上审核](policy-workflow-phase-e.md#内网自动发卡与卡上审核) |
+| `FEISHU_CALLBACK_ENCRYPT_KEY`、`FEISHU_CALLBACK_VERIFICATION_TOKEN` | 加密 HTTP 回调所用的 Encrypt Key 和 Verification Token。网关将 `POST /callbacks/feishu/policy-review` 转发给后端，并保留请求正文及飞书签名头。长连接使用当前应用的 App ID 和 App Secret 建立连接。 |
+| `POLICY_REVIEW_DELIVERY_ENABLED`、`POLICY_REVIEW_DELIVERY_POLL_MS` | 后台对外投递默认关闭，轮询默认间隔 3000 毫秒。暂停或恢复后重启相应实例，ERP 仍可办理在途轮次。 |
 | `FEISHU_ALLOWED_ORIGINS` | 允许的前端 Origin，必填；含协议，多个用英文逗号分隔，不带路径及末尾 `/`；无本地地址回退 |
 | `JACKYUN_APP_KEY` | 吉客云应用标识，调用商品接口时填写 |
 | `JACKYUN_APP_SECRET` | 吉客云请求签名密钥，调用商品接口时填写 |
@@ -63,7 +76,6 @@
 | `DB_URL` | 实际 MySQL JDBC 地址，必填，无内置本机地址或库名回退 |
 | `DB_USERNAME` | 实际数据库账号 |
 | `DB_PASSWORD` | 实际数据库密码，仅服务端保存 |
-| `POLICY_APPLICABILITY_CUTOVER_AT` | 新规则首次上线的北京时间（含该秒），格式 `YYYY-MM-DDTHH:mm:ss+08:00`。有旧单的环境按实际发布时间配置，所有实例及后续重启沿用同一值。 |
 | `POLICY_STORAGE_ROOT` | 附件存储根目录，不含 `attachments`；部署填写稳定绝对路径，留空兼容项目根目录或 `backend/` 启动时使用项目 `data` |
 
 HTTP 超时及后台轮询间隔超出上述范围时，启动校验失败。导入的请求间隔与最大页数还会在发起任务时校验。轮询间隔是执行器本轮完成后的等待时间，不保证严格按墙上时钟同时触发，也不能替代导入请求间隔和限频冷却规则。
@@ -108,6 +120,20 @@ Find-NetRoute -RemoteIPAddress $serverIp | Format-List InterfaceAlias, IPAddress
 `HTTP 000` 表示 curl 未收到 HTTP 状态码。即使绕过应用层代理，系统路由仍可能走 TUN。若关闭 TUN 后同一网址恢复，需要继续使用代理时，可为服务机的单个 IPv4 地址配置 TUN 路由排除（`/32`），重新开启后再用浏览器验证。[Mihomo 路由排除配置](https://wiki.metacubex.one/config/inbound/tun/#route-exclude-address)
 
 首页恢复后，如果系统提示登录，按飞书登录流程重新建立会话。后端重启可能使原 `HttpSession` 失效，申请人账号及分工仍从数据库读取。局域网环境由 IDEA 启动后端时，更新服务端代码后由操作者择时重新运行 `PolicyApplication`，再刷新前端验证。[政策数据清理范围](../sql/database-design.md#清空政策提交后重新验证)
+
+### 从飞书群打开内网政策链接
+
+2026-11-24，两台电脑从群里点击「查看本轮政策」后都停在 ERP 页面载入之前。链接中的 `/#/reviews/1?round=1` 打开第 1 单第 1 轮的只读详情，`/#/apply?policyId=2&round=1` 供原申请人修改第 2 单第 1 轮的退回申请。浏览器先向 `http://172.50.50.32:5173/` 请求首页，再由前端解析 `#` 后的单据与轮次。[按轮链接与登录回跳](policy-workflow-phase-d.md#办理链接约定)
+
+| 设备 | 现场证据 | 处理方法 |
+| --- | --- | --- |
+| ERP 服务机 | 前端监听 `0.0.0.0:5173`。用以太网地址直连约 2 毫秒返回 HTTP 200，显式经过本机 Clash 系统代理则等待 9 秒仍未收到响应。 | 本机临时可用 `http://localhost:5173/` 加原 Hash 打开链接。其他电脑继续使用服务机地址。 |
+| 同事电脑 | 浏览器显示 `ERR_PROXY_CONNECTION_FAILED`，说明该次连接代理失败。这台电脑的直连结果和实际出站网卡仍待核对。 | 在该电脑运行上节的 `curl.exe --noproxy "*"` 和 `Find-NetRoute`。若直连返回 200，把服务机 IP 加入生效的代理例外后重开原链接。若为 000，检查办公网连接及路由。路由经过 TUN 时可临时停用 TUN 复测。 |
+
+让同事直接打开群链接可按公司网络条件集中处理。以下方式均待现场配置和验证。
+
+- **沿用现有群链接。** 办公网能够直连 `172.50.50.32:5173` 时，IT 可通过公司统一的代理自动配置（PAC）或组策略，为该 IP 下发直连规则。若终端使用 TUN，还需在相应策略中排除该主机路由。这也覆盖已经发到群里的旧地址。
+- **使用固定 HTTPS 入口。** 选择同事可访问的公司域名或应用网关，部署前端并同源转发 `/api`。在后端将 `FEISHU_POLICY_ERP_URL` 改为新前端根地址，更新 `FEISHU_ALLOWED_ORIGINS`、`SESSION_COOKIE_SECURE=true`，在飞书后台登记新入口及浏览器 OAuth 首页回调后重启后端。新发送的群消息使用新地址，已有消息保留发送时的链接。若需在办公网外使用，还需验证该入口通过公司 VPN 或允许的外部网络可达。[正式部署时的监听地址](#正式部署时的监听地址) · [浏览器登录](feishu-auth-flow.md#普通浏览器登录)
 
 ## 后台任务与关闭页面
 

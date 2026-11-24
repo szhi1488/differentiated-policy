@@ -1,8 +1,7 @@
 import { RETAIL_PLATFORMS, BILLION_PLATFORMS } from '../../src/constants/policy'
 import { describe, expect, it, vi } from 'vitest'
 import { usePolicyForm } from '../../src/composables/usePolicyForm'
-import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
-import { policyGoodsKey } from '../../src/utils/policy-form'
+import { catalogCenterSamples } from '../fixtures/catalog-center'
 
 const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
 const crossChannel = [
@@ -117,7 +116,7 @@ describe('申请表单状态', () => {
     expect(model.goods.map(({ id }) => id)).toEqual([first.id, anotherColor.id, second.id])
     expect(model.subsidies).toHaveLength(1)
     expect(model.subsidies[0].fixedAmount).toBe('50.00')
-    state.removeGoods([policyGoodsKey(first), policyGoodsKey(anotherColor)], model.key)
+    state.removeGoods([first.id, anotherColor.id], model.key)
     expect(model.goods.map(({ id }) => id)).toEqual([second.id])
     state.addGoods([firstGoods], model.key)
     expect(model.goods.map(({ name }) => name)).toEqual([second.name, firstGoods.name])

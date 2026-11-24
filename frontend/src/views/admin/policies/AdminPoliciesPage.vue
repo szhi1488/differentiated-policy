@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { routerKey } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
@@ -7,6 +8,7 @@ import PolicyBanner from '../../../layouts/components/PolicyBanner.vue'
 import { readAdminPolicy, reviewAdminPolicy } from '../../../api/admin-policies'
 import { REVIEW_STAGE_LABELS } from '../../../constants/review-workflow'
 import { useAdminPolicies } from '../../../composables/useAdminPolicies'
+import { useAdminPolicyRound } from '../../../composables/useAdminPolicyRound'
 import { useLatestQuery } from '../../../composables/useLatestQuery'
 import {
   CHANNEL_LABELS,
@@ -20,8 +22,12 @@ import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 import AdminPolicyHistory from './AdminPolicyHistory.vue'
 import PolicyReviewReassignment from '../review-settings/PolicyReviewReassignment.vue'
+import PolicyReviewRoundContent from '../../reviews/PolicyReviewRoundContent.vue'
+import '../../reviews/policy-reviews.css'
 import './admin-policies.css'
 
+const props = defineProps({ linkedReview: { type: Object, default: null } })
+const router = inject(routerKey, null)
 const {
   filters,
   status,
@@ -45,10 +51,12 @@ const filterFields = [
 ]
 const detailOpen = ref(false)
 const detailTab = ref('current')
-// 办理目标取自用户点击的列表行。重新聚焦、并发读取或失败重试均不可把它换成新轮。
+// 办理目标取自列表行或采购链接。重新聚焦、并发读取或失败重试均不可把它换成新轮。
 const reviewTarget = ref(null)
 const selectedId = ref('')
+const dialogTarget = computed(() => `${selectedId.value}/${reviewTarget.value?.version ?? ''}`)
 const { data: detail, error: detailError, loading: detailBusy, run: runDetail } = useLatestQuery()
+const { round, roundBusy, roundError, loadRound } = useAdminPolicyRound(detail)
 const selectedPolicy = computed(() => detail.value?.policy)
 const roundChanged = computed(() => {
   const target = reviewTarget.value
@@ -58,15 +66,13 @@ const roundChanged = computed(() => {
   )
 })
 const canReview = computed(() => {
-  const round = detail.value?.round
   return (
     reviewTarget.value?.active &&
     !roundChanged.value &&
     selectedPolicy.value?.reviewable &&
-    (!round ||
-      (round.reviewStage === 'PURCHASE_REVIEW' &&
-        round.allowedActions.includes('APPROVE') &&
-        round.allowedActions.includes('REJECT')))
+    round.value?.reviewStage === 'PURCHASE_REVIEW' &&
+    round.value.allowedActions?.includes('APPROVE') &&
+    round.value.allowedActions?.includes('REJECT')
   )
 })
 const rejectionOpen = ref(false)
@@ -82,16 +88,17 @@ const reviewNeedsReload = computed(
     ['network', 'timeout', 'parse'].includes(reviewError.value?.kind),
 )
 let reviewRequest
-watch(
-  detail,
-  (latest) => {
-    if (latest && reviewTarget.value?.active && !canReview.value) {
-      rejectionOpen.value = false
-      reviewTarget.value.active = false
-    }
-  },
-  { flush: 'sync' },
-)
+watch([detail, round], ([latest, verified]) => {
+  if (
+    latest &&
+    reviewTarget.value?.active &&
+    !canReview.value &&
+    (latest.linkedRound || roundChanged.value || !latest.policy.reviewable || verified)
+  ) {
+    rejectionOpen.value = false
+    reviewTarget.value.active = false
+  }
+})
 onMounted(() => window.addEventListener('focus', refreshOnReturn))
 onScopeDispose(() => {
   reviewRequest?.abort()
@@ -115,7 +122,9 @@ function showDetail(row, mode = 'view') {
   selectedId.value = row.id
   detailTab.value = 'current'
   reviewTarget.value =
-    mode === 'review' ? { id: row.id, version: row.submissionVersion, active: true } : null
+    mode === 'view'
+      ? null
+      : { id: row.id, version: row.submissionVersion, active: true, linked: mode === 'link' }
   rejectionOpen.value = false
   rejectionReason.value = ''
   reviewError.value = null
@@ -124,8 +133,26 @@ function showDetail(row, mode = 'view') {
 }
 
 function loadDetail() {
-  return runDetail((signal) => readAdminPolicy(selectedId.value, signal))
+  const linkedVersion = reviewTarget.value?.linked ? reviewTarget.value.version : undefined
+  return runDetail((signal) => readAdminPolicy(selectedId.value, signal, linkedVersion))
 }
+
+watch(
+  [() => props.linkedReview?.id, () => props.linkedReview?.round],
+  ([id, version]) => {
+    reviewRequest?.abort()
+    reviewBusy.value = false
+    reassignBusy.value = false
+    if (id && version) {
+      showDetail({ id, submissionVersion: Number(version) }, 'link')
+    } else if (reviewTarget.value?.linked) {
+      detailOpen.value = false
+      rejectionOpen.value = false
+      reviewTarget.value = null
+    }
+  },
+  { immediate: true },
+)
 
 async function submitReview(decision) {
   const policy = selectedPolicy.value
@@ -169,7 +196,9 @@ async function submitReview(decision) {
       }
     }
   } finally {
-    reviewBusy.value = false
+    if (reviewRequest === controller) {
+      reviewBusy.value = false
+    }
   }
 }
 
@@ -184,6 +213,12 @@ function returnToList() {
   detailOpen.value = false
   void reload()
 }
+
+watch(detailOpen, (open) => {
+  if (!open && props.linkedReview && reviewTarget.value?.linked) {
+    void router?.replace({ name: 'admin-policies' })
+  }
+})
 </script>
 
 <template>
@@ -368,7 +403,7 @@ function returnToList() {
     </section>
 
     <el-dialog
-      key="policy-detail"
+      :key="`policy-detail-${dialogTarget}`"
       v-model="detailOpen"
       class="admin-policy-dialog"
       width="min(1280px, calc(100% - 24px))"
@@ -384,7 +419,9 @@ function returnToList() {
           <h2 :id="titleId" :class="titleClass">
             {{ reviewTarget?.active ? '政策审核' : '政策详情' }}
           </h2>
-          <span class="admin-policy-detail-code">{{ selectedPolicy?.policyCode }}</span>
+          <span class="admin-policy-detail-code">
+            {{ selectedPolicy?.policyCode || detail?.linkedRound?.policyCode }}
+          </span>
         </div>
       </template>
       <div
@@ -427,15 +464,26 @@ function returnToList() {
         </p>
         <el-button link type="primary" @click="returnToList">返回列表并刷新</el-button>
       </el-alert>
+      <div v-else-if="detail?.linkedRound" class="policy-reviews-page">
+        <PolicyReviewRoundContent :round="detail.linkedRound" node="PURCHASE_REVIEW" />
+      </div>
       <div v-else-if="detail">
         <el-tabs v-model="detailTab" class="admin-policy-detail-tabs" aria-label="政策详情内容">
           <el-tab-pane label="当前申请" name="current" />
           <el-tab-pane label="审核记录" name="history" />
         </el-tabs>
-        <AdminPolicyDetail :key="selectedId" v-if="detailTab === 'current'" :detail="detail">
+        <AdminPolicyDetail
+          :key="selectedId"
+          v-if="detailTab === 'current'"
+          :detail="detail"
+          :round="round"
+          :round-busy="roundBusy"
+          :round-error="roundError"
+          @retry-round="roundError?.code === 'ROUND_RELOAD_REQUIRED' ? loadDetail() : loadRound()"
+        >
           <template #member-actions>
             <PolicyReviewReassignment
-              :round="detail.round"
+              :round="round"
               :disabled="reviewBusy || detailBusy || rejectionOpen || reviewNeedsReload"
               @busy="reassignBusy = $event"
               @reload="reloadReview"
@@ -465,7 +513,7 @@ function returnToList() {
     </el-dialog>
 
     <el-dialog
-      key="policy-rejection"
+      :key="`policy-rejection-${dialogTarget}`"
       v-model="rejectionOpen"
       class="admin-policy-rejection"
       title="驳回政策"

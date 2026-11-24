@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /** 将同一份分流依据转为可供采购和产品运营核对的业务短句。 */
-final class PolicyChangeDescription {
+public final class PolicyChangeDescription {
     private static final DateTimeFormatter TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final Map<String, String> PLATFORMS =
@@ -57,9 +57,30 @@ final class PolicyChangeDescription {
 
     private PolicyChangeDescription() {}
 
+    public static String platformLabel(String code) {
+        return PLATFORMS.getOrDefault(code, code);
+    }
+
+    /** 卡片先给时段和商品，再分别列出本轮冻结的原采用、拟采用名单。 */
+    public static String cardScope(PolicyExecutionChange change) {
+        String platform = change.scope().platformCode();
+        return platformLabel(platform)
+                + ("RETAIL".equals(change.perspective()) ? "零售" : "百亿")
+                + " · "
+                + TIME.format(change.from())
+                + " 至 "
+                + TIME.format(change.through())
+                + "\n"
+                + scopeName(change);
+    }
+
+    public static String cardPolicies(List<Policy> policies, PolicyExecutionChange change) {
+        return policies.isEmpty() ? "无" : describePolicies(policies, change);
+    }
+
     static String describe(PolicyExecutionChange change) {
         var scope = change.scope();
-        String platform = PLATFORMS.getOrDefault(scope.platformCode(), scope.platformCode());
+        String platform = platformLabel(scope.platformCode());
         String channel = "RETAIL".equals(change.perspective()) ? "零售" : "百亿";
         var parts = new ArrayList<String>();
         parts.add(platform + channel);

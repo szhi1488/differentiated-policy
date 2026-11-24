@@ -59,9 +59,7 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
         }
         var color = goods.lockColor(candidate.colorName());
         var existing =
-                source.getGoodsId() == null
-                        ? goods.lockGoodsBySku(source.getSkuId())
-                        : goods.lockMappedGoods(source.getGoodsId());
+                source.getGoodsId() == null ? null : goods.lockMappedGoods(source.getGoodsId());
         boolean sameTarget =
                 existing != null
                         && model != null
@@ -70,7 +68,7 @@ public class CatalogCleaningResultWriterImpl implements CatalogCleaningResultWri
                         && memory.ram().equals(existing.ram())
                         && memory.rom().equals(existing.rom())
                         && existing.colorId() == color.id();
-        if (!sameTarget && (protect || (existing != null && source.getGoodsId() == null))) {
+        if (!sameTarget && protect) {
             throw new MappingConflict("CATALOG_MAPPING_CHANGED", "候选规格或颜色与已生效映射不同，需要人工确认。");
         }
         if (sameTarget) {

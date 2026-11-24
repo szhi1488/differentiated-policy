@@ -18,8 +18,11 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-it('扫码和网页授权共用的回调只还原本标签页同一次授权的单据及节点', async () => {
-  const path = '/reviews/9007199254740993?round=2&node=PRODUCT_REVIEW'
+it.each([
+  '/reviews/9007199254740993?round=2',
+  '/apply?policyId=9007199254740993&round=2',
+  '/admin/policies?policyId=9007199254740993&round=2',
+])('扫码和网页授权共用的回调只还原本标签页同一次授权的入口 %s', async (path) => {
   window.history.replaceState(null, '', '/#' + path)
   createBrowserAuthorization.mockResolvedValue({
     authorizationUrl: 'https://accounts.feishu.cn/open-apis/authen/v1/authorize?state=bound',
@@ -37,7 +40,7 @@ it('扫码和网页授权共用的回调只还原本标签页同一次授权的�
   expect(restore).toHaveBeenCalledTimes(1)
 })
 
-it('拒绝回跳到任意地址及带额外参数的单据，保留修改链接的原轮次', async () => {
+it('拒绝回跳到非业务地址和带额外参数的单据', async () => {
   createBrowserAuthorization.mockResolvedValue({
     authorizationUrl: 'https://accounts.feishu.cn/open-apis/authen/v1/authorize?state=bound',
   })
@@ -45,18 +48,18 @@ it('拒绝回跳到任意地址及带额外参数的单据，保留修改链接�
     '//foreign.example',
     '/admin/users',
     '/reviews/7?round=1&next=/apply',
-    '/apply?policyId=7&round=1',
+    '/reviews',
+    '/reviews/7?round=1&node=PRODUCT_REVIEW',
+    '/reviews/7?round=1&node=PURCHASE_REVIEW',
+    '/reviews/7?round=1&node=REVISION',
+    '/apply?policyId=7&round=1&next=/apply',
   ]) {
     window.history.replaceState(null, '', '/#' + path)
     await getBrowserAuthorizationUrl()
     window.history.replaceState(null, '', '/?code=once&state=bound')
     const restore = vi.fn()
     await completeBrowserLogin(restore)
-    if (path.startsWith('/apply?')) {
-      expect(restore).toHaveBeenCalledExactlyOnceWith('/reviews/7?round=1&node=REVISION')
-    } else {
-      expect(restore).not.toHaveBeenCalled()
-    }
+    expect(restore).not.toHaveBeenCalled()
   }
 })
 

@@ -9,8 +9,14 @@ const first = { id: '9007199254740993', name: '林宁', department: '运营一�
 const second = { id: '9007199254740994', name: '林宁', department: '运营二部' }
 const buyer = { id: '31', name: '采购甲', department: '采购部' }
 const newBuyer = { id: '32', name: '采购乙', department: '采购部' }
-const initialSettings = { version: 2, productReviewers: [], purchaseReviewers: [buyer] }
+const initialSettings = {
+  version: 2,
+  policyChatConfigured: true,
+  productReviewers: [],
+  purchaseReviewers: [buyer],
+}
 const settingsPath = '/api/admin/policy-review-settings'
+const deliveriesPath = '/api/admin/policy-review-deliveries'
 const member = (person) => ({ ...person, userId: person.id, memberStatus: 'ACTIVE' })
 const round = {
   id: '5',
@@ -26,7 +32,7 @@ const round = {
 }
 let wrapper
 
-async function open(component, props, handlers) {
+async function open(component, props, handlers, stubs = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path, init) => {
@@ -44,7 +50,7 @@ async function open(component, props, handlers) {
   wrapper = mount(component, {
     attachTo: document.body,
     props,
-    global: { stubs: { teleport: true } },
+    global: { stubs: { teleport: true, ...stubs } },
   })
   await flushPromises()
 }
@@ -60,7 +66,99 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('旧响应兼容；服务端明确报告业务群未配置时提示部署人员', async () => {
+it('不填政策单号也可分页核对商品批次的业务提醒', async () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({
+    id: String(100 - i),
+    action: 'GROUP_MESSAGE',
+    recipient: '清洗批次 ' + (100 - i),
+    status: 'PENDING',
+    nextAttemptAt: '2099-05-01T12:00:00+08:00',
+  }))
+  const list = vi.fn().mockReturnValueOnce(rows).mockReturnValue([])
+  await open(
+    PolicyReviewSettingsPage,
+    {},
+    {
+      [`GET ${settingsPath}`]: () => initialSettings,
+      [`GET ${deliveriesPath}/notices`]: list,
+    },
+  )
+  const panel = wrapper.get('section[aria-label="飞书投递记录"]')
+  await click('查询业务提醒', panel)
+  expect(panel.text()).toContain('清洗批次 100')
+  expect(panel.text()).toContain('可投递时间 2099-05-01T12:00:00+08:00')
+  await click('下一页', panel)
+  expect(list).toHaveBeenLastCalledWith({ before: '51' })
+  expect(panel.text()).toContain('暂无投递记录')
+})
+
+it('按单号和轮次核对单项投递，补回执失败保留输入，成功后重新读取该轮', async () => {
+  const row = {
+    id: '19',
+    event: 'SUBMITTED',
+    action: 'CREATE_TASK',
+    status: 'UNKNOWN',
+    recipient: '采购甲',
+    attempts: 3,
+    revision: 0,
+    canResolve: true,
+  }
+  const delivered = { ...row, status: 'SENT', canResolve: false, receiptId: 'right-task' }
+  const list = vi.fn().mockReturnValueOnce([row]).mockReturnValue([delivered])
+  const resolve = vi.fn(({ receiptId }) =>
+    receiptId === 'wrong-task'
+      ? Response.json(
+          { code: 'POLICY_RECEIPT_UNVERIFIED', message: '收件人不匹配' },
+          { status: 409 },
+        )
+      : delivered,
+  )
+  await open(
+    PolicyReviewSettingsPage,
+    {},
+    {
+      [`GET ${settingsPath}`]: () => initialSettings,
+      [`GET ${deliveriesPath}`]: list,
+      [`POST ${deliveriesPath}/19/resolve`]: resolve,
+    },
+    {
+      ElDialog: {
+        props: ['modelValue'],
+        template:
+          '<section v-if="modelValue" role="dialog"><slot /><slot name="footer" /></section>',
+      },
+    },
+  )
+  const panel = wrapper.get('section[aria-label="飞书投递记录"]')
+  await panel.get('input').setValue('ZC-000057')
+  await panel.get('form').trigger('submit')
+  await vi.waitFor(() => expect(panel.text()).toContain('核对并处理'))
+  expect(list).toHaveBeenLastCalledWith({ policyId: '57', submissionVersion: '1' })
+  await click('核对并处理', panel)
+  await vi.waitFor(() => expect(panel.find('[role="dialog"] textarea').exists()).toBe(true))
+  const dialog = panel.get('[role="dialog"]')
+  await dialog.get('textarea').setValue('逐人核对了任务编号及单号')
+  await dialog.get('input[maxlength="128"]').setValue('wrong-task')
+  await click('核对并保存回执', dialog)
+  await vi.waitFor(() => expect(dialog.text()).toContain('收件人不匹配'))
+  expect(dialog.get('textarea').element.value).toBe('逐人核对了任务编号及单号')
+  expect(dialog.get('input[maxlength="128"]').element.value).toBe('wrong-task')
+  await dialog.get('input[maxlength="128"]').setValue('right-task')
+  await click('核对并保存回执', dialog)
+  await vi.waitFor(() => expect(panel.text()).toContain('飞书回执 right-task'))
+  expect(resolve).toHaveBeenLastCalledWith({
+    operation: 'CONFIRM_RECEIPT',
+    expectedStatus: 'UNKNOWN',
+    expectedAttempts: 3,
+    expectedRevision: 0,
+    receiptId: 'right-task',
+    reason: '逐人核对了任务编号及单号',
+  })
+  expect(list).toHaveBeenCalledTimes(2)
+  expect(button(panel, '核对并处理')).toBeUndefined()
+})
+
+it('服务端报告业务群未配置时提示部署人员', async () => {
   await open(
     PolicyReviewSettingsPage,
     {},

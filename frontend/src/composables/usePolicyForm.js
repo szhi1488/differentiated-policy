@@ -11,7 +11,6 @@ import {
   createSubsidy,
   occupiedCommonConfigurations,
   policyConfigurationKey,
-  policyGoodsKey,
 } from '../utils/policy-form'
 
 /** 维护当前页面的表单状态，不承担服务端提交、权限判断或政策生效计算。 */
@@ -165,7 +164,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     const next = model.goods.filter(({ key }) => !removed.has(key))
     const existing = new Set(next.map(({ key }) => key))
     for (const goods of goodsList) {
-      const key = policyGoodsKey(goods)
+      const key = goods.id
       if (goods.status !== 'active' || existing.has(key)) {
         continue
       }
@@ -217,7 +216,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     }
     const model = createPolicyModel()
     model.id = goods.id
-    model.goods.push({ ...goods, key: policyGoodsKey(goods) })
+    model.goods.push({ ...goods, key: goods.id })
     applyModelPlatforms(model, form.value.platforms)
     form.value.cards.push(model)
     notice.value = ''

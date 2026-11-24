@@ -1,6 +1,5 @@
 package com.company.policy.support.policy;
 
-import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.support.policy.PolicyApplicabilityEvaluator.Round;
 import com.company.policy.support.policy.PolicyApplicabilityEvaluator.Window;
@@ -20,16 +19,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import org.springframework.http.HttpStatus;
 
 /** 按配置解开已通过快照，以政策和逐段决定的边界回放实际适用名单。 */
 public final class PolicyTimelineBuilder {
     private final String channel;
-    private final List<Long> goods;
     private final PolicyApplicabilityEvaluator evaluator;
     private final Window query;
     private final LocalDateTime asOf;
-    private final LocalDateTime cutover;
 
     public PolicyTimelineBuilder(
             String channel,
@@ -40,13 +36,10 @@ public final class PolicyTimelineBuilder {
             List<Long> goods,
             LocalDateTime from,
             LocalDateTime through,
-            LocalDateTime asOf,
-            LocalDateTime cutover) {
+            LocalDateTime asOf) {
         this.channel = channel;
-        this.goods = goods;
         this.query = new Window(from, through);
         this.asOf = asOf;
-        this.cutover = cutover;
         var scopes = new ArrayList<Scope>();
         for (var code : new TreeSet<>(platforms)) {
             if (channel.equals("RETAIL")) {
@@ -58,7 +51,7 @@ public final class PolicyTimelineBuilder {
 
     public void include(
             Snapshot snapshot, long auditId, LocalDateTime submitted, LocalDateTime approved) {
-        evaluator.includeTimeline(snapshot, auditId, submitted, approved, cutover);
+        evaluator.includeTimeline(snapshot, auditId, submitted, approved);
     }
 
     public void includeApprovedEnd(String auditId, LocalDateTime actualEnd) {
@@ -76,14 +69,7 @@ public final class PolicyTimelineBuilder {
             if (!window.from().isAfter(asOf) && window.through().isAfter(asOf)) {
                 events.computeIfAbsent(asOf.plusSeconds(1), k -> new Event());
             }
-            if (scope.goodsId() != null) {
-                collect(groups, track(scope.platformCode(), rounds, events, scope.goodsId()));
-            } else if (rounds.stream().anyMatch(Round::legacy)) {
-                for (long id : goods)
-                    collect(groups, track(scope.platformCode(), rounds, events, id));
-            } else {
-                collect(groups, track(scope.platformCode(), rounds, events, null));
-            }
+            collect(groups, track(scope.platformCode(), rounds, events, scope.goodsId()));
         }
         return groups.values().stream().map(PolicyTimelineBuilder::merge).toList();
     }
@@ -92,44 +78,15 @@ public final class PolicyTimelineBuilder {
         LocalDateTime start = null;
         LocalDateTime end = null;
         for (var round : rounds) {
-            var span = span(round);
+            var span = round.original();
             if (span.intersect(query).expired()) continue;
             if (start == null || span.from().isBefore(start)) start = span.from();
             if (end == null || span.through().isAfter(end)) end = span.through();
-        }
-        // 原单完整展示会扩展查询窗口。扩展部分涉及旧单时也必须遵循时点接口的切换口径。
-        var last = end == null || end.isBefore(query.through()) ? query.through() : end;
-        if (cutover == null && !query.from().isAfter(asOf)) {
-            var lastHistorical = last.isBefore(asOf) ? last : asOf.minusSeconds(1);
-            if (rounds.stream()
-                    .anyMatch(
-                            r ->
-                                    r.legacy()
-                                            && !r.original()
-                                                    .from()
-                                                    .toLocalDate()
-                                                    .isAfter(lastHistorical.toLocalDate())
-                                            && !PolicyFormValidation.time(r.policy().approvedAt())
-                                                    .isAfter(lastHistorical)))
-                throw unknownCutover();
         }
         if (start == null) return null;
         if (query.from().isAfter(asOf) && !start.isAfter(asOf)) start = asOf.plusSeconds(1);
         if (!query.through().isAfter(asOf) && end.isAfter(asOf)) end = asOf;
         return new Window(start, end);
-    }
-
-    public static ApiException unknownCutover() {
-        return new ApiException(
-                HttpStatus.CONFLICT, "POLICY_CUTOVER_REQUIRED", "该历史时点涉及旧政策，请管理员配置实际规则上线时间后重查。");
-    }
-
-    private static Window span(Round round) {
-        return new Window(
-                round.original().from(),
-                round.window().through().isAfter(round.original().through())
-                        ? round.window().through()
-                        : round.original().through());
     }
 
     private static final class Event {
@@ -192,23 +149,12 @@ public final class PolicyTimelineBuilder {
             var next = events.higherKey(at);
             var adopted =
                     PolicyApplicabilityEvaluator.effectivePolicies(
-                                    channel.equals("RETAIL"),
-                                    active,
-                                    goodsId == null ? 0 : goodsId,
-                                    at)
+                                    channel.equals("RETAIL"), active, at)
                             .stream()
                             .map(p -> p.auditLogId())
                             .toList();
-            boolean perProduct = goodsId != null && active.stream().allMatch(Round::legacy);
-            // 尚无可采用轮次时，以本段可见原单判断；其他日期的旧单只影响轨道划分。
-            boolean configurationDecision =
-                    channel.equals("BILLION")
-                            && (!perProduct
-                                    || (active.isEmpty()
-                                            && visible.stream().noneMatch(Round::legacy)));
             var excluded =
                     visible.stream()
-                            .filter(r -> !perProduct || !r.legacy() || containsGoods(r, goodsId))
                             .map(r -> r.policy().auditLogId())
                             .filter(id -> !adopted.contains(id))
                             .toList();
@@ -237,7 +183,7 @@ public final class PolicyTimelineBuilder {
                             : time(next);
             append(
                     at.isAfter(asOf) ? plannedSegments : segments,
-                    new Segment(time(at), end, adopted, excluded, configurationDecision));
+                    new Segment(time(at), end, adopted, excluded));
         }
         var policies =
                 rounds.stream()
@@ -245,10 +191,9 @@ public final class PolicyTimelineBuilder {
                                 r ->
                                         seen.contains(r.policy().auditLogId())
                                                 || (r.original().through().isAfter(asOf)
-                                                        && !r.original().intersect(query).expired()
-                                                        && (goodsId == null
-                                                                || !r.legacy()
-                                                                || containsGoods(r, goodsId))))
+                                                        && !r.original()
+                                                                .intersect(query)
+                                                                .expired()))
                         .map(
                                 r -> {
                                     var p = r.policy();
@@ -277,19 +222,11 @@ public final class PolicyTimelineBuilder {
                 plannedSegments);
     }
 
-    private static boolean containsGoods(Round round, long id) {
-        var key = Long.toString(id);
-        return round.policy().selections().stream()
-                .flatMap(s -> s.products().stream())
-                .anyMatch(p -> key.equals(p.goodsId()));
-    }
-
     private static void append(List<Segment> segments, Segment next) {
         if (!segments.isEmpty()) {
             int last = segments.size() - 1;
             var old = segments.get(last);
             if (next.startAt().equals(old.endAt())
-                    && old.configurationDecision() == next.configurationDecision()
                     && old.adoptedAuditLogIds().equals(next.adoptedAuditLogIds())
                     && old.excludedAuditLogIds().equals(next.excludedAuditLogIds())) {
                 segments.set(
@@ -298,8 +235,7 @@ public final class PolicyTimelineBuilder {
                                 old.startAt(),
                                 next.endAt(),
                                 old.adoptedAuditLogIds(),
-                                old.excludedAuditLogIds(),
-                                old.configurationDecision()));
+                                old.excludedAuditLogIds()));
                 return;
             }
         }

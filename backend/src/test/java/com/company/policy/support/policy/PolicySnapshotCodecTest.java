@@ -4,20 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 class PolicySnapshotCodecTest {
-    // 按旧提交格式固定样本，独立于当前请求类、响应类和快照写入器。
-    private static final String LEGACY =
+    // 按当前提交格式固定样本，独立于当前请求类、响应类和快照写入器。
+    private static final String SNAPSHOT =
             """
             {
-              "id":"5","policyCode":"LEGACY-5","applicantId":"9","applicantName":"张三","submissionVersion":2,
+              "id":"5","policyCode":"ZC-000005","applicantId":"9","applicantName":"张三","submissionVersion":2,
               "form":{
                 "recordVersion":3,"perspective":"RETAIL","selectedPlatforms":["JD","PDD"],
-                "verifyType":"SALES","sceneType":"LOCAL_SUB","estimated":false,
+                "verifyType":"SALES","sceneTypes":["LOCAL_SUB"],"estimated":false,
                 "startTime":"2026-11-10T09:00:00+08:00","endTime":"2026-12-01T00:00:00+08:00",
-                "specialRemark":"保留原备注","otherExplanation":"已移除",
+                "specialRemark":"保留原备注",
                 "attachmentInfo":[{"type":"FILE","url":null,"id":"file-1","originalName":"凭证.pdf"},
                                   {"type":"LINK","url":"https://example.com","id":null,"originalName":null}],
                 "goodsForm":{"cards":[{
@@ -37,16 +36,26 @@ class PolicySnapshotCodecTest {
             """;
 
     @Test
-    void readsUnversionedSnapshotsAndWritesTheSameJsonContract() throws Exception {
+    void roundTripsSubmittedSnapshotWithoutChangingPrecisionOrQuantity() throws Exception {
         var json = new ObjectMapper();
         var codec = new PolicySnapshotCodec();
-        var expected = json.readTree(LEGACY);
-        var form = (ObjectNode) expected.get("form");
-        form.remove("otherExplanation");
-        form.putArray("sceneTypes").add("LOCAL_SUB");
+        var expected = json.readTree(SNAPSHOT);
 
-        var snapshot = codec.read(LEGACY);
+        var snapshot = codec.read(SNAPSHOT);
         assertThat(json.<JsonNode>valueToTree(snapshot)).isEqualTo(expected);
         assertThat(json.readTree(codec.write(snapshot))).isEqualTo(expected);
+    }
+
+    @Test
+    void extraStoredFieldsDoNotHideThePolicyOrChangeItsCurrentForm() throws Exception {
+        var json = new ObjectMapper();
+        var original = json.readTree(SNAPSHOT);
+        var stored = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) stored.path("form"))
+                .put("sceneType", "LOCAL_SUB")
+                .put("otherExplanation", "附加说明");
+        var codec = new PolicySnapshotCodec();
+        var detail = codec.read(stored.toString());
+        assertThat(json.readTree(codec.write(detail))).isEqualTo(original);
     }
 }

@@ -13,7 +13,6 @@ import {
   billionGroupHistory,
   directory,
   history,
-  mixedBillionHistory,
   retailGroupHistory,
 } from '../fixtures/subsidy-history'
 
@@ -501,94 +500,59 @@ it('百亿同一轮的多个分配只计一单，展开指定商品保留原采�
   expect(fetch).toHaveBeenCalledTimes(2)
 })
 
-it.each([
-  ['配置轨', billionGroupHistory],
-  ['新旧审核混合轨', mixedBillionHistory],
-])(
-  '百亿%s点击其他颜色仍展示配置级换单和叠加，展开独立商品可查看数量，结束后重新显示整组',
-  async (_, makeHistory) => {
-    fetch
-      .mockResolvedValueOnce(Response.json(directory))
-      .mockResolvedValueOnce(Response.json(makeHistory('SPECIFIED')))
-    await openPage()
-    const chart = timelines()[0]
-    const rows = () => chart.props('rows')
-    expect(chart.text()).toContain('拼多多 · 整组配置')
-    expect(rows().some((row) => row.plan.cardType === 'SPECIFIED')).toBe(false)
-    const others = rows().find(
-      (row) => row.plan.policyCode === 'ZC-000023' && row.segment.label === '初雪白、奇遇喵',
-    )
-    expect(others).toBeDefined()
-    chart.vm.$emit('select-policy', others, AS_OF)
-    await nextTick()
-    const summary = panel().get('.model-subsidy-detail-summary').text()
-    expect(summary).toMatch(/审核范围\s*·\s*整组配置/)
-    expect(summary).toMatch(/本段申报商品\s*·\s*初雪白/)
-    expect(
-      panel()
-        .findAll('.model-subsidy-upcoming li strong')
-        .map((item) => item.text()),
-    ).toEqual(['ZC-000024', 'ZC-000023、ZC-000024', 'ZC-000023'])
-    expect(panel().findAll('.model-subsidy-source')).toHaveLength(2)
-    const single = panel().get('.model-subsidy-source:not(.muted)').text()
-    expect(single).toContain('ZC-000024')
-    expect(single).toContain('可可棕')
-    expect(single).toMatch(/该平台数量\s*0/)
-    const whole = panel().get('.model-subsidy-source.inspected.muted').text()
-    expect(whole).toContain('ZC-000023')
-    for (const color of ['可可棕', '初雪白', '奇遇喵']) {
-      expect(whole).toContain(color)
-    }
-    await move('2026-11-17T00:00:00', chart)
-    expect(panel().get('.model-subsidy-detail-summary').text()).toContain('同配置叠加')
-    expect(panel().get('.model-subsidy-source-heading').text()).toMatch(/本段计划采用\s*2 单/)
-    expect(panel().findAll('.model-subsidy-source:not(.muted)')).toHaveLength(2)
-    await wrapper.get('input[type="checkbox"]').setValue(true)
-    const specified = rows().find((row) => row.plan.cardType === 'SPECIFIED')
-    expect(specified.segment.label).toBe('独立商品 · 可可棕')
-    chart.vm.$emit('select-policy', specified, '2026-11-17T23:59:59')
-    await nextTick()
-    expect(panel().get('.model-subsidy-source.inspected').text()).toContain('ZC-000024')
-    await move('2026-11-18T00:00:00', chart)
-    expect(panel().get('.model-subsidy-detail-summary').text()).toContain('整组配置')
-    expect(panel().get('.model-subsidy-source').text()).toContain('ZC-000023')
-    expect(panel().findAll('.model-subsidy-source')).toHaveLength(1)
-    expect(fetch).toHaveBeenCalledTimes(2)
-  },
-)
-
-it('百亿右栏可从旧商品段跨过切换秒查看配置审核，再回到相同商品的旧名单', async () => {
+it('百亿点击其他颜色仍展示配置级换单和叠加，展开独立商品可查看数量，结束后重新显示整组', async () => {
   fetch
     .mockResolvedValueOnce(Response.json(directory))
-    .mockResolvedValueOnce(Response.json(mixedBillionHistory()))
+    .mockResolvedValueOnce(Response.json(billionGroupHistory('SPECIFIED')))
   await openPage()
   const chart = timelines()[0]
-  const legacy = chart.props('rows').find((r) => r.plan.policyCode === 'ZC-000022')
-  const sources = () =>
+  const rows = () => chart.props('rows')
+  expect(chart.text()).toContain('拼多多 · 整组配置')
+  expect(rows().some((row) => row.plan.cardType === 'SPECIFIED')).toBe(false)
+  const others = rows().find(
+    (row) => row.plan.policyCode === 'ZC-000023' && row.segment.label === '初雪白、奇遇喵',
+  )
+  expect(others).toBeDefined()
+  chart.vm.$emit('select-policy', others, AS_OF)
+  await nextTick()
+  const summary = panel().get('.model-subsidy-detail-summary').text()
+  expect(summary).toMatch(/审核范围\s*·\s*整组配置/)
+  expect(summary).toMatch(/本段申报商品\s*·\s*初雪白/)
+  expect(
     panel()
-      .findAll('.model-subsidy-source strong')
-      .map((e) => e.text())
-  chart.vm.$emit('select-policy', legacy, '2026-11-07T23:59:59')
+      .findAll('.model-subsidy-upcoming li strong')
+      .map((item) => item.text()),
+  ).toEqual(['ZC-000024', 'ZC-000023、ZC-000024', 'ZC-000023'])
+  expect(panel().findAll('.model-subsidy-source')).toHaveLength(2)
+  const single = panel().get('.model-subsidy-source:not(.muted)').text()
+  expect(single).toContain('ZC-000024')
+  expect(single).toContain('可可棕')
+  expect(single).toMatch(/该平台数量\s*0/)
+  const whole = panel().get('.model-subsidy-source.inspected.muted').text()
+  expect(whole).toContain('ZC-000023')
+  for (const color of ['可可棕', '初雪白', '奇遇喵']) {
+    expect(whole).toContain(color)
+  }
+  await move('2026-11-17T00:00:00', chart)
+  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('同配置叠加')
+  expect(panel().get('.model-subsidy-source-heading').text()).toMatch(/本段计划采用\s*2 单/)
+  expect(panel().findAll('.model-subsidy-source:not(.muted)')).toHaveLength(2)
+  await wrapper.get('input[type="checkbox"]').setValue(true)
+  const specified = rows().find((row) => row.plan.cardType === 'SPECIFIED')
+  expect(specified.segment.label).toBe('独立商品 · 可可棕')
+  chart.vm.$emit('select-policy', specified, '2026-11-17T23:59:59')
   await nextTick()
-  expect(sources()).toEqual(['ZC-000022'])
-  await move('2026-11-08T00:00:00', chart)
-  expect(sources()).toEqual(['ZC-000023'])
-  expect(panel().get('.model-subsidy-detail-summary').text()).toMatch(/审核范围\s*·\s*整组配置/)
-  const split = chart
-    .props('rows')
-    .find((r) => r.plan.policyCode === 'ZC-000023' && r.segment.label === '初雪白、奇遇喵')
-  chart.vm.$emit('select-policy', split, AS_OF)
-  await nextTick()
-  expect(sources().sort()).toEqual(['ZC-000023', 'ZC-000024'])
-  await move('2026-11-07T23:59:59', chart)
-  expect(sources()).toEqual(['ZC-000022'])
+  expect(panel().get('.model-subsidy-source.inspected').text()).toContain('ZC-000024')
+  await move('2026-11-18T00:00:00', chart)
+  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('整组配置')
+  expect(panel().get('.model-subsidy-source').text()).toContain('ZC-000023')
+  expect(panel().findAll('.model-subsidy-source')).toHaveLength(1)
   expect(fetch).toHaveBeenCalledTimes(2)
 })
 
-it('百亿同单有两张不同金额卡时，历史商品审核只显示本色金额，配置审核可对照整单两项', async () => {
+it('百亿同单两张不同金额的补贴卡按颜色展示，配置审核保留两项', async () => {
   const sample = billionGroupHistory()
   const [track] = sample.tracks
-  track.goodsIds = ['61', '62', '63']
   const allocations = track.policies[0].selections
   const [first] = allocations
   first.subsidy = { ...first.subsidy, fixedAmount: '50.00' }
@@ -597,33 +561,21 @@ it('百亿同单有两张不同金额卡时，历史商品审核只显示本色�
     products: first.products.splice(1),
     subsidy: { ...first.subsidy, fixedAmount: '80.00' },
   })
-  track.segments = track.segments.map((part, index) => ({
-    ...part,
-    configurationDecision: index !== 0,
-  }))
-  track.plannedSegments = track.plannedSegments.map((part) => ({
-    ...part,
-    configurationDecision: true,
-  }))
   fetch.mockResolvedValueOnce(Response.json(directory)).mockResolvedValueOnce(Response.json(sample))
   await openPage()
   const chart = timelines()[0]
   const white = chart
     .props('rows')
-    .find(
-      (r) =>
-        r.plan.policyCode === 'ZC-000023' &&
-        !r.segment.configurationDecision &&
-        r.segment.label === '初雪白、奇遇喵',
-    )
+    .find((r) => r.plan.policyCode === 'ZC-000023' && r.segment.label === '初雪白、奇遇喵')
   expect(white).toBeDefined()
   chart.vm.$emit('select-policy', white, '2026-11-14T23:59:59')
   await nextTick()
-  expect(panel().findAll('.model-subsidy-source')).toHaveLength(1)
-  const product = panel().get('.model-subsidy-source:not(.muted)').text()
-  expect(product).toContain('固定 80 元')
-  expect(product).toContain('初雪白')
-  expect(product).not.toContain('可可棕')
+  expect(
+    panel()
+      .findAll('.model-subsidy-source:not(.muted)')
+      .map((p) => p.get('header span').text())
+      .sort(),
+  ).toEqual(['固定 50 元', '固定 80 元'])
   await move('2026-11-15T00:00:00', chart)
   const old = panel().findAll('.model-subsidy-source.muted')
   expect(old.map((p) => p.get('header span').text()).sort()).toEqual(['固定 50 元', '固定 80 元'])
@@ -663,6 +615,7 @@ it('十二月的已通过百亿政策定位到计划首日，展示原单金额�
   fetch.mockResolvedValueOnce(
     Response.json({
       asOf: history.asOf,
+      configurationGoodsCount: 1,
       tracks: [
         {
           ...history.tracks[1],

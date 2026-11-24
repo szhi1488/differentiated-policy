@@ -25,19 +25,16 @@ public interface PolicyApplyService {
     PolicyResponse create(
             CurrentUserResponse session, PolicyDraftRequest request, String requestKey);
 
-    /** 从本人已通过的提交快照创建关联延期草稿。 */
-    PolicyResponse extend(
-            CurrentUserResponse session, long id, PolicyDraftRequest.Extension request);
-
+    /** 从本人已通过的政策创建提前结束或延期草稿。 */
     PolicyResponse adjustTime(
             CurrentUserResponse session,
             long id,
-            PolicyDraftRequest.Extension request,
+            PolicyDraftRequest.TimeAdjustment request,
             String requestKey);
 
-    /** 仅调整时间变更草稿或已驳回延期申请的到期日期。 */
-    PolicyResponse saveExtensionDate(
-            CurrentUserResponse session, long id, PolicyDraftRequest.Extension request);
+    /** 更新草稿或已驳回时间调整申请的截止、原因及证明。 */
+    PolicyResponse saveTimeAdjustment(
+            CurrentUserResponse session, long id, PolicyDraftRequest.TimeAdjustment request);
 
     /** 校验记录版本后，保存本人草稿或已驳回申请的修改。 */
     PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request);

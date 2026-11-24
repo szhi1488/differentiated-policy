@@ -562,8 +562,8 @@ CREATE TABLE policy_review_reassignment (
 CREATE TABLE policy_review_delivery (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '投递动作 ID',
   tenant_key VARCHAR(64) NOT NULL COMMENT '企业',
-  policy_id BIGINT NOT NULL COMMENT '申请 ID',
-  version INT UNSIGNED NOT NULL COMMENT '正式提交轮次',
+  policy_id BIGINT DEFAULT NULL COMMENT '审核投递所属申请，业务提醒为空',
+  version INT UNSIGNED DEFAULT NULL COMMENT '审核提交轮次，业务提醒为空',
   event_key VARCHAR(128) NOT NULL COMMENT '轮次内稳定的业务事件标识',
   action_type VARCHAR(16) NOT NULL COMMENT '群消息、创建个人任务或结办个人任务',
   recipient_key BIGINT NOT NULL COMMENT '群为 0，个人动作取本轮成员指派 ID',
@@ -578,6 +578,9 @@ CREATE TABLE policy_review_delivery (
   receipt_id VARCHAR(128) DEFAULT NULL COMMENT '飞书消息或任务回执',
   delivered_at DATETIME DEFAULT NULL COMMENT '确认送达时间',
   last_error VARCHAR(512) DEFAULT NULL COMMENT '最近脱敏错误说明',
+  notice_key VARCHAR(128) GENERATED ALWAYS AS (CASE WHEN policy_id IS NULL THEN event_key ELSE NULL END) STORED,
+  UNIQUE KEY uk_delivery_notice (tenant_key, notice_key),
+  CONSTRAINT ck_delivery_subject CHECK ((policy_id IS NOT NULL AND version IS NOT NULL) OR (policy_id IS NULL AND version IS NULL AND action_type='GROUP_MESSAGE' AND recipient_key=0)),
   PRIMARY KEY (id),
   UNIQUE KEY uk_review_delivery_event (tenant_key, policy_id, version, event_key, action_type, recipient_key),
   KEY idx_review_delivery_due (delivery_status, next_attempt_at, lease_until, id),
@@ -586,7 +589,7 @@ CREATE TABLE policy_review_delivery (
     REFERENCES policy_review_member (id, policy_id, version, tenant_key),
   CONSTRAINT ck_review_delivery_event CHECK (CHAR_LENGTH(TRIM(event_key)) > 0),
   CONSTRAINT ck_review_delivery_recipient CHECK ((action_type = 'GROUP_MESSAGE' AND recipient_key = 0)
-    OR (action_type IN ('CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
+    OR (action_type IN ('SEND_CARD','UPDATE_CARD','CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
   CONSTRAINT ck_review_delivery_status CHECK (delivery_status IN ('PENDING','SENDING','SENT','RETRY','UNKNOWN','FAILED','CANCELLED')),
   CONSTRAINT ck_review_delivery_attempts CHECK (attempts >= 0),
   CONSTRAINT ck_review_delivery_payload CHECK (JSON_TYPE(payload_json) = 'OBJECT')

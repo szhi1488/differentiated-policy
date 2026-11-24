@@ -80,9 +80,7 @@ public final class PolicyConfirmation {
                     throw incomplete();
                 selected = List.of(choice.policyId());
             } else {
-                String expected =
-                        range.action() == Action.ACKNOWLEDGE_EXCLUSIVE ? "ACKNOWLEDGE" : "STACK";
-                if (!expected.equals(choice.choice()) || choice.policyId() != null)
+                if (!"STACK".equals(choice.choice()) || choice.policyId() != null)
                     throw incomplete();
             }
             decisions.add(
@@ -118,13 +116,11 @@ public final class PolicyConfirmation {
 
     public static boolean requiresResubmission(PolicyConsent saved, PolicyApplicability current) {
         if (current.status() == Status.NO_EFFECTIVE_PERIOD) return true;
-        if (saved != null && !saved.supported()) throw new IllegalStateException("无法识别该轮适用范围规则版本。");
-        if (saved != null
-                && current.scopes().stream().anyMatch(s -> s.scope().goodsId() != null)
+        if (saved == null || !saved.supported()) throw new IllegalStateException("无法识别该轮适用范围规则版本。");
+        if (current.scopes().stream().anyMatch(s -> s.scope().goodsId() != null)
                 && !new HashSet<>(saved.comparedRounds()).containsAll(comparedRounds(current)))
             return true;
-        var before =
-                comparable(saved == null ? List.of() : saved.decisions(), current.effectiveFrom());
+        var before = comparable(saved.decisions(), current.effectiveFrom());
         return !before.equals(comparable(ranges(current), current.effectiveFrom()));
     }
 
@@ -143,30 +139,14 @@ public final class PolicyConfirmation {
             var groups = new LinkedHashMap<GroupKey, List<String>>();
             for (var group : decision.groups()) {
                 groups.put(
-                        new GroupKey(
-                                PolicyScenes.fromLegacy(group.sceneTypes(), group.sceneType()),
-                                group.verifyType()),
+                        new GroupKey(group.sceneTypes(), group.verifyType()),
                         group.policyIds().stream().sorted().toList());
             }
-            // 旧单已确认的单场景分组可沿用。旧预览的 eligible 仅含胜出者，完整候选保存在 groups。
-            // 旧单拆过多场景时，这里的分组键会与新预览不同，须重新确认。
             var outcome =
-                    switch (decision.action()) {
-                        case ACKNOWLEDGE_EXCLUSIVE, CONFIRM_STACK ->
-                                new Outcome(
-                                        Action.SELECT_RETAIL_POLICIES,
-                                        groups,
-                                        groups.values().stream()
-                                                .flatMap(List::stream)
-                                                .distinct()
-                                                .sorted()
-                                                .toList());
-                        default ->
-                                new Outcome(
-                                        decision.action(),
-                                        groups,
-                                        decision.eligiblePolicyIds().stream().sorted().toList());
-                    };
+                    new Outcome(
+                            decision.action(),
+                            groups,
+                            decision.eligiblePolicyIds().stream().sorted().toList());
             var from = decision.from().compareTo(start) < 0 ? start : decision.from();
             var intervals = result.computeIfAbsent(decision.scope(), unused -> new ArrayList<>());
             if (!intervals.isEmpty()) {

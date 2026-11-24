@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.Card;
@@ -25,6 +28,7 @@ import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -36,13 +40,16 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -54,9 +61,9 @@ import org.springframework.transaction.support.TransactionTemplate;
             "spring.datasource.url=jdbc:h2:mem:review_submission;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
             "spring.sql.init.schema-locations=classpath:user-info-schema.sql,classpath:catalog-import-schema.sql",
             "feishu.tenant-key=company",
+            "feishu.app-id=review-test-app",
             "feishu.policy-chat-id=",
             "feishu.allowed-origins=http://localhost:5173",
-            "policy.review-workflow-enabled=true",
             "jackyun.import-scheduling-enabled=false",
             "jackyun.clean-scheduling-enabled=false"
         })
@@ -72,6 +79,351 @@ class PolicyReviewSubmissionIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired LoginSessionService sessions;
     @Autowired MockMvc mvc;
+    @Autowired PolicyDeliveryWorker deliveries;
+    @Autowired PolicyCardCallback callbacks;
+    @Autowired ExecutionNotices execution;
+    @Autowired com.company.policy.mapper.ExecutionNoticeMapper notices;
+    @Autowired FeishuProperties feishu;
+    @MockitoBean FeishuWorkflowClient remote;
+
+    @ParameterizedTest
+    @CsvSource({
+        "APPROVE, https://erp.example.test/",
+        "REJECT, https://erp.example.test/",
+        "APPROVE, http://localhost:5173/erp/",
+        "REJECT, http://localhost:5173/erp/"
+    })
+    void deliveredDecisionUpdatesBothCardsAndMentionsExactlyTheNextTaskRecipients(
+            String decision, String erpRoot) throws Exception {
+        configure();
+        var original = draft();
+        long source = Long.parseLong(original.id());
+        submit(source, direct(original)).andExpect(status().isOk());
+        procurement.review(BUYER, source, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        when(remote.sendGroup(anyString(), anyString(), anyList(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(5, Runnable.class).run();
+                            return "om_" + call.getArgument(4);
+                        });
+        when(remote.createTask(anyString(), anyString(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(4, Runnable.class).run();
+                            return "task_" + call.getArgument(3);
+                        });
+        when(remote.sendCard(anyString(), any(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(3, Runnable.class).run();
+                            return "om_" + call.getArgument(0);
+                        });
+        when(remote.updateCard(anyString(), any())).thenAnswer(call -> call.getArgument(0));
+        var originalMode = feishu.getPolicyCallbackMode();
+        if (erpRoot.startsWith("http://"))
+            feishu.setPolicyCallbackMode(FeishuProperties.PolicyCallbackMode.LONG_CONNECTION);
+        feishu.setPolicyChatId("oc_local_test");
+        feishu.setPolicyErpUrl(erpRoot);
+        try {
+            drainDeliveries();
+            clearInvocations(remote);
+            var change = draft();
+            long id = Long.parseLong(change.id());
+            submit(id, stack(id, change.recordVersion())).andExpect(status().isOk());
+            drainDeliveries();
+            String productUrl = erpRoot + "#/reviews/" + id + "?round=1";
+            var sentCard = ArgumentCaptor.forClass(JsonNode.class);
+            verify(remote).sendCard(eq("open-2"), sentCard.capture(), anyString(), any());
+            assertThat(sentCard.getValue().findValuesAsText("default_url"))
+                    .containsExactly(productUrl);
+            verify(remote).sendCard(eq("open-3"), any(), anyString(), any());
+            verify(remote, never())
+                    .sendGroup(
+                            anyString(), anyString(), anyList(), anyString(), anyString(), any());
+
+            var actionValue =
+                    sentCard.getValue().findValues("value").stream()
+                            .filter(value -> decision.equals(value.path("decision").asText()))
+                            .findFirst()
+                            .orElseThrow();
+            var envelope = json.createObjectNode().put("schema", "2.0");
+            envelope.putObject("header")
+                    .put("tenant_key", "company")
+                    .put("app_id", feishu.getAppId())
+                    .put("event_type", "card.action.trigger");
+            var event = envelope.putObject("event").put("host", "im_message");
+            event.putObject("operator").put("open_id", "open-2").put("tenant_key", "company");
+            event.putObject("context").put("open_message_id", "om_open-2");
+            var action = event.putObject("action").put("tag", "button");
+            action.set("value", actionValue);
+            if ("REJECT".equals(decision)) action.putObject("form_value").put("reason", "请重核");
+            assertThat(
+                            json.valueToTree(callbacks.handleLongConnection(envelope))
+                                    .at("/toast/type")
+                                    .asText())
+                    .isEqualTo("success");
+            assertThat(
+                            json.valueToTree(callbacks.handleLongConnection(envelope))
+                                    .at("/toast/type")
+                                    .asText())
+                    .isEqualTo("info");
+            drainDeliveries();
+            boolean approved = "APPROVE".equals(decision);
+            String url =
+                    erpRoot
+                            + (approved ? "#/admin/policies" : "#/apply")
+                            + "?policyId="
+                            + id
+                            + "&round=1";
+            var receivers = approved ? List.of("open-4", "open-5") : List.of("open-1");
+            verify(remote)
+                    .sendGroup(
+                            eq("oc_local_test"),
+                            argThat(
+                                    summary ->
+                                            summary.contains("同名")
+                                                    && summary.contains(
+                                                            approved ? "初审通过" : "初审退回")),
+                            eq(receivers),
+                            eq(url),
+                            anyString(),
+                            any());
+            for (var receiver : receivers)
+                verify(remote).createTask(eq(receiver), anyString(), eq(url), anyString(), any());
+            verify(remote).updateCard(eq("om_open-2"), any());
+            verify(remote)
+                    .updateCard(
+                            eq("om_open-3"),
+                            argThat(
+                                    card ->
+                                            card.toString().contains("同组他人已处理")
+                                                    && card.findValuesAsText("default_url")
+                                                            .equals(List.of(productUrl))));
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND (delivery_status<>'SENT' OR receipt_id IS NULL)",
+                                    Integer.class,
+                                    id))
+                    .isZero();
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(task_guid) FROM policy_review_member WHERE policy_id=?",
+                                    Integer.class,
+                                    id))
+                    .isEqualTo(receivers.size());
+            if (approved) {
+                postAs(
+                                BUYER,
+                                "/api/admin/policies/{id}/review",
+                                id,
+                                new PolicyReviewRequest(3, 1, "APPROVE", null))
+                        .andExpect(status().isOk());
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT status FROM policy_apply WHERE id=?",
+                                        String.class,
+                                        id))
+                        .isEqualTo("APPROVED");
+                assertThat(
+                                jdbc.queryForObject(
+                                        "SELECT stage FROM policy_review_round WHERE policy_id=? AND version=1",
+                                        String.class,
+                                        id))
+                        .isEqualTo("FINISHED");
+            }
+        } finally {
+            feishu.setPolicyCallbackMode(originalMode);
+            feishu.setPolicyChatId("");
+            feishu.setPolicyErpUrl("");
+        }
+    }
+
+    private void drainDeliveries() {
+        for (int i = 0; i < 40; i++) if (!deliveries.processOne()) return;
+        throw new AssertionError("本轮投递超出样例中的预期项数");
+    }
+
+    @Test
+    void administratorReconcilesOneUnknownReceiptAndCannotResetItTwice() throws Exception {
+        configure();
+        var form = draft();
+        long id = Long.parseLong(form.id());
+        submit(id, direct(form)).andExpect(status().isOk());
+        var row =
+                jdbc.queryForObject(
+                        "SELECT MIN(id) FROM policy_review_delivery WHERE action_type='CREATE_TASK'",
+                        Long.class);
+        jdbc.update(
+                "UPDATE policy_review_delivery SET delivery_status='UNKNOWN', attempts=3,payload_json=? WHERE id=?",
+                "{\"stage\":\"PURCHASE_REVIEW\",\"deliveryVersion\":1,\"requestRecipient\":\"open-4\"}",
+                row);
+        String path = "/api/admin/policy-review-deliveries/{id}/resolve";
+        var lookup =
+                get("/api/admin/policy-review-deliveries")
+                        .param("policyId", Long.toString(id))
+                        .param("submissionVersion", "1");
+        mvc.perform(lookup.session(session(OWNER))).andExpect(status().isForbidden());
+        mvc.perform(lookup.session(session(BUYER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(
+                        jsonPath("$[0].deliveryKey")
+                                .value(
+                                        PolicyFeishuSender.idempotencyKey(
+                                                "company",
+                                                id,
+                                                1,
+                                                "SUBMITTED",
+                                                "GROUP_MESSAGE",
+                                                0)));
+        var body =
+                new PolicyDeliveryRecovery.Resolution(
+                        "CONFIRM_RECEIPT", "UNKNOWN", 3, 0, "task_verified", "比对原收件人和投递编号");
+        postAs(OWNER, path, row, body).andExpect(status().isForbidden());
+        doThrow(new PolicyFeishuSender.Failure(PolicyFeishuSender.Kind.PERMANENT, "外部记录不符"))
+                .doNothing()
+                .when(remote)
+                .verifyReceipt(
+                        eq("CREATE_TASK"),
+                        eq("task_verified"),
+                        eq("open-4"),
+                        anyString(),
+                        anyLong(),
+                        eq(id),
+                        eq(1));
+        postAs(BUYER, path, row, body).andExpect(status().isConflict());
+        postAs(BUYER, path, row, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SENT"))
+                .andExpect(jsonPath("$.revision").value(1));
+        postAs(BUYER, path, row, body).andExpect(status().isConflict());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_member WHERE task_guid='task_verified'",
+                                Integer.class))
+                .isEqualTo(1);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT payload_json FROM policy_review_delivery WHERE id=?",
+                                String.class,
+                                row))
+                .contains("manualHistory", "比对原收件人和投递编号");
+        long failed =
+                jdbc.queryForObject(
+                        "SELECT MAX(id) FROM policy_review_delivery WHERE action_type='CREATE_TASK'",
+                        Long.class);
+        jdbc.update(
+                "UPDATE policy_review_delivery SET delivery_status='FAILED',attempts=5 WHERE id=?",
+                failed);
+        var retry =
+                new PolicyDeliveryRecovery.Resolution(
+                        "RETRY_CONFIRMED", "FAILED", 5, 0, null, "已恢复任务权限");
+        postAs(BUYER, path, failed, retry)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"));
+        postAs(BUYER, path, failed, retry).andExpect(status().isConflict());
+    }
+
+    @Test
+    void reconciledGroupReceiptNeedsUniqueMatchingAttemptEvenAfterManualRetry() throws Exception {
+        var first = LocalDateTime.of(2026, 11, 24, 12, 0);
+        String fingerprint = "a".repeat(64);
+        long target = unknownGroup("CLEAN/11", fingerprint, first);
+        long collision = unknownGroup("CLEAN/12", fingerprint, first.plusMinutes(2));
+        String path = "/api/admin/policy-review-deliveries/{id}/resolve";
+        String key =
+                PolicyFeishuSender.idempotencyKey("company", 0, 0, "CLEAN/11", "GROUP_MESSAGE", 0);
+        String receipt = "om_recovery";
+        when(remote.verifyGroupReceipt(receipt, "oc_test", key, fingerprint, first))
+                .thenReturn(first.plusMinutes(3));
+        var confirm =
+                new PolicyDeliveryRecovery.Resolution(
+                        "CONFIRM_RECEIPT", "UNKNOWN", 1, 0, receipt, "核对测试群消息");
+        postAs(BUYER, path, target, confirm).andExpect(status().isConflict());
+        var retry =
+                new PolicyDeliveryRecovery.Resolution(
+                        "RETRY_CONFIRMED", "UNKNOWN", 1, 0, null, "人工核对并重新投递");
+        postAs(BUYER, path, collision, retry).andExpect(status().isOk());
+        postAs(BUYER, path, target, confirm).andExpect(status().isConflict());
+
+        // 同一内容的这条消息创建于另一项首次请求之前，归属唯一。
+        when(remote.verifyGroupReceipt(receipt, "oc_test", key, fingerprint, first))
+                .thenReturn(first.plusMinutes(1));
+        postAs(BUYER, path, target, confirm)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.receiptId").value(receipt));
+    }
+
+    @Test
+    void groupReceiptCannotClaimAnotherRowsReceiptAndLegacyMarkerCanIdentifyAnOldMessage()
+            throws Exception {
+        var first = LocalDateTime.of(2026, 11, 24, 12, 0);
+        String fingerprint = "b".repeat(64);
+        long target = unknownGroup("CLEAN/21", null, null);
+        long other = unknownGroup("CLEAN/22", fingerprint, first);
+        String key =
+                PolicyFeishuSender.idempotencyKey("company", 0, 0, "CLEAN/21", "GROUP_MESSAGE", 0);
+        String path = "/api/admin/policy-review-deliveries/{id}/resolve";
+        String receipt = "om_original";
+        var confirm =
+                new PolicyDeliveryRecovery.Resolution(
+                        "CONFIRM_RECEIPT", "UNKNOWN", 1, 0, receipt, "回读历史通知");
+        when(remote.verifyGroupReceipt(receipt, "oc_test", key, null, null)).thenReturn(first);
+        postAs(BUYER, path, target, confirm).andExpect(status().isConflict());
+        when(remote.verifyGroupReceipt(receipt, "oc_test", key, null, null)).thenReturn(null);
+        jdbc.update("UPDATE policy_review_delivery SET receipt_id=? WHERE id=?", receipt, other);
+        postAs(BUYER, path, target, confirm).andExpect(status().isConflict());
+        jdbc.update(
+                "UPDATE policy_review_delivery SET receipt_id=NULL,payload_json=? WHERE id=?",
+                json.createObjectNode().put("lateReceipt", receipt).toString(),
+                other);
+        postAs(BUYER, path, target, confirm).andExpect(status().isConflict());
+        jdbc.update("UPDATE policy_review_delivery SET payload_json='{}' WHERE id=?", other);
+        postAs(BUYER, path, target, confirm)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.receiptId").value(receipt));
+    }
+
+    @Test
+    void changeInPreparedGroupEvidenceDuringRemoteLookupInvalidatesTheLookup() throws Exception {
+        var first = LocalDateTime.of(2026, 11, 24, 12, 0);
+        String fingerprint = "c".repeat(64);
+        long target = unknownGroup("CLEAN/31", fingerprint, first);
+        when(remote.verifyGroupReceipt(
+                        anyString(), eq("oc_test"), anyString(), eq(fingerprint), eq(first)))
+                .thenAnswer(
+                        call -> {
+                            jdbc.update(
+                                    "UPDATE policy_review_delivery SET payload_json=? WHERE id=?",
+                                    json.createObjectNode()
+                                            .put("requestRecipient", "oc_different")
+                                            .put("requestFingerprint", fingerprint)
+                                            .put("firstAttemptAt", first.toString())
+                                            .toString(),
+                                    target);
+                            return first.plusSeconds(5);
+                        });
+        var confirm =
+                new PolicyDeliveryRecovery.Resolution(
+                        "CONFIRM_RECEIPT", "UNKNOWN", 1, 0, "om_check", "核对投递目标");
+        postAs(BUYER, "/api/admin/policy-review-deliveries/{id}/resolve", target, confirm)
+                .andExpect(status().isConflict());
+    }
+
+    private long unknownGroup(String event, String fingerprint, LocalDateTime first) {
+        var payload = json.createObjectNode().put("requestRecipient", "oc_test");
+        if (fingerprint != null) payload.put("requestFingerprint", fingerprint);
+        if (first != null) payload.put("firstAttemptAt", first.toString());
+        jdbc.update(
+                """
+                INSERT INTO policy_review_delivery(tenant_key,event_key,action_type,recipient_key,payload_json,delivery_status,attempts)
+                VALUES('company',?,'GROUP_MESSAGE',0,?,'UNKNOWN',1)
+                """,
+                event,
+                payload.toString());
+        return jdbc.queryForObject(
+                "SELECT id FROM policy_review_delivery WHERE notice_key=?", Long.class, event);
+    }
 
     @BeforeEach
     void fixtures() {
@@ -167,7 +519,7 @@ class PolicyReviewSubmissionIntegrationTest {
                                 id))
                 .isEqualTo("PRODUCT_REVIEW");
         assertThat(members(id, 1)).containsExactly(2L, 3L, 4L, 5L);
-        assertThat(actions(id, 1)).containsExactly("CREATE_TASK", "CREATE_TASK", "GROUP_MESSAGE");
+        assertThat(actions(id, 1)).containsExactly("SEND_CARD", "SEND_CARD");
         assertThat(
                         jdbc.queryForList(
                                 "SELECT m.user_id FROM policy_review_delivery d JOIN policy_review_member m ON d.recipient_key=m.id WHERE d.policy_id=? ORDER BY m.user_id",
@@ -177,19 +529,17 @@ class PolicyReviewSubmissionIntegrationTest {
         var payload =
                 json.readTree(
                         jdbc.queryForObject(
-                                "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='GROUP_MESSAGE'",
+                                "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='SEND_CARD' ORDER BY id LIMIT 1",
                                 String.class,
                                 id));
-        assertThat(payload.get("actingUserIds").toString()).isEqualTo("[2,3]");
-        assertThat(payload.get("informedUserIds").toString()).isEqualTo("[4,5]");
-        assertThat(payload.get("instruction").asText()).isEqualTo("请产品运营办理初审，采购请知悉。");
+        assertThat(payload.get("userId").asLong()).isEqualTo(2);
         assertThat(payload.get("summary").asText()).contains("叠加");
         transactions.executeWithoutResult(
                 tx -> notifications.submitted("company", id, 1, true, "重放", LocalDateTime.now()));
-        assertThat(actions(id, 1)).hasSize(3);
+        assertThat(actions(id, 1)).hasSize(2);
         assertThat(
                         jdbc.queryForObject(
-                                "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='GROUP_MESSAGE'",
+                                "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='SEND_CARD' ORDER BY id LIMIT 1",
                                 String.class,
                                 id))
                 .doesNotContain("重放");
@@ -223,7 +573,6 @@ class PolicyReviewSubmissionIntegrationTest {
         var extra = draftViaApi();
         long id = Long.parseLong(extra.id());
         submit(id, stack(id, 1)).andExpect(status().isOk());
-        String product = "/api/policy-reviews/{id}/product-review";
         var originalReviewer = user(2, "APPLICANT");
         var firstRound =
                 round(originalReviewer, id, 1)
@@ -249,9 +598,14 @@ class PolicyReviewSubmissionIntegrationTest {
         mvc.perform(get("/api/policies/mine").param("status", "PENDING").session(session(OWNER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].reviewStage").value("PRODUCT_REVIEW"));
-        postAs(originalReviewer, product, id, new PolicyReviewRequest(2, 1, "REJECT", "请复核叠加范围"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("REJECTED"));
+        assertThat(
+                        procurement
+                                .productReview(
+                                        originalReviewer,
+                                        id,
+                                        new PolicyReviewRequest(2, 1, "REJECT", "请复核叠加范围"))
+                                .status())
+                .isEqualTo("REJECTED");
         assertThat(revisionStatus(id)).isEqualTo("ACTIVE");
         mvc.perform(get("/api/policies/{id}/audit-logs", id).session(session(OWNER)))
                 .andExpect(status().isOk())
@@ -277,13 +631,20 @@ class PolicyReviewSubmissionIntegrationTest {
                         .getContentAsByteArray();
         assertThat(json.readTree(historical).get("changes"))
                 .isEqualTo(json.readTree(firstRound).get("changes"));
-        postAs(originalReviewer, product, id, new PolicyReviewRequest(2, 1, "APPROVE", null))
-                .andExpect(status().isConflict());
-        postAs(user(6, "APPLICANT"), product, id, new PolicyReviewRequest(4, 2, "APPROVE", null))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("PENDING"))
-                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"))
-                .andExpect(jsonPath("$.recordVersion").value(5));
+        assertThatThrownBy(
+                        () ->
+                                procurement.productReview(
+                                        originalReviewer,
+                                        id,
+                                        new PolicyReviewRequest(2, 1, "APPROVE", null)))
+                .isInstanceOfSatisfying(
+                        ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+        var transferred =
+                procurement.productReview(
+                        user(6, "APPLICANT"), id, new PolicyReviewRequest(4, 2, "APPROVE", null));
+        assertThat(transferred.status()).isEqualTo("PENDING");
+        assertThat(transferred.reviewStage()).isEqualTo("PURCHASE_REVIEW");
+        assertThat(transferred.recordVersion()).isEqualTo(5);
         round(BUYER, id, 2)
                 .andExpect(jsonPath("$.allowedActions").value(contains("APPROVE", "REJECT")));
         mvc.perform(
@@ -524,9 +885,20 @@ class PolicyReviewSubmissionIntegrationTest {
                 .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(true))
                 .andExpect(jsonPath("$.adjustments[*].accompanying").value(contains(true, true)));
         round(BUYER, id, 1).andExpect(jsonPath("$.allowedActions").isEmpty());
-        postAs(user(2, "APPLICANT"), "/api/policy-reviews/{id}/product-review", id, approve)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
+        var original = options.get(0).target();
+        var originalRow = notices.approved("company", Long.parseLong(original.policyId()));
+        var deadline =
+                com.company.policy.support.policy.PolicyFormValidation.time(original.previousEnd());
+        var ending =
+                json.createObjectNode()
+                        .put("kind", "END")
+                        .put("policy", originalRow.id())
+                        .put("version", originalRow.version())
+                        .put("end", deadline.toString());
+        assertThat(execution.message("company", ending, deadline.plusSeconds(1)).text())
+                .contains("延期仍待审核");
+        assertThat(procurement.productReview(user(2, "APPLICANT"), id, approve).reviewStage())
+                .isEqualTo("PURCHASE_REVIEW");
 
         var purchaseApproval = new PolicyReviewRequest(3, 1, "APPROVE", null);
         var start = new CountDownLatch(1);
@@ -577,6 +949,21 @@ class PolicyReviewSubmissionIntegrationTest {
                                 String.class,
                                 id))
                 .containsExactly("APPROVE");
+        assertThat(execution.message("company", ending, deadline.plusSeconds(1)).text())
+                .contains("延期已批", "00:00:00");
+        // 隔离样例把延期批准时刻推迟至原截止后十分钟，按真实时刻展示中间空档。
+        var extended = notices.extension("company", originalRow.id());
+        jdbc.update(
+                "UPDATE policy_audit_log SET audit_time=? WHERE policy_id=? AND version=1",
+                deadline.plusMinutes(10),
+                extended.id());
+        assertThat(execution.message("company", ending, deadline.plusMinutes(10)).text())
+                .contains("00:09:59", "空档");
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key LIKE 'P/%/EXTENDED/%'",
+                                Integer.class))
+                .isEqualTo(2);
         for (var option : options) {
             var childId =
                     jdbc.queryForObject(
@@ -721,6 +1108,305 @@ class PolicyReviewSubmissionIntegrationTest {
         assertThat(actions(id, 1)).isEmpty();
     }
 
+    @Test
+    void scheduleUsesApprovedWindowsAndLatestOwnersWithoutReplayingExpiredHistory()
+            throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        feishu.setPolicyChatId("trial-chat");
+        var start = LocalDateTime.parse("2099-05-01T00:00:00");
+        var end = LocalDateTime.parse("2099-05-10T23:59:59");
+        try {
+            submit(id, direct(source)).andExpect(status().isOk());
+            execution.initialize(start.minusDays(2));
+            assertThat(noticeBodies()).isEmpty();
+            procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+            assertThat(execution.atApproval("company", id).text()).isEmpty();
+            execution.initialize(end.plusSeconds(1));
+            assertThat(noticeBodies()).isEmpty();
+            execution.initialize(end.minusDays(1));
+            assertThat(noticeBodies()).hasSize(2);
+            execution.initialize(start.minusDays(1));
+            execution.initialize(start.minusDays(1));
+            assertThat(noticeBodies()).hasSize(3);
+            var begin = noticeBody("START");
+            assertThatThrownBy(() -> execution.message("company", begin, start.minusSeconds(1)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            assertThat(execution.message("company", begin, start).text()).contains("实际采用", "拼多多");
+            var near = noticeBody("NEAR");
+            assertThatThrownBy(
+                            () ->
+                                    execution.message(
+                                            "company", near, end.minusDays(3).minusSeconds(1)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            jdbc.update("UPDATE user_platform_assignment SET user_id=6");
+            assertThat(execution.message("company", near, end.minusDays(3)).users())
+                    .containsExactly(1L, 6L);
+            assertThat(execution.message("company", near, end).text())
+                    .contains("2099-05-10 23:59:59");
+            assertThatThrownBy(() -> execution.message("company", near, end.plusSeconds(1)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            var finish = noticeBody("END");
+            assertThatThrownBy(() -> execution.message("company", finish, end))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            assertThat(execution.message("company", finish, end.plusSeconds(1)).text())
+                    .contains("自然结束");
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    @Test
+    void shorteningSupersedesQueuedDeadlineOnlyAfterApprovalAndRechecksAtDispatch()
+            throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        submit(id, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            var start = LocalDateTime.parse("2099-05-01T00:00:00");
+            execution.initialize(start);
+            var originalNear = noticeBody("NEAR");
+            var parent = policies.create(OWNER, form("2099-07"), null);
+            long parentId = Long.parseLong(parent.id());
+            var option =
+                    policies.preview(OWNER, parentId, 1).applicability().adjustmentOptions().get(0);
+            var change = new EndAdjustment(option.target(), "2099-05-09T15:45:17+08:00", "提前结束");
+            var preview =
+                    policies.previewAdjusted(
+                            OWNER,
+                            parentId,
+                            new PolicyDraftRequest.AdjustmentPreview(1, List.of(change)));
+            submit(
+                            parentId,
+                            new Submission(
+                                    1, preview.confirmationToken(), List.of(), List.of(change)))
+                    .andExpect(status().isOk());
+            procurement.productReview(
+                    user(2, "APPLICANT"), parentId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+            assertThat(noticeBodies()).hasSize(2);
+            procurement.review(BUYER, parentId, new PolicyReviewRequest(3, 1, "APPROVE", null));
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key IS NOT NULL AND delivery_status='CANCELLED'",
+                                    Integer.class))
+                    .isEqualTo(2);
+            assertThatThrownBy(() -> execution.message("company", originalNear, start.plusDays(7)))
+                    .hasMessageContaining("截止已变更");
+            assertThat(
+                            execution
+                                    .message("company", noticeBody("SHORTENED"), start.plusDays(6))
+                                    .text())
+                    .contains("15:45:17", parent.policyCode());
+            var end = LocalDateTime.parse("2099-05-09T15:45:17");
+            var ending =
+                    json.readTree(
+                            jdbc.queryForObject(
+                                    "SELECT payload_json FROM policy_review_delivery WHERE notice_key LIKE ? AND delivery_status='PENDING'",
+                                    String.class,
+                                    "P/" + id + "/%/END/%"));
+            assertThatThrownBy(() -> execution.message("company", ending, end))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            assertThat(execution.message("company", ending, end.plusSeconds(1)).text())
+                    .contains("提前结束");
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    private List<String> noticeBodies() {
+        return jdbc.queryForList(
+                "SELECT payload_json FROM policy_review_delivery WHERE notice_key IS NOT NULL",
+                String.class);
+    }
+
+    private JsonNode noticeBody(String kind) throws Exception {
+        for (var raw : noticeBodies()) {
+            var body = json.readTree(raw);
+            if (kind.equals(body.path("kind").asText())) return body;
+        }
+        throw new AssertionError("缺少业务提醒 " + kind);
+    }
+
+    @Test
+    void deliveryUsesCurrentCatalogAdminAndKeepsUnresolvedBatchForRecovery() throws Exception {
+        var batch = new com.company.policy.entity.CatalogCleaningJob();
+        batch.setId(31L);
+        batch.setRequesterId(4L);
+        batch.setBrandName("OPPO手机");
+        var excluded =
+                new com.company.policy.mapper.CatalogCleaningMapper.JobCount(31, "EXCLUDED", 9);
+        execution.cleaned(batch, List.of(excluded));
+        assertThat(noticeBodies()).isEmpty();
+        var counts =
+                List.of(
+                        excluded,
+                        new com.company.policy.mapper.CatalogCleaningMapper.JobCount(
+                                31, "REVIEW_REQUIRED", 5),
+                        new com.company.policy.mapper.CatalogCleaningMapper.JobCount(
+                                31, "ERROR", 2));
+        execution.cleaned(batch, counts);
+        execution.cleaned(batch, counts);
+        assertThat(noticeBodies()).hasSize(1);
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            jdbc.update("UPDATE user_info SET is_deleted=1 WHERE id=4");
+            assertThat(deliveries.processOne()).isTrue();
+            assertThat(deliveries.processOne()).isFalse();
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT last_error FROM policy_review_delivery WHERE notice_key='CLEAN/31'",
+                                    String.class))
+                    .contains("商品管理员");
+            verifyNoInteractions(remote);
+            mvc.perform(
+                            get("/api/admin/policy-review-deliveries/notices")
+                                    .session(session(user(5, "ADMIN"))))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].recipient").value("清洗批次 31"))
+                    .andExpect(jsonPath("$[0].canResolve").value(true));
+            mvc.perform(get("/api/admin/policy-review-deliveries/notices").session(session(OWNER)))
+                    .andExpect(status().isForbidden());
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    @Test
+    void handoverSendsOnceToEnabledSuccessorAndRecordsDisabledFormerOwner() throws Exception {
+        var scope = new com.company.policy.dto.ChannelPlatform("BILLION", "PDD");
+        execution.platformChanged("company", scope, 1, false);
+        execution.platformChanged("company", scope, 6, true);
+        jdbc.update("UPDATE user_info SET is_deleted=1 WHERE id=1");
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            when(remote.sendGroup(
+                            eq("trial-chat"),
+                            org.mockito.ArgumentMatchers.contains("平台分工变更"),
+                            eq(List.of("open-6")),
+                            isNull(),
+                            anyString(),
+                            any()))
+                    .thenAnswer(
+                            call -> {
+                                ((Runnable) call.getArgument(5)).run();
+                                return "om_handover";
+                            });
+            drainDeliveries();
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM policy_review_delivery WHERE delivery_status='SENT' AND receipt_id='om_handover'",
+                                    Integer.class))
+                    .isEqualTo(1);
+            var sent =
+                    json.readTree(
+                            jdbc.queryForObject(
+                                    "SELECT payload_json FROM policy_review_delivery WHERE delivery_status='SENT'",
+                                    String.class));
+            assertThat(sent.at("/unreachableUserIds/0").asLong()).isEqualTo(1);
+            assertThat(sent.path("new").asLong()).isEqualTo(6);
+            verify(remote, times(1))
+                    .sendGroup(anyString(), anyString(), anyList(), isNull(), anyString(), any());
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void formalSubmissionRoutesSingleRemainingCandidateAndCancellationOfStack(boolean single)
+            throws Exception {
+        configure();
+        var a = draft();
+        var aid = Long.parseLong(a.id());
+        submit(aid, direct(a)).andExpect(status().isOk());
+        procurement.review(BUYER, aid, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var b = draft();
+        var bid = Long.parseLong(b.id());
+        var pb = policies.preview(OWNER, bid, 1);
+        var scope = pb.applicability().scopes().get(0);
+        var chooseA =
+                new Choice(
+                        scope.scope(),
+                        scope.segments().get(0).through(),
+                        "CHOOSE_ONE",
+                        a.id(),
+                        null);
+        submit(
+                        bid,
+                        single
+                                ? new Submission(
+                                        1, pb.confirmationToken(), List.of(chooseA), List.of())
+                                : stack(bid, 1))
+                .andExpect(status().isOk());
+        procurement.productReview(
+                user(2, "APPLICANT"), bid, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        procurement.review(BUYER, bid, new PolicyReviewRequest(3, 1, "APPROVE", null));
+        var startNotice =
+                json.createObjectNode().put("kind", "START").put("policy", bid).put("version", 1);
+        var start = LocalDateTime.parse("2099-05-01T00:00:00");
+        if (single) {
+            assertThatThrownBy(() -> execution.message("company", startNotice, start))
+                    .hasMessageContaining("未采用本单");
+        } else {
+            assertThat(execution.message("company", startNotice, start).text())
+                    .contains(b.policyCode(), "拼多多");
+        }
+        var c = draft();
+        var cid = Long.parseLong(c.id());
+        var preview = policies.preview(OWNER, cid, 1);
+        List<EndAdjustment> changes = List.of();
+        if (single) {
+            var option =
+                    preview.applicability().adjustmentOptions().stream()
+                            .filter(o -> o.target().policyId().equals(a.id()))
+                            .findFirst()
+                            .orElseThrow();
+            changes =
+                    List.of(new EndAdjustment(option.target(), option.earliestEnd(), "提前结束已采用原单"));
+            preview =
+                    policies.previewAdjusted(
+                            OWNER, cid, new PolicyDraftRequest.AdjustmentPreview(1, changes));
+        }
+        scope = preview.applicability().scopes().get(0);
+        var segment = scope.segments().get(0);
+        if (single) assertThat(segment.eligiblePolicyIds()).containsExactly(c.id());
+        var selected = single ? c.id() : a.id();
+        assertThat(actions(cid, 1)).isEmpty();
+        submit(
+                        cid,
+                        new Submission(
+                                1,
+                                preview.confirmationToken(),
+                                List.of(
+                                        new Choice(
+                                                scope.scope(),
+                                                segment.through(),
+                                                "CHOOSE_ONE",
+                                                selected,
+                                                null)),
+                                changes))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStage").value("PRODUCT_REVIEW"));
+        var snapshot =
+                json.readTree(
+                        jdbc.queryForObject(
+                                "SELECT snapshot_data FROM policy_audit_log WHERE policy_id=? AND version=1",
+                                String.class,
+                                cid));
+        assertThat(snapshot.at("/consent/decisions/0/selectedPolicyIds/0").asText())
+                .isEqualTo(selected);
+        assertThat(actions(cid, 1)).containsExactly("SEND_CARD", "SEND_CARD");
+        if (!single)
+            round(BUYER, cid, 1)
+                    .andExpect(
+                            jsonPath("$.changes[0].before[*].policyId")
+                                    .value(containsInAnyOrder(a.id(), b.id())));
+    }
+
     private List<String> actions(long id, int version) {
         return jdbc.queryForList(
                 "SELECT action_type FROM policy_review_delivery WHERE policy_id=? AND version=? ORDER BY action_type",
@@ -762,7 +1448,6 @@ class PolicyReviewSubmissionIntegrationTest {
                 null,
                 "BILLION",
                 List.of("PDD"),
-                null,
                 null,
                 null,
                 null,

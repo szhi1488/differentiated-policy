@@ -12,9 +12,8 @@ import org.apache.ibatis.annotations.Update;
 public interface PolicyReviewWorkflowMapper {
     String ROUND_JOIN =
             " LEFT JOIN policy_review_round r ON r.policy_id=a.policy_id AND r.tenant_key=a.tenant_key AND r.version=a.version ";
-    // 旧待审轮直接进入采购，新轮以其实际节点为准，缺失指派或节点不能回退成旧轮。
-    String CURRENT_STAGE =
-            " CASE WHEN a.audit_status='SUBMITTED' THEN CASE WHEN a.workflow_version=0 THEN 'PURCHASE_REVIEW' ELSE r.stage END END ";
+    // 待审阶段取自本轮冻结的节点。
+    String CURRENT_STAGE = " CASE WHEN a.audit_status='SUBMITTED' THEN r.stage END ";
 
     @Insert(
             """
@@ -78,9 +77,9 @@ public interface PolicyReviewWorkflowMapper {
             """
             SELECT COUNT(*) FROM policy_review_delivery
             WHERE tenant_key=#{tenant} AND policy_id=#{id} AND version=#{version}
-              AND event_key=#{event} AND action_type='GROUP_MESSAGE' AND recipient_key=0
+              AND event_key=#{event}
             """)
-    int groupEventRegistered(String tenant, long id, int version, String event);
+    int eventRegistered(String tenant, long id, int version, String event);
 
     // 只接受业务唯一键冲突时的幂等重放，其他约束错误必须回滚原业务事务。
     @Insert(

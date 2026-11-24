@@ -63,8 +63,6 @@ public final class PolicyEndTimes {
                                     r.estimated(),
                                     r.submittedAt(),
                                     r.auditOrder(),
-                                    r.legacy(),
-                                    r.missingConsent(),
                                     r.decisions(),
                                     r.batchKey());
                         })

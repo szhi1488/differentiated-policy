@@ -33,11 +33,6 @@ public interface CatalogCleaningMapper {
                     + SourceGoodsItemMapper.CREATED_DATE_LOG
                     + """
            )
-           AND NOT EXISTS (SELECT 1
-        """
-                    + SourceGoodsItemMapper.CREATED_DATE_JOB
-                    + """
-           )
          </if>
         """;
     String TAB =

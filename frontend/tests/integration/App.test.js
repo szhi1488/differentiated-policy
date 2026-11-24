@@ -50,7 +50,7 @@ it.each(['端内免登', '网页回调'])(
   '%s 后恢复原轮和节点，会话过期后重新按当前账号读取',
   async (method) => {
     const router = createWorkspaceRouter(createMemoryHistory())
-    const target = '/reviews/57?round=1&node=PRODUCT_REVIEW'
+    const target = '/reviews/57?round=1'
     const firstUser = { user: { id: '21', roleType: 'APPLICANT' } }
     if (method === '端内免登') {
       await router.push(target)

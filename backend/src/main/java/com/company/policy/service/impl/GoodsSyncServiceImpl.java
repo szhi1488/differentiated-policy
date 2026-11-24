@@ -14,6 +14,7 @@ import com.company.policy.mapper.CatalogOperationLogMapper;
 import com.company.policy.mapper.GoodsSyncJobMapper;
 import com.company.policy.mapper.SourceGoodsItemMapper;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.ExecutionNotices;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.JackyunGoodsService;
 import com.company.policy.vo.CurrentUserResponse;
@@ -42,6 +43,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     private static final int[] FIELD_LENGTHS = {512, 128, 256, 256, 1024, 1024, 1024, 1024};
 
     private final CatalogAccess access;
+    private final ExecutionNotices executionNotices;
     private final GoodsSyncJobMapper jobs;
     private final SourceGoodsItemMapper sources;
     private final CatalogOperationLogMapper operationLogs;
@@ -59,7 +61,9 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             JackyunGoodsService jackyun,
             JackyunProperties config,
             ObjectMapper json,
-            PlatformTransactionManager manager) {
+            PlatformTransactionManager manager,
+            ExecutionNotices executionNotices) {
+        this.executionNotices = executionNotices;
         this.access = access;
         this.jobs = jobs;
         this.sources = sources;
@@ -270,7 +274,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     private void importClaimedPage(GoodsSyncJob job, String token) {
         if (job.getPageCount() >= config.getImportMaxPages()) {
-            jobs.pause(job, token, "CATALOG_PAGE_LIMIT", 0);
+            pause(job, token, "CATALOG_PAGE_LIMIT", 0);
             return;
         }
         try {
@@ -293,13 +297,13 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     error instanceof JackyunRateLimitException limit
                             ? limit.getRetryAfterSeconds()
                             : 60;
-            jobs.pause(
+            pause(
                     job,
                     token,
                     error.getCode(),
                     Math.max(cooldown, config.getImportIntervalSeconds()));
         } catch (RuntimeException error) {
-            jobs.pause(
+            pause(
                     job,
                     token,
                     "CATALOG_PAGE_WRITE_FAILED",
@@ -308,15 +312,19 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         }
     }
 
+    private void pause(GoodsSyncJob job, String token, String code, int cooldown) {
+        tx.executeWithoutResult(
+                ignored -> {
+                    if (jobs.pause(job, token, code, cooldown) == 1)
+                        executionNotices.paused(job, code);
+                });
+    }
+
     private void commitPage(GoodsSyncJob job, String token, JackyunGoodsPage page) {
         if (jobs.lockOwned(job, token) == null) {
             throw new LeaseLost();
         }
         var skuIds = page.goods().stream().map(Goods::skuId).toList();
-        if (!skuIds.isEmpty()) {
-            // 覆盖最近批次前保留旧版本已确认的建档日。
-            sources.recordCreatedDates(job, skuIds);
-        }
         int count = 0;
         for (Goods goods : page.goods()) {
             if (saveContent(job, goods)) {

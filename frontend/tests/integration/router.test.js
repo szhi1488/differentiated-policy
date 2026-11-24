@@ -4,12 +4,27 @@ import { createMemoryHistory } from 'vue-router'
 import { createWorkspaceRouter } from '../../src/router/index'
 import { createAuthSession } from '../../src/composables/useAuthSession'
 
+it.each([
+  ['APPLICANT', '/apply'],
+  ['ADMIN', '/admin/catalog/sources'],
+])('待审列表已删除，%s 访问原地址按普通未知地址处理', async (roleType, destination) => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  await router.push('/reviews')
+  expect(router.currentRoute.value.name).toBeUndefined()
+  session.setLogin({ user: { roleType } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.fullPath).toBe(destination)
+  await router.push('/reviews?roleType=ADMIN')
+  expect(router.currentRoute.value.fullPath).toBe(destination)
+})
+
 it('两种身份共用按轮详情，含多值、越界或未定义参数的链接不进入业务页', async () => {
   const session = createAuthSession()
   const router = createWorkspaceRouter(createMemoryHistory(), session)
   for (const roleType of ['APPLICANT', 'ADMIN']) {
     session.setLogin({ user: { roleType } })
-    const path = '/reviews/9007199254740993?round=2&node=PRODUCT_REVIEW'
+    const path = '/reviews/9007199254740993?round=2'
     await router.push(path)
     expect(router.currentRoute.value.fullPath).toBe(path)
     for (const invalid of [
@@ -17,18 +32,37 @@ it('两种身份共用按轮详情，含多值、越界或未定义参数的链�
       '5?round=0',
       '5?round=2147483648',
       '9223372036854775808?round=1',
-      '5?round=1&node=OTHER',
+      '5?round=1&node=PRODUCT_REVIEW',
+      '5?round=1&node=PURCHASE_REVIEW',
+      '5?round=1&node=REVISION',
       '5?round=1&redirect=/apply',
       '5',
     ]) {
       await router.push('/reviews/' + invalid)
       expect(router.currentRoute.value.name).toBe('review-link-unavailable')
     }
-    await router.push('/reviews/5?round=1&node=REVISION')
+    await router.push('/apply?policyId=5&round=1')
     expect(router.currentRoute.value.fullPath).toBe(
       roleType === 'ADMIN' ? '/reviews/unavailable' : '/apply?policyId=5&round=1',
     )
   }
+})
+
+it('采购链接对管理员定位差异化政策指定轮次，非管理员不能进入管理页', async () => {
+  const session = createAuthSession()
+  const router = createWorkspaceRouter(createMemoryHistory(), session)
+  const current = '/admin/policies?policyId=9007199254740993&round=2'
+  await router.push(current)
+  session.setLogin({ user: { roleType: 'ADMIN' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.fullPath).toBe(current)
+  await router.push('/admin/policies?policyId=12&round=2&round=3')
+  expect(router.currentRoute.value.name).toBe('review-link-unavailable')
+  await router.push(current)
+  expect(router.currentRoute.value.fullPath).toBe(current)
+  session.setLogin({ user: { roleType: 'APPLICANT' } })
+  await router.syncSessionRoute()
+  expect(router.currentRoute.value.path).toBe('/apply')
 })
 
 it('管理员可直达清洗页，恢复会话后保留地址并可切回源商品库', { timeout: 15000 }, async () => {

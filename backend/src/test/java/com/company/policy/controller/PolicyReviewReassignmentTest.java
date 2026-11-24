@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyReviewNotifications;
+import com.company.policy.service.PolicyReviewService;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,9 +46,10 @@ class PolicyReviewReassignmentTest {
     @Autowired LoginSessionService sessions;
     @Autowired ObjectMapper json;
     @Autowired PolicyReviewNotifications notifications;
+    @Autowired PolicyReviewService reviews;
     @Autowired TransactionTemplate transactions;
 
-    private record Actor(long id, MockHttpSession session) {}
+    private record Actor(long id, MockHttpSession session, CurrentUserResponse account) {}
 
     private Actor owner, operator, first, keep, next;
     private long id;
@@ -135,7 +138,7 @@ class PolicyReviewReassignmentTest {
     }
 
     @Test
-    void futureBuyersAreInformedUntilProductDecisionCreatesTheirTasks() throws Exception {
+    void futureBuyersReceiveTasksOnlyAfterProductDecision() throws Exception {
         round(PRODUCT);
         member(operator, "PRODUCT");
         member(first, "PURCHASE");
@@ -146,17 +149,19 @@ class PolicyReviewReassignmentTest {
                         count(
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND event_key='REASSIGNED_3'",
                                 id))
-                .isOne();
+                .isZero();
         assertThat(
                         count(
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND action_type='CREATE_TASK'",
                                 id))
-                .isOne();
-        send(
-                        operator,
-                        "/api/policy-reviews/" + id + "/product-review",
-                        Map.of("decision", "APPROVE", "recordVersion", 3, "submissionVersion", 1))
-                .andExpect(status().isOk());
+                .isZero();
+        assertThat(
+                        reviews.productReview(
+                                        operator.account(),
+                                        id,
+                                        new PolicyReviewRequest(3, 1, "APPROVE", null))
+                                .reviewStage())
+                .isEqualTo(PURCHASE);
         assertThat(
                         jdbc.queryForList(
                                 """
@@ -205,7 +210,7 @@ class PolicyReviewReassignmentTest {
                         count(
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND event_key='REASSIGNED_3'",
                                 id))
-                .isEqualTo(3);
+                .isEqualTo(2);
     }
 
     @Test
@@ -314,13 +319,10 @@ class PolicyReviewReassignmentTest {
                 open,
                 role);
         var request = new MockHttpServletRequest();
+        var account = new CurrentUserResponse(Long.toString(user), open, tenant, open, role, null);
         sessions.establish(
-                request,
-                new AuthSessionResponse(
-                        new CurrentUserResponse(
-                                Long.toString(user), open, tenant, open, role, null),
-                        Instant.now().plusSeconds(600)));
-        return new Actor(user, (MockHttpSession) request.getSession());
+                request, new AuthSessionResponse(account, Instant.now().plusSeconds(600)));
+        return new Actor(user, (MockHttpSession) request.getSession(), account);
     }
 
     private ResultActions change(

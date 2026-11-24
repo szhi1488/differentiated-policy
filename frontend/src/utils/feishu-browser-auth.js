@@ -1,5 +1,5 @@
 import { createBrowserAuthorization, exchangeBrowserLoginCode } from '../api/feishu'
-import { parseReviewTarget, reviewTargetPath } from './review-link'
+import { parseReviewTarget } from './review-link'
 
 const returnKey = 'policy-review.oauth-return'
 
@@ -10,8 +10,7 @@ function takeReviewTarget(state) {
       return null
     }
     window.sessionStorage.removeItem(returnKey)
-    const target = parseReviewTarget(entry.path)
-    return target && reviewTargetPath(target)
+    return parseReviewTarget(entry.path)?.path
   } catch {
     // 标签页禁用存储或缓存损坏时，仍按服务端会话完成普通登录。
     return null
@@ -36,10 +35,7 @@ export async function getBrowserAuthorizationUrl(signal) {
   const state = url.searchParams.get('state')
   if (target && state) {
     try {
-      window.sessionStorage.setItem(
-        returnKey,
-        JSON.stringify({ state, path: reviewTargetPath(target) }),
-      )
+      window.sessionStorage.setItem(returnKey, JSON.stringify({ state, path: target.path }))
     } catch {
       throw new Error('请允许本站使用标签页存储，以便登录后返回当前办理链接。')
     }

@@ -92,14 +92,9 @@ public class PolicyReviewController {
     }
 
     @GetMapping("/{id}")
-    @Operation(
-            summary = "读取最近提交快照及覆盖范围",
-            description = "管理页面传 includeCoverage=false，仅返回审核内容。省略时兼容返回覆盖范围。")
-    public Detail detail(
-            @PathVariable long id,
-            @RequestParam(defaultValue = "true") boolean includeCoverage,
-            HttpServletRequest request) {
-        return policies.detail(sessions.requireLogin(request).user(), id, includeCoverage);
+    @Operation(summary = "读取最近提交快照及审核状态")
+    public Detail detail(@PathVariable long id, HttpServletRequest request) {
+        return policies.detail(sessions.requireLogin(request).user(), id);
     }
 
     @PostMapping("/{id}/review")
@@ -125,7 +120,6 @@ public class PolicyReviewController {
     }
 
     @GetMapping("/subsidy-timeline")
-    @ApiResponse(responseCode = "409", description = "历史涉及旧政策且未配置规则切换时间，POLICY_CUTOVER_REQUIRED")
     @Operation(
             summary = "查询机型配置的零售及百亿补贴时间轴",
             description =
@@ -146,7 +140,7 @@ public class PolicyReviewController {
     @GetMapping("/effective")
     @Operation(
             summary = "查询渠道、平台及商品在指定时点适用的政策",
-            description = "按北京时间及本轮确认决定返回所有实际适用政策，单一结果兼容 winner 和 snapshot。")
+            description = "按北京时间和本轮确认决定，在 policies 中返回所有适用的获批政策、快照及补贴。")
     public Effective effective(
             @RequestParam String perspective,
             @RequestParam String platformCode,

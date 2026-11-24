@@ -1,6 +1,6 @@
 # 商品管理接口契约
 
-更新日期：2026-11-19。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护已接入原十四表基线。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期 2026-11-24。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护均使用当前二十二表基线中的商品目录。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
@@ -24,7 +24,7 @@
 
 新基线以 `skuId` 唯一匹配源商品。已有 SKU 的吉客云来源未变时保留商品内容、更新时间及清洗状态，导入任务仍推进。
 
-来源列表的 `createdDate` 是吉客云按建档日查询命中的日期，返回 `YYYY-MM-DD`，缺少已确认记录时为空。筛选与品牌、关键词和分页同时生效。日期依据来自商品操作日志及首次、最近导入任务。后续全量或按修改日导入时，已有日期证据仍可查询。
+来源列表的 `createdDate` 是吉客云按建档日查询命中的日期，返回 `YYYY-MM-DD`，缺少已确认记录时为空。筛选与品牌、关键词和分页同时生效。日期依据来自本次按日命中的商品操作日志。后续全量或按修改日导入时，已有日期证据仍可查询。
 
 来源列表的 `gmtModified`、`goodsGmtModified` 分别对应已入库的吉客云规格和货品修改时间，均为 Unix 毫秒，库中缺值时各自返回 null。前端按北京时间分别格式化，保留非零毫秒。「导入商品」弹窗发起 `FULL` 或 `CREATED` 任务，服务端同时保留 `MODIFIED` 契约。[管理员工作台](../architecture/admin-workspace.md)
 
@@ -48,7 +48,7 @@
 
 清洗任务独立于导入任务，ID 为字符串。任务返回 `brandName`、`createdDate`、`includeReviews`、`targetSourceId`、`status`、`requesterName`、`createdAt`、`total`、`processed`、`progress` 和 `resultCounts`。新基线任务状态为 `RUNNING`、`COMPLETED`、`PARTIAL`、`FAILED`。待人工审核算作已分流，确认后发生来源变化的成员记为 `SKIPPED`，保留在本轮统计中。
 
-结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。来源文本命中三个直接排除词时，任务成员结果为 `EXCLUDED`，`resultCounts.EXCLUDED` 为本轮自动排除数。详情原因码为 `DIRECT_EXCLUSION`，`candidate.evidence` 列出各命中字段和词，自动排除的审核人、审核时间及审核意见为空。旧待审记录命中直接排除词时，审核通过返回 `409 CATALOG_CLEAN_RULE_EXCLUSION`。其他排除候选仍由管理员确认排除。源商品名称缺失或全为空白时，人工通过返回 `409 CATALOG_SOURCE_NAME_MISSING`，须补全来源名称后重新导入。兼容旧请求的可选 `reason`，省略或留空时服务端按决定记录「审核通过」或「审核不通过」。旧记录版本或不允许的状态返回 409。
+结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。来源文本命中三个直接排除词时，任务成员结果为 `EXCLUDED`，`resultCounts.EXCLUDED` 为本轮自动排除数。详情原因码为 `DIRECT_EXCLUSION`，`candidate.evidence` 列出各命中字段和词，自动排除的审核人、审核时间及审核意见为空。需要人工确认排除的候选只允许审核不通过；该候选试图通过时返回 `409 CATALOG_CLEAN_RULE_EXCLUSION`。源商品名称缺失或全为空白时，人工通过返回 `409 CATALOG_SOURCE_NAME_MISSING`，须补全来源名称后重新导入。服务端按决定记录「审核通过」或「审核不通过」。审核需要该来源已保存的本次清洗候选。候选缺失返回 409 `CATALOG_SOURCE_CHANGED`，须重新清洗后再审核。过期记录版本或不允许的状态也返回 409。
 
 ## 已实现的标准商品目录
 
@@ -67,7 +67,7 @@
 
 列表和统计基于当前标准商品记录。销售 `status` 取 1 在售、2 待上架、3 已下架、4 已停产，响应可为 null（未知）。分页从 1 开始，默认 20 条，最多 100 条。按更新时间和 ID 降序，`ascending=true` 时升序。更新时间按北京时间精确到秒。
 
-商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。管理员商品列表和详情的 `goodsName` 是已保存的商品名称，`policyName` 是已保存的政策名。自动清洗和人工审核通过时分别复制来源 `goodsName`、`goodsField1` 原文。字段 1 的空串及 null 分别保留，手工新增的商品政策名为 null。其他商品字段包括原始 SKU、货品编号、RAM、ROM 和销售状态。响应中的 `skuId` 为该商品对应源商品的原始 SKU 字符串，`sourceSkuId` 保留为兼容字段，与 `skuId` 相同，`sourceName` 使用该条来源原文 `goodsName`。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时三项均为 null。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
+商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。管理员商品列表和详情的 `goodsName` 是已保存的商品名称，`policyName` 是已保存的政策名。自动清洗和人工审核通过时分别复制来源 `goodsName`、`goodsField1` 原文。字段 1 的空串及 null 分别保留，手工新增的商品政策名为 null。其他商品字段包括原始 SKU、货品编号、RAM、ROM 和销售状态。响应中的 `skuId` 读取标准商品保存的原始 SKU。商品中心的来源信息 `sourceSkuId` 和 `sourceName` 分别来自其已映射来源的 SKU 和原始商品名。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时，商品仍有自身的 ID，`skuId`、`sourceSkuId` 和 `sourceName` 为空。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
 
 删除在事务内检查引用。关联来源 SKU 时返回 `CATALOG_GOODS_SOURCE_BOUND`，政策明细引用该商品的 `goods_id` 时返回 `CATALOG_GOODS_POLICY_BOUND`，数据库拒绝删除其他已关联记录时返回 `CATALOG_GOODS_REFERENCED`。删除成功后原商品 ID 查询详情返回 404。
 

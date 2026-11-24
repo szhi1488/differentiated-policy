@@ -33,8 +33,6 @@ import java.util.TreeSet;
 
 /** 提交、审核和实际生效查询共用的分段及政策选择规则。 */
 public final class PolicyApplicabilityEvaluator {
-    private static final LocalDateTime OPEN_END = LocalDateTime.of(9999, 12, 31, 23, 59, 59);
-
     record Window(LocalDateTime from, LocalDateTime through) {
         static Window of(Snapshot snapshot, LocalDateTime approvedAt) {
             var start = PolicyFormValidation.time(snapshot.form().startTime());
@@ -77,8 +75,6 @@ public final class PolicyApplicabilityEvaluator {
             Boolean estimated,
             LocalDateTime submittedAt,
             long auditOrder,
-            boolean legacy,
-            boolean missingConsent,
             List<Decision> decisions,
             String batchKey) {
         String id() {
@@ -138,8 +134,7 @@ public final class PolicyApplicabilityEvaluator {
             var window = Window.of(item, asOf);
             if (window.from.isBefore(start)) start = window.from;
             if (window.through.isAfter(end)) end = window.through;
-            if (!window.expired())
-                addSelections(item, null, submittedAt, null, window, auditOrder, false);
+            if (!window.expired()) addSelections(item, null, submittedAt, null, window, auditOrder);
         }
         this.requested = new Window(start, end);
     }
@@ -149,7 +144,7 @@ public final class PolicyApplicabilityEvaluator {
         this(channel, List.of(scope), at);
     }
 
-    PolicyApplicabilityEvaluator(String channel, List<Scope> scopes, LocalDateTime at) {
+    public PolicyApplicabilityEvaluator(String channel, List<Scope> scopes, LocalDateTime at) {
         this.asOf = at;
         this.retail = "RETAIL".equals(channel);
         this.requested = new Window(at, at);
@@ -164,46 +159,27 @@ public final class PolicyApplicabilityEvaluator {
         return approvedRules.apply(rounds.get(scope));
     }
 
-    // 切换前旧单可延续至切换前一秒。图中还需保留原单期内从未获选的记录。
     void includeTimeline(
-            Snapshot snapshot,
-            long auditId,
-            LocalDateTime submittedAt,
-            LocalDateTime approvedAt,
-            LocalDateTime cutover) {
-        var window = Window.of(snapshot, approvedAt);
-        boolean legacy =
-                snapshot.consent() == null && (cutover == null || approvedAt.isBefore(cutover));
-        if (legacy && cutover != null && window.through.isBefore(cutover.minusSeconds(1))) {
-            window = new Window(window.from, cutover.minusSeconds(1));
-        }
-        addSelections(snapshot, auditId, submittedAt, approvedAt, window, auditId, legacy);
+            Snapshot snapshot, long auditId, LocalDateTime submittedAt, LocalDateTime approvedAt) {
+        addSelections(
+                snapshot,
+                auditId,
+                submittedAt,
+                approvedAt,
+                Window.of(snapshot, approvedAt),
+                auditId);
     }
 
-    public List<Policy> effectivePolicies(Scope scope, long queriedGoodsId) {
+    public List<Policy> effectivePolicies(Scope scope) {
         var active = new TreeSet<>(NEWEST);
         roundsFor(scope).stream()
                 .filter(r -> !requested.intersect(r.window).expired())
                 .forEach(active::add);
-        return effectivePolicies(retail, active, queriedGoodsId, asOf);
+        return effectivePolicies(retail, active, asOf);
     }
 
     static List<Policy> effectivePolicies(
-            boolean retail, SortedSet<Round> active, long queriedGoodsId, LocalDateTime at) {
-        // 只有旧轮次时仍按具体商品选一，不将其他颜色的旧政策扩展到被查商品。
-        if (active.stream().allMatch(Round::legacy)) {
-            var goodsId = Long.toString(queriedGoodsId);
-            return active.stream()
-                    .filter(
-                            r ->
-                                    r.policy.selections().stream()
-                                            .flatMap(s -> s.products().stream())
-                                            .anyMatch(p -> p.goodsId().equals(goodsId)))
-                    .limit(1)
-                    .map(Round::policy)
-                    .toList();
-        }
-        // 零售新轮次冻结了该段的完整执行名单，即使提交该决定的政策本身未被勾选也要应用。
+            boolean retail, SortedSet<Round> active, LocalDateTime at) {
         if (retail) {
             var point = time(at);
             for (var round : active) {
@@ -218,9 +194,10 @@ public final class PolicyApplicabilityEvaluator {
                     }
                 }
             }
+            if (active.size() > 1) throw PolicyWorkflowReplay.uncertain();
+            return active.stream().map(Round::policy).toList();
         }
-        var baseline = historicalBaseline(active);
-        var selected = retail ? legacyRetailWinners(baseline) : billionCandidates(at, baseline);
+        var selected = billionCandidates(at, active);
         return active.stream().filter(r -> selected.contains(r.id())).map(Round::policy).toList();
     }
 
@@ -241,22 +218,9 @@ public final class PolicyApplicabilityEvaluator {
             long auditId,
             LocalDateTime submittedAt,
             LocalDateTime approvedAt) {
-        include(historical, auditId, submittedAt, approvedAt, historical.consent() == null, false);
-    }
-
-    public void include(
-            Snapshot historical,
-            long auditId,
-            LocalDateTime submittedAt,
-            LocalDateTime approvedAt,
-            boolean legacy,
-            boolean beforeCutover) {
         var window = Window.of(historical, approvedAt);
-        if (legacy && beforeCutover) {
-            window = new Window(window.from, OPEN_END);
-        }
         if (!requested.intersect(window).expired()) {
-            addSelections(historical, auditId, submittedAt, approvedAt, window, auditId, legacy);
+            addSelections(historical, auditId, submittedAt, approvedAt, window, auditId);
         }
     }
 
@@ -265,16 +229,14 @@ public final class PolicyApplicabilityEvaluator {
             Snapshot historical,
             long auditId,
             LocalDateTime submittedAt,
-            LocalDateTime approvedAt,
-            boolean legacy) {
+            LocalDateTime approvedAt) {
         var window = Window.of(historical, approvedAt);
         var actual =
                 new Window(
                         window.from(),
                         approvedRules.through(Long.toString(auditId), window.through()));
         if (!requested.intersect(actual).expired()
-                && !addSelections(
-                        historical, auditId, submittedAt, approvedAt, window, auditId, legacy))
+                && !addSelections(historical, auditId, submittedAt, approvedAt, window, auditId))
             throw PolicyWorkflowReplay.uncertain();
     }
 
@@ -284,8 +246,7 @@ public final class PolicyApplicabilityEvaluator {
             LocalDateTime submittedAt,
             LocalDateTime approvedAt,
             Window window,
-            long auditOrder,
-            boolean legacy) {
+            long auditOrder) {
         var catalog = new HashMap<String, ApplicantCatalogResponse>();
         if (snapshot.goods() != null) {
             snapshot.goods().forEach(g -> catalog.put(g.goodsId(), g));
@@ -318,8 +279,8 @@ public final class PolicyApplicabilityEvaluator {
             }
         }
         var decisionsByScope = new HashMap<Scope, List<Decision>>();
-        if (!proposed && snapshot.consent() != null) {
-            if (!snapshot.consent().supported()) {
+        if (!proposed) {
+            if (snapshot.consent() == null || !snapshot.consent().supported()) {
                 throw new IllegalStateException("无法识别该轮适用范围规则版本。");
             }
             for (var decision : snapshot.consent().decisions()) {
@@ -357,8 +318,6 @@ public final class PolicyApplicabilityEvaluator {
                             snapshot.form().estimated(),
                             submittedAt,
                             auditOrder,
-                            legacy,
-                            !proposed && !legacy && snapshot.consent() == null,
                             decisionsByScope.getOrDefault(group.getKey(), List.of()),
                             snapshot.consent() == null
                                     ? null
@@ -508,7 +467,7 @@ public final class PolicyApplicabilityEvaluator {
                                         time(end),
                                         Action.STACK_OR_CHOOSE,
                                         List.of(),
-                                        billionCandidates(previous, historicalBaseline(active))));
+                                        billionCandidates(previous, active)));
             }
             active.removeAll(entry.getValue().ending);
             active.addAll(entry.getValue().starting);
@@ -532,11 +491,9 @@ public final class PolicyApplicabilityEvaluator {
                         .map(
                                 e ->
                                         new Group(
-                                                PolicyScenes.single(e.getKey().scenes),
+                                                e.getKey().scenes,
                                                 e.getKey().verification,
-                                                e.getValue(),
-                                                null,
-                                                e.getKey().scenes))
+                                                e.getValue()))
                         .toList();
         return new Segment(
                 time(start),
@@ -544,26 +501,6 @@ public final class PolicyApplicabilityEvaluator {
                 Action.SELECT_RETAIL_POLICIES,
                 groups,
                 active.stream().map(Round::id).toList());
-    }
-
-    private static SortedSet<Round> historicalBaseline(SortedSet<Round> active) {
-        var baseline = new TreeSet<>(NEWEST);
-        var legacyGoods = new LinkedHashSet<String>();
-        for (var round : active) {
-            // 旧单先取旧规则下各具体商品的胜出轮次，已被覆盖的旧补贴不能因新规则恢复。
-            if (!round.legacy) {
-                baseline.add(round);
-                continue;
-            }
-            boolean contributes = false;
-            for (var row : round.policy.selections()) {
-                for (var product : row.products()) {
-                    if (legacyGoods.add(product.goodsId())) contributes = true;
-                }
-            }
-            if (contributes) baseline.add(round);
-        }
-        return baseline;
     }
 
     private static List<String> billionCandidates(LocalDateTime start, SortedSet<Round> active) {
@@ -580,18 +517,6 @@ public final class PolicyApplicabilityEvaluator {
             }
         }
         return active.stream().filter(r -> !r.namedBy(excluded)).map(Round::id).toList();
-    }
-
-    // 历史零售轮次没有新版区间决定时，按当时的逐场景规则回查。
-    private static List<String> legacyRetailWinners(SortedSet<Round> active) {
-        var winners = new LinkedHashMap<SceneGroup, String>();
-        for (var round : active) {
-            for (var scene : round.policy.sceneTypes()) {
-                winners.putIfAbsent(
-                        new SceneGroup(List.of(scene), round.policy.verifyType()), round.id());
-            }
-        }
-        return winners.values().stream().distinct().toList();
     }
 
     static String time(LocalDateTime value) {

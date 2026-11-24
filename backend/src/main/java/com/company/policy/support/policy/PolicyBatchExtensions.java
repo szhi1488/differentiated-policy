@@ -77,7 +77,6 @@ public class PolicyBatchExtensions {
                             form.perspective(),
                             form.selectedPlatforms(),
                             form.verifyType(),
-                            form.sceneType(),
                             form.sceneTypes(),
                             form.estimated(),
                             PolicyApplicabilityEvaluator.time(

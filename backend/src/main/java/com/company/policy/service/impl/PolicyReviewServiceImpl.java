@@ -20,13 +20,14 @@ import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyPurchaseReviewMapper;
 import com.company.policy.mapper.PolicyPurchaseReviewMapper.Permission;
-import com.company.policy.mapper.PolicyReviewInboxMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
+import com.company.policy.mapper.PolicyReviewRoundMapper;
 import com.company.policy.mapper.PolicyReviewSettingsMapper;
 import com.company.policy.mapper.PolicyReviewWorkflowMapper;
 import com.company.policy.mapper.PolicyReviewWorkflowMapper.Member;
 import com.company.policy.mapper.UserManagementMapper;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.ExecutionNotices;
 import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.PolicyReviewNotifications;
 import com.company.policy.service.PolicyReviewService;
@@ -67,10 +68,11 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private static final Set<String> STATUSES = Set.of("PENDING", "APPROVED", "REJECTED");
     private static final Set<String> CHANNELS = Set.of("RETAIL", "BILLION");
     private final PolicyCoverageService coverage;
+    private final ExecutionNotices executionNotices;
     private final CatalogAccess access;
     private final PolicyReviewMapper reviews;
     private final PolicyPurchaseReviewMapper purchase;
-    private final PolicyReviewInboxMapper inbox;
+    private final PolicyReviewRoundMapper rounds;
     private final PolicyReviewWorkflowMapper workflow;
     private final PolicyReviewSettingsMapper settings;
     private final UserManagementMapper users;
@@ -85,7 +87,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             CatalogAccess access,
             PolicyReviewMapper reviews,
             PolicyPurchaseReviewMapper purchase,
-            PolicyReviewInboxMapper inbox,
+            PolicyReviewRoundMapper rounds,
             PolicyReviewWorkflowMapper workflow,
             PolicyReviewSettingsMapper settings,
             UserManagementMapper users,
@@ -93,12 +95,14 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             PolicyApplyMapper policies,
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
-            com.company.policy.support.policy.PolicyBatchExtensions extensions) {
+            com.company.policy.support.policy.PolicyBatchExtensions extensions,
+            ExecutionNotices executionNotices) {
+        this.executionNotices = executionNotices;
         this.coverage = coverage;
         this.access = access;
         this.reviews = reviews;
         this.purchase = purchase;
-        this.inbox = inbox;
+        this.rounds = rounds;
         this.workflow = workflow;
         this.settings = settings;
         this.users = users;
@@ -176,7 +180,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     }
 
     @Override
-    public Detail detail(CurrentUserResponse session, long id, boolean includeCoverage) {
+    public Detail detail(CurrentUserResponse session, long id) {
         var admin = access.requirePolicyAdmin(session);
         var entry = find(admin, id);
         var log = current(entry);
@@ -188,11 +192,8 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                         "PENDING".equals(entry.getStatus()) && permission(entry, admin) != null),
                 snapshot,
                 auditSummary(log),
-                !includeCoverage || "REJECTED".equals(entry.getStatus())
-                        ? null
-                        : coverage.submitted(entry, log, snapshot),
                 "APPROVED".equals(entry.getStatus())
-                        ? coverage.approvedEnds(entry.getTenantKey(), now()).get(Long.toString(id))
+                        ? coverage.approvedEnd(entry.getTenantKey(), id, log.getId(), now())
                         : null);
     }
 
@@ -241,17 +242,16 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         }
         var result = updatePolicy(entry, admin, status, remark, time, null);
         if (approve) extensions.approve(entry, snapshot, admin, log.getCreatedAt(), time);
-        if (allowed.memberId() != null) {
-            decide(
-                    entry,
-                    admin,
-                    "PURCHASE",
-                    allowed.memberId(),
-                    request.decision(),
-                    remark,
-                    "FINISHED",
-                    time);
-        }
+        decide(
+                entry,
+                admin,
+                "PURCHASE",
+                allowed.memberId(),
+                request.decision(),
+                remark,
+                "FINISHED",
+                time);
+        if (approve) executionNotices.approved(entry, snapshot, time);
         return result;
     }
 
@@ -262,7 +262,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         var tenant = actor.getTenantKey();
         validateVersions(request.recordVersion(), request.submissionVersion());
         int round = request.submissionVersion();
-        if (inbox.visibleCount(tenant, actor.getId(), id, round) == 0)
+        if (rounds.visibleCount(tenant, actor.getId(), id, round) == 0)
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到可办理的政策。");
         var entry = find(actor, id);
         checkPending(entry, request.recordVersion(), round);
@@ -285,7 +285,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if (purchase.lockPending(tenant, id, round, request.recordVersion()) == null)
             throw versionConflict();
         purchase.lockStage(tenant, id, round);
-        var memberId = inbox.productPermission(tenant, actor.getId(), id, round);
+        var memberId = rounds.productPermission(tenant, actor.getId(), id, round);
         if (memberId == null)
             throw new ApiException(
                     HttpStatus.FORBIDDEN, "POLICY_REVIEW_FORBIDDEN", "当前用户无权办理本轮产品运营初审。");
@@ -561,7 +561,6 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 entry.getChannelType(),
                 decode(entry.getPlatforms(), new TypeReference<List<String>>() {}),
                 entry.getWriteOffType(),
-                PolicyScenes.single(scenes),
                 scenes,
                 formatTime(submittedAt),
                 entry.getStatus(),
@@ -577,7 +576,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         if (log == null) {
             throw new IllegalStateException("政策提交快照缺失。");
         }
-        return PolicyApplyServiceImpl.displaySnapshot(snapshots.read(log.getSnapshotData()));
+        return snapshots.read(log.getSnapshotData());
     }
 
     private <T> T decode(String value, TypeReference<T> type) {

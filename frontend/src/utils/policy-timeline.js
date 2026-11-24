@@ -1,6 +1,5 @@
 import { retailDisplayTracks } from './retail-timeline-tracks'
 import { billionDisplayHistory } from './billion-timeline-history'
-import { billionDisplayTracks } from './billion-timeline-tracks'
 import { PRICE_BASE_LABELS, SCENE_LABELS, VERIFY_LABELS } from '../constants/policy'
 import {
   appendTimelinePart,
@@ -103,7 +102,7 @@ function trackHistory(track, trackId, asOf) {
   }
   const segments = [
     ...track.segments.map((segment) => readSegment(segment, false)),
-    ...(track.plannedSegments ?? []).map((segment) => readSegment(segment, true)),
+    ...track.plannedSegments.map((segment) => readSegment(segment, true)),
   ]
   for (const { matchesQuery, plans, parts, usePeriods } of rounds.values()) {
     usePeriods.push(...parts.filter((part) => part.used && !part.status))
@@ -140,17 +139,24 @@ export function readTimelineHistory(response) {
   const asOf = beijingTime(response.asOf)
   const rows = []
   const segments = []
-  const retailTracks = retailDisplayTracks(response)
-  const tracks =
-    response.configurationGoodsCount > 0
-      ? billionDisplayTracks(retailTracks, response.asOf)
-      : retailTracks
-  for (const [index, track] of tracks.entries()) {
+  if (!Number.isInteger(response.configurationGoodsCount) || response.configurationGoodsCount < 0) {
+    throw new Error('补贴历史缺少有效的配置商品总数。')
+  }
+  if (
+    !Array.isArray(response.tracks) ||
+    response.tracks.some(
+      (track) => !Array.isArray(track.segments) || !Array.isArray(track.plannedSegments),
+    )
+  ) {
+    throw new Error('补贴历史缺少审核时段或后续安排。')
+  }
+  for (const [index, track] of retailDisplayTracks(response).entries()) {
+    if (track.perspective === 'BILLION' && track.goodsIds.length) {
+      throw new Error('百亿补贴的审核范围必须是整组配置。')
+    }
     const source = trackHistory(track, index, asOf)
     const history =
-      track.perspective === 'BILLION' &&
-      (!track.goodsIds.length || track.configurationDecision === false) &&
-      response.configurationGoodsCount > 0
+      track.perspective === 'BILLION'
         ? billionDisplayHistory(source, response.configurationGoodsCount)
         : source
     rows.push(...history.rows)

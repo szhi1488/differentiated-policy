@@ -1,18 +1,22 @@
 package com.company.policy.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyReviewReassignmentRequest;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyReviewNotifications;
+import com.company.policy.service.PolicyReviewService;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.CurrentUserResponse;
+import com.company.policy.vo.PolicyReviewResponse.Review;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Instant;
@@ -27,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpSession;
@@ -52,13 +57,14 @@ class PolicyPurchaseReviewTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper json;
     @Autowired LoginSessionService sessions;
+    @Autowired PolicyReviewService reviews;
     @Autowired TransactionTemplate transactions;
     @MockitoSpyBean PolicyReviewNotifications notifications;
     private Actor owner;
     private Actor buyer;
     private Actor peer;
 
-    private record Actor(long id, MockHttpSession session) {}
+    private record Actor(long id, MockHttpSession session, CurrentUserResponse account) {}
 
     @BeforeEach
     void createActors() {
@@ -68,29 +74,22 @@ class PolicyPurchaseReviewTest {
     }
 
     @Test
-    void onlyExplicitLegacyRoundsUseTheOriginalPurchasePermission() throws Exception {
-        long old = policy(0, null),
+    void noAuditMarkerOrMissingStageCanGrantPurchasePermission() throws Exception {
+        long unassigned = policy(0, null),
                 incomplete = policy(1, null),
                 product = policy(1, "PRODUCT_REVIEW");
         member(product, buyer, "PURCHASE", "ACTIVE");
-        for (long blocked : List.of(incomplete, product)) {
+        for (long blocked : List.of(unassigned, incomplete, product)) {
             assertReadable(buyer, blocked, false);
             for (String choice : List.of("APPROVE", "REJECT"))
                 review(buyer, blocked, choice).andExpect(status().isForbidden());
             assertThat(state(blocked)).isEqualTo("PENDING");
+            assertThat(decisions(blocked)).isZero();
         }
-        assertReadable(buyer, old, true);
-        review(buyer, old, "REJECT").andExpect(status().isOk());
-        mvc.perform(get("/api/policies/{id}/audit-logs", old).session(owner.session()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].workflowVersion").value(0))
-                .andExpect(jsonPath("$.items[0].rejectedAtStage").value("PURCHASE_REVIEW"));
-        assertThat(state(old)).isEqualTo("REJECTED");
-        assertThat(decisions(old)).isZero();
         verify(notifications, never())
                 .decided(
                         eq(TENANT),
-                        eq(old),
+                        anyLong(),
                         anyInt(),
                         anyString(),
                         anyLong(),
@@ -267,7 +266,8 @@ class PolicyPurchaseReviewTest {
 
     @Test
     void platformTransferBeforeExtensionApprovalPreservesTheOpenPurchaseNode() throws Exception {
-        long source = policy(0, null);
+        long source = policy(1, "PURCHASE_REVIEW");
+        member(source, buyer, "PURCHASE", "ACTIVE");
         long extension = policy(1, "PURCHASE_REVIEW");
         long goods = IDS.incrementAndGet();
         jdbc.update("INSERT INTO brand (id,name) VALUES (?,'测试品牌')", goods);
@@ -355,8 +355,8 @@ class PolicyPurchaseReviewTest {
         if (signer == buyer.id()) assertThat(notified).hasSize(2);
         else assertThat(notified).contains(buyer.id()).hasSize(3);
         assertThat(groupMessages(id, "PRODUCT_DECIDED")).isOne();
-        assertThat(closedReasons(id)).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
-        product(operator, id, "REJECT", "晚到", 2).andExpect(status().isConflict());
+        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        expectProductFailure(operator, id, "REJECT", "晚到", HttpStatus.CONFLICT);
         review(peer, id, "APPROVE", 3, 1).andExpect(status().isOk());
         assertThat(state(id)).isEqualTo("APPROVED");
         assertThat(groupMessages(id, "PURCHASE_DECIDED")).isOne();
@@ -384,7 +384,8 @@ class PolicyPurchaseReviewTest {
         var operator = actor("APPLICANT");
         member(id, operator, "PRODUCT", "ACTIVE");
         member(id, buyer, "PURCHASE", "ACTIVE");
-        product(operator, id, "APPROVE", null, 2).andExpect(status().isOk());
+        assertThat(product(operator, id, "APPROVE", null).reviewStage())
+                .isEqualTo("PURCHASE_REVIEW");
         var update =
                 new PolicyReviewReassignmentRequest(
                         "PURCHASE_REVIEW",
@@ -419,38 +420,31 @@ class PolicyPurchaseReviewTest {
     @Test
     void reviewRejectsCoercedVersionsAndNumericReturnReasonsWithoutConsumingANode()
             throws Exception {
-        long product = policy(1, "PRODUCT_REVIEW");
-        long legacy = policy(0, null);
-        member(product, buyer, "PRODUCT", "ACTIVE");
-        for (var path :
+        long id = policy(1, "PURCHASE_REVIEW");
+        member(id, buyer, "PURCHASE", "ACTIVE");
+        var valid =
+                json.createObjectNode()
+                        .put("recordVersion", 2)
+                        .put("submissionVersion", 1)
+                        .put("decision", "REJECT")
+                        .put("reviewRemark", "调整依据");
+        for (var body :
                 List.of(
-                        "/api/policy-reviews/" + product + "/product-review",
-                        PATH + "/" + legacy + "/review")) {
-            var valid =
-                    json.createObjectNode()
-                            .put("recordVersion", 2)
-                            .put("submissionVersion", 1)
-                            .put("decision", "REJECT")
-                            .put("reviewRemark", "调整依据");
-            for (var body :
-                    List.of(
-                            valid.deepCopy().put("recordVersion", 2.9),
-                            valid.deepCopy().put("submissionVersion", 1.5),
-                            valid.deepCopy().put("recordVersion", "2"),
-                            valid.deepCopy().put("reviewRemark", 42))) {
-                mvc.perform(
-                                post(path)
-                                        .session(buyer.session())
-                                        .header("Origin", "http://localhost:5173")
-                                        .header("X-Policy-Request", "1")
-                                        .contentType("application/json")
-                                        .content(json.writeValueAsBytes(body)))
-                        .andExpect(status().isBadRequest());
-            }
+                        valid.deepCopy().put("recordVersion", 2.9),
+                        valid.deepCopy().put("submissionVersion", 1.5),
+                        valid.deepCopy().put("recordVersion", "2"),
+                        valid.deepCopy().put("reviewRemark", 42))) {
+            mvc.perform(
+                            post(PATH + "/" + id + "/review")
+                                    .session(buyer.session())
+                                    .header("Origin", "http://localhost:5173")
+                                    .header("X-Policy-Request", "1")
+                                    .contentType("application/json")
+                                    .content(json.writeValueAsBytes(body)))
+                    .andExpect(status().isBadRequest());
         }
-        assertThat(auditStatus(product)).isEqualTo("SUBMITTED");
-        assertThat(auditStatus(legacy)).isEqualTo("SUBMITTED");
-        assertThat(count(product, "policy_review_decision")).isZero();
+        assertThat(auditStatus(id)).isEqualTo("SUBMITTED");
+        assertThat(count(id, "policy_review_decision")).isZero();
     }
 
     @Test
@@ -460,26 +454,24 @@ class PolicyPurchaseReviewTest {
         member(id, buyer, "PRODUCT", "ACTIVE");
         member(id, productPeer, "PRODUCT", "ACTIVE");
         member(id, buyer, "PURCHASE", "ACTIVE");
-        product(owner, id, "REJECT", "本人", 2).andExpect(status().isForbidden());
-        product(peer, id, "REJECT", "未指派", 2).andExpect(status().isForbidden());
-        product(buyer, id, "REJECT", " \u3000\u00a0 ", 2).andExpect(status().isBadRequest());
-        product(buyer, id, "REJECT", "长".repeat(513), 2).andExpect(status().isBadRequest());
-        product(buyer, id, "APPROVE", null, 2)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("POLICY_REVIEW_ASSIGNEES_MISSING"));
+        expectProductFailure(owner, id, "REJECT", "本人", HttpStatus.FORBIDDEN);
+        expectProductFailure(peer, id, "REJECT", "未指派", HttpStatus.FORBIDDEN);
+        expectProductFailure(buyer, id, "REJECT", " \u3000\u00a0 ", HttpStatus.BAD_REQUEST);
+        expectProductFailure(buyer, id, "REJECT", "长".repeat(513), HttpStatus.BAD_REQUEST);
+        assertThat(expectProductFailure(buyer, id, "APPROVE", null, HttpStatus.CONFLICT).getCode())
+                .isEqualTo("POLICY_REVIEW_ASSIGNEES_MISSING");
         assertThat(count(id, "policy_review_decision")).isZero();
         assertThat(count(id, "policy_review_delivery")).isZero();
 
         var reason = "退".repeat(512);
-        product(productPeer, id, "REJECT", "  " + reason + "  ", 2)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("REJECTED"))
-                .andExpect(jsonPath("$.recordVersion").value(3));
-        product(buyer, id, "APPROVE", null, 2).andExpect(status().isConflict());
+        var rejected = product(productPeer, id, "REJECT", "  " + reason + "  ");
+        assertThat(rejected.status()).isEqualTo("REJECTED");
+        assertThat(rejected.recordVersion()).isEqualTo(3);
+        expectProductFailure(buyer, id, "APPROVE", null, HttpStatus.CONFLICT);
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
         assertThat(groupMessages(id, "PRODUCT_DECIDED")).isOne();
         assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(owner.id());
-        assertThat(closedReasons(id)).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='CREATE_TASK'",
@@ -526,7 +518,7 @@ class PolicyPurchaseReviewTest {
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
         assertThat(taskOwners(id, "PURCHASE_DECIDED")).containsExactly(owner.id());
         assertThat(groupMessages(id, "PURCHASE_DECIDED")).isOne();
-        assertThat(closedReasons(id)).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        assertThat(closedReasons(id, "CLOSE_TASK")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
     }
 
     private void raceProduct(long id, Actor first, Actor second, String secondChoice)
@@ -543,17 +535,18 @@ class PolicyPurchaseReviewTest {
                                                         if (!start.await(5, TimeUnit.SECONDS))
                                                             throw new IllegalStateException(
                                                                     "未开始并发初审");
-                                                        return product(
-                                                                        actor,
-                                                                        id,
-                                                                        actor.equals(first)
-                                                                                ? "APPROVE"
-                                                                                : secondChoice,
-                                                                        "核对结果",
-                                                                        2)
-                                                                .andReturn()
-                                                                .getResponse()
-                                                                .getStatus();
+                                                        try {
+                                                            product(
+                                                                    actor,
+                                                                    id,
+                                                                    actor.equals(first)
+                                                                            ? "APPROVE"
+                                                                            : secondChoice,
+                                                                    "核对结果");
+                                                            return HttpStatus.OK;
+                                                        } catch (ApiException conflict) {
+                                                            return conflict.getStatus();
+                                                        }
                                                     }))
                             .toList();
             start.countDown();
@@ -561,23 +554,25 @@ class PolicyPurchaseReviewTest {
                             List.of(
                                     results.get(0).get(15, TimeUnit.SECONDS),
                                     results.get(1).get(15, TimeUnit.SECONDS)))
-                    .containsExactlyInAnyOrder(200, 409);
+                    .containsExactlyInAnyOrder(HttpStatus.OK, HttpStatus.CONFLICT);
         } finally {
             pool.shutdownNow();
         }
     }
 
-    private ResultActions product(Actor actor, long id, String decision, String reason, int version)
-            throws Exception {
-        return mvc.perform(
-                post("/api/policy-reviews/" + id + "/product-review")
-                        .session(actor.session())
-                        .header("Origin", "http://localhost:5173")
-                        .header("X-Policy-Request", "1")
-                        .contentType("application/json")
-                        .content(
-                                json.writeValueAsBytes(
-                                        new PolicyReviewRequest(version, 1, decision, reason))));
+    private Review product(Actor actor, long id, String decision, String reason) {
+        return reviews.productReview(
+                actor.account(), id, new PolicyReviewRequest(2, 1, decision, reason));
+    }
+
+    private ApiException expectProductFailure(
+            Actor actor, long id, String decision, String reason, HttpStatus status) {
+        var error =
+                catchThrowableOfType(
+                        ApiException.class, () -> product(actor, id, decision, reason));
+        assertThat(error).isNotNull();
+        assertThat(error.getStatus()).isEqualTo(status);
+        return error;
     }
 
     private int count(long id, String table) {
@@ -606,11 +601,12 @@ class PolicyPurchaseReviewTest {
                 event);
     }
 
-    private List<String> closedReasons(long id) {
+    private List<String> closedReasons(long id, String action) {
         return jdbc.queryForList(
-                "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.reason')) FROM policy_review_delivery WHERE policy_id=? AND action_type='CLOSE_TASK'",
+                "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.reason')) FROM policy_review_delivery WHERE policy_id=? AND action_type=?",
                 String.class,
-                id);
+                id,
+                action);
     }
 
     private void seedScopedSnapshot(long id, long goods, Long source) throws Exception {
@@ -678,7 +674,7 @@ class PolicyPurchaseReviewTest {
     }
 
     private void assertReadable(Actor actor, long id, boolean expected) throws Exception {
-        mvc.perform(get(PATH + "/" + id).param("includeCoverage", "false").session(actor.session()))
+        mvc.perform(get(PATH + "/" + id).session(actor.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.policy.reviewable").value(expected));
         mvc.perform(
@@ -719,7 +715,7 @@ class PolicyPurchaseReviewTest {
         var user = new CurrentUserResponse(Long.toString(id), openId, TENANT, openId, role, null);
         var request = new MockHttpServletRequest();
         sessions.establish(request, new AuthSessionResponse(user, Instant.now().plusSeconds(600)));
-        return new Actor(id, (MockHttpSession) request.getSession());
+        return new Actor(id, (MockHttpSession) request.getSession(), user);
     }
 
     private long policy(int marker, String stage) {

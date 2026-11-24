@@ -23,7 +23,7 @@ public record PolicyExecutionChange(
         Kind kind,
         List<Policy> candidates) {
     public PolicyExecutionChange {
-        // 早期已冻结的轮次只记录原、拟执行名单，保留这类轮次原有的分流结论。
+        // 按已冻结的内容展示，未记录候选时不推导当时的可选政策。
         candidates = candidates == null ? List.of() : List.copyOf(candidates);
     }
 

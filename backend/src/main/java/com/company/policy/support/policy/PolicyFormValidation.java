@@ -64,7 +64,7 @@ public final class PolicyFormValidation {
                 allowed.containsAll(platforms) && platformSet.size() == platforms.size(),
                 "整单平台重复或不属于当前渠道。");
         require(!submitting || !platforms.isEmpty(), "请选择整单平台。");
-        var selected = entries(PolicyScenes.fromLegacy(form.sceneTypes(), form.sceneType()));
+        var selected = entries(form.sceneTypes());
         List<String> scenes = null;
         if (retail) {
             require(oneOf(form.verifyType(), VERIFY_TYPES), "请选择有效的零售核销类型。");
@@ -72,10 +72,6 @@ public final class PolicyFormValidation {
                     SCENES.containsAll(selected)
                             && new HashSet<>(selected).size() == selected.size(),
                     "请选择有效且不重复的涉及场景。");
-            require(
-                    form.sceneType() == null
-                            || form.sceneType().equals(PolicyScenes.single(selected)),
-                    "单选场景与多选场景不一致。");
             if (!selected.isEmpty()) {
                 scenes = PolicyScenes.CODES.stream().filter(selected::contains).toList();
             }
@@ -88,7 +84,6 @@ public final class PolicyFormValidation {
         } else {
             require(
                     form.verifyType() == null
-                            && form.sceneType() == null
                             && form.sceneTypes() == null
                             && form.estimated() == null,
                     "百亿渠道的零售字段须留空。");
@@ -150,7 +145,6 @@ public final class PolicyFormValidation {
                 form.perspective(),
                 platforms,
                 form.verifyType(),
-                PolicyScenes.single(scenes),
                 scenes,
                 form.estimated(),
                 form.startTime(),

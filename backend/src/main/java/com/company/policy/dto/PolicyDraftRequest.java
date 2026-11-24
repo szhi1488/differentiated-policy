@@ -2,7 +2,6 @@ package com.company.policy.dto;
 
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.vo.PolicyApplicability.Scope;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -12,7 +11,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.io.IOException;
 import java.util.List;
 
-@JsonIgnoreProperties("otherExplanation")
 public record PolicyDraftRequest(
         @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
         @Schema(
@@ -21,7 +19,6 @@ public record PolicyDraftRequest(
                 String perspective,
         List<String> selectedPlatforms,
         String verifyType,
-        @Schema(description = "兼容旧单选请求，仅单选时返回该值") String sceneType,
         @Schema(description = "零售所选场景，国补、地补、自补可多选；百亿为空") List<String> sceneTypes,
         Boolean estimated,
         @Schema(example = "2026-11-10T09:00:00+08:00") String startTime,
@@ -55,7 +52,6 @@ public record PolicyDraftRequest(
                 perspective,
                 selectedPlatforms,
                 verifyType,
-                sceneType,
                 sceneTypes,
                 estimated,
                 startTime,
@@ -92,10 +88,9 @@ public record PolicyDraftRequest(
             String planKey,
             @JsonDeserialize(using = IntOnly.class) Integer quantity) {}
 
-    public record Extension(
+    public record TimeAdjustment(
             @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
-            @Schema(description = "新的北京时间到期日期，含当天", example = "2026-12-10") String endDate,
-            @Schema(description = "北京时间新截止时刻，与旧版 endDate 二选一") String endTime,
+            @Schema(description = "北京时间新截止时刻，精确到秒") String endTime,
             @Schema(description = "已核对的原单实际截止。创建取列表 endTime，修改取详情 adjustmentSourceEnd。该值变化返回 409")
                     String expectedSourceEnd,
             @Schema(description = "必填，1 至 512 字") String reason,

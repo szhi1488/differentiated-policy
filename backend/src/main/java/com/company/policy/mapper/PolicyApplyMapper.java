@@ -41,10 +41,10 @@ public interface PolicyApplyMapper {
     String AUDIT_COLUMNS =
             """
             a.id, a.version, a.audit_status, a.auditor_name, a.audit_comment, a.audit_time, a.created_at, a.workflow_version,
-            CASE WHEN a.audit_status='REJECTED' THEN CASE WHEN a.workflow_version=0 THEN 'PURCHASE_REVIEW'
-              ELSE (SELECT CASE d.group_code WHEN 'PRODUCT' THEN 'PRODUCT_REVIEW' WHEN 'PURCHASE' THEN 'PURCHASE_REVIEW' END
+            CASE WHEN a.audit_status='REJECTED' THEN
+              (SELECT CASE d.group_code WHEN 'PRODUCT' THEN 'PRODUCT_REVIEW' WHEN 'PURCHASE' THEN 'PURCHASE_REVIEW' END
                 FROM policy_review_decision d WHERE d.policy_id=a.policy_id AND d.tenant_key=a.tenant_key
-                  AND d.version=a.version AND d.decision='REJECT') END END AS rejected_at_stage
+                  AND d.version=a.version AND d.decision='REJECT') END AS rejected_at_stage
             """;
     String AUDIT_SCOPE = "a.policy_id = #{id} AND a.tenant_key = #{tenantKey}";
 

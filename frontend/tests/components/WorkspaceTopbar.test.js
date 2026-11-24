@@ -52,13 +52,20 @@ describe('工作台顶部栏', () => {
       'apply',
       'submissions',
       'applicant-model-subsidies',
-      'review-inbox',
     ])
     search.props('fetchSuggestions')('补贴', (items) => (results = items))
     expect(results.map(({ name }) => name)).toEqual(['applicant-model-subsidies'])
     search.vm.$emit('select', results[0])
     await flushPromises()
     expect(wrapper.emitted('navigate')).toEqual([['applicant-model-subsidies']])
+  })
+  it.each([
+    ['申请人', APPLICANT_NAV_GROUPS, 'apply'],
+    ['管理员', ADMIN_NAV_GROUPS, 'admin-policies'],
+  ])('%s 的菜单搜索不再提供待我审核入口', async (_role, groups, page) => {
+    await render(groups, page)
+    const search = wrapper.findComponent(ElAutocomplete)
+    search.props('fetchSuggestions')('待我审核', (items) => expect(items).toEqual([]))
   })
   it('头像加载失败回退姓名，更新地址后重新显示图片', async () => {
     await render()

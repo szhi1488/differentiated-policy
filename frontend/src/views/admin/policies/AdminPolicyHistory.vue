@@ -1,6 +1,7 @@
 <script setup>
 import { toRef } from 'vue'
 import { useAdminPolicyHistory } from '../../../composables/useAdminPolicyHistory'
+import { useAdminPolicyRound } from '../../../composables/useAdminPolicyRound'
 import { AUDIT_STATUS_LABELS, AUDIT_STATUS_TYPES } from '../../../constants/policy'
 import { policyTime } from '../../../utils/policy-adapter'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
@@ -10,6 +11,9 @@ const { page, pageSize, selectedLogId, list, snapshot, detail, refresh, readSnap
   useAdminPolicyHistory(toRef(props, 'policyId'))
 const { data: records, loading: listBusy, error: listError } = list
 const { loading: snapshotBusy, error: snapshotError } = snapshot
+const { round, roundBusy, roundError, loadRound } = useAdminPolicyRound(detail, {
+  historical: true,
+})
 const time = (value) => policyTime(value).replace('T', ' ') || '—'
 </script>
 
@@ -103,7 +107,14 @@ const time = (value) => policyTime(value).replace('T', ' ') || '—'
             AUDIT_STATUS_LABELS[detail.audit.auditStatus]
           }}
         </p>
-        <AdminPolicyDetail :key="selectedLogId" :detail="detail" />
+        <AdminPolicyDetail
+          :key="selectedLogId"
+          :detail="detail"
+          :round="round"
+          :round-busy="roundBusy"
+          :round-error="roundError"
+          @retry-round="loadRound"
+        />
       </template>
     </template>
   </section>

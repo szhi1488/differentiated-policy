@@ -43,8 +43,6 @@ public record PolicyApplicability(
     }
 
     public enum Action {
-        ACKNOWLEDGE_EXCLUSIVE,
-        CONFIRM_STACK,
         SELECT_RETAIL_POLICIES,
         STACK_OR_CHOOSE
     }
@@ -93,10 +91,5 @@ public record PolicyApplicability(
             List<Group> groups,
             List<String> eligiblePolicyIds) {}
 
-    public record Group(
-            String sceneType,
-            String verifyType,
-            List<String> policyIds,
-            String winnerPolicyId,
-            @Schema(description = "本组完整场景组合，旧版分组使用 sceneType") List<String> sceneTypes) {}
+    public record Group(List<String> sceneTypes, String verifyType, List<String> policyIds) {}
 }

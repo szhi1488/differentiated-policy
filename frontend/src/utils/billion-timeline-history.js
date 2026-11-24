@@ -2,7 +2,7 @@ import { appendTimelinePart, timelineGoodsLabel } from './subsidy-timeline'
 import { subsidySignature } from './policy-coverage'
 
 // 百亿按配置审核。每一段只按原单补贴项实际填报的商品拆行，不重算采用名单。
-function selectionGroups(plans, signatureOf, allowedGoods) {
+function selectionGroups(plans, signatureOf) {
   const members = new Map()
   const unspecified = []
   for (const plan of plans) {
@@ -10,9 +10,6 @@ function selectionGroups(plans, signatureOf, allowedGoods) {
       unspecified.push(plan)
     }
     for (const product of plan.goods) {
-      if (allowedGoods && !allowedGoods.has(product.id)) {
-        continue
-      }
       if (!members.has(product.id)) {
         members.set(product.id, { product, plans: new Set() })
       }
@@ -23,12 +20,11 @@ function selectionGroups(plans, signatureOf, allowedGoods) {
   for (const { product, plans: selections } of members.values()) {
     const signature = JSON.stringify([...selections].map(signatureOf).sort())
     if (!groups.has(signature)) {
-      groups.set(signature, { goods: [], plans: new Map(), allocations: new Set() })
+      groups.set(signature, { goods: [], plans: new Map() })
     }
     const group = groups.get(signature)
     group.goods.push(product)
     for (const plan of selections) {
-      group.allocations.add(plan)
       // 同轮不同普通卡可共用同一补贴。图行关联其中第一张原卡，明细保留全部原卡。
       const key = signatureOf(plan)
       const first = group.plans.get(key)
@@ -37,13 +33,12 @@ function selectionGroups(plans, signatureOf, allowedGoods) {
       }
     }
   }
-  const result = [...groups.values()].map(({ goods, plans, allocations }) => ({
+  const result = [...groups.values()].map(({ goods, plans }) => ({
     goods,
     plans: [...plans.values()],
-    allocations,
   }))
   if (unspecified.length) {
-    result.push({ goods: [], plans: unspecified, allocations: new Set(unspecified) })
+    result.push({ goods: [], plans: unspecified })
   }
   return result
 }
@@ -53,9 +48,6 @@ export function billionDisplayHistory(source, configurationGoodsCount) {
   const rows = new Map()
   const scopes = new Map()
   const originalRows = new Map(source.rows.map((row) => [row.key, row]))
-  const allowedGoods = source.scope.goods.length
-    ? new Set(source.scope.goods.map((g) => g.id))
-    : null
   const signatures = new Map()
   function signatureOf(plan) {
     if (!signatures.has(plan)) {
@@ -78,8 +70,6 @@ export function billionDisplayHistory(source, configurationGoodsCount) {
         scope: {
           ...source.scope,
           trackId,
-          ...(allowedGoods ? {} : { configurationTrackId: source.scope.trackId }),
-          configurationDecision: !allowedGoods,
           fullConfiguration,
           goods,
           label: fullConfiguration ? '整组配置' : timelineGoodsLabel(goods) || '原单未注明商品',
@@ -118,28 +108,13 @@ export function billionDisplayHistory(source, configurationGoodsCount) {
 
   for (const segment of source.segments) {
     const adopted = new Set(segment.policies)
-    for (const group of selectionGroups(
-      [...adopted, ...segment.excluded],
-      signatureOf,
-      allowedGoods,
-    )) {
+    for (const group of selectionGroups([...adopted, ...segment.excluded], signatureOf)) {
       const display = scopeFor(group)
-      // 商品级历史只列该商品所在的原卡。服务端额外列出的整轮对照单仍可在未采用名单核对。
-      const declaredRounds = new Set([...group.allocations].map((plan) => plan.auditLogId))
-      const allocations = (plans, excluded) =>
-        plans
-          .filter(
-            (plan) =>
-              !allowedGoods ||
-              group.allocations.has(plan) ||
-              (excluded && !declaredRounds.has(plan.auditLogId)),
-          )
-          .map((plan) => scopedPlan(display, plan))
       segments.push({
         ...segment,
         ...display.scope,
-        policies: allocations(segment.policies, false),
-        excluded: allocations(segment.excluded, true),
+        policies: segment.policies.map((plan) => scopedPlan(display, plan)),
+        excluded: segment.excluded.map((plan) => scopedPlan(display, plan)),
       })
       for (const plan of group.plans) {
         const original = originalRows.get(plan.key)
@@ -168,7 +143,7 @@ export function billionDisplayHistory(source, configurationGoodsCount) {
     }
   }
   for (const plans of undated.values()) {
-    for (const group of selectionGroups(plans, signatureOf, allowedGoods)) {
+    for (const group of selectionGroups(plans, signatureOf)) {
       const display = scopeFor(group)
       for (const plan of group.plans) {
         displayRow(display, originalRows.get(plan.key))

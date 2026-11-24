@@ -3,31 +3,24 @@ export function parseReviewTarget(path) {
   if (typeof path !== 'string' || path.includes('#')) {
     return null
   }
-  const match = /^(\/reviews\/([1-9]\d{0,18})|\/apply)\?([^?]+)$/.exec(path)
+  const match = /^(\/reviews\/([1-9]\d{0,18})|\/apply|\/admin\/policies)\?([^?]+)$/.exec(path)
   if (!match) {
     return null
   }
   const params = new URLSearchParams(match[3])
-  const revision = match[1] === '/apply'
-  const keys = revision ? ['policyId', 'round'] : ['round', 'node']
+  const roundPath = Boolean(match[2])
+  const keys = roundPath ? ['round'] : ['policyId', 'round']
   if ([...params.keys()].some((key) => !keys.includes(key) || params.getAll(key).length !== 1)) {
     return null
   }
-  const id = revision ? params.get('policyId') : match[2]
+  const id = roundPath ? match[2] : params.get('policyId')
   const round = params.get('round')
-  const node = revision ? 'REVISION' : params.get('node')
   if (!id || !/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) {
     return null
   }
   if (!round || !/^[1-9]\d{0,9}$/.test(round) || Number(round) > 2147483647) {
     return null
   }
-  if (node !== null && !['PRODUCT_REVIEW', 'PURCHASE_REVIEW', 'REVISION'].includes(node)) {
-    return null
-  }
-  return { id, round, node }
-}
-
-export function reviewTargetPath({ id, round, node }) {
-  return `/reviews/${id}?round=${round}${node ? '&node=' + node : ''}`
+  const query = roundPath ? `round=${round}` : `policyId=${id}&round=${round}`
+  return { id, round, path: `${match[1]}?${query}` }
 }

@@ -24,7 +24,6 @@ export const ADMIN_NAV_GROUPS = [
     icon: 'document',
     links: [
       { name: 'admin-policies', label: '差异化政策' },
-      { name: 'review-inbox', label: '待我审核' },
       { name: 'admin-model-subsidies', label: '机型补贴查询' },
     ],
   },
@@ -38,7 +37,6 @@ export const APPLICANT_NAV_GROUPS = [
       { name: 'apply', label: '提交政策' },
       { name: 'submissions', label: '我的提交' },
       { name: 'applicant-model-subsidies', label: '机型补贴查询' },
-      { name: 'review-inbox', label: '待我审核' },
     ],
   },
 ]

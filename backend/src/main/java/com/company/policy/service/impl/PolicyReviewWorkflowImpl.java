@@ -13,53 +13,35 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
 import java.util.List;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@RequiredArgsConstructor
 @Transactional(propagation = Propagation.MANDATORY)
 class PolicyReviewWorkflowImpl implements PolicyReviewWorkflow {
-    private final boolean enabled;
     private final PolicyCoverageService coverage;
     private final PolicyReviewSettingsService settings;
     private final PolicyReviewWorkflowMapper workflow;
     private final PolicyReviewNotifications notifications;
     private final ObjectMapper json;
 
-    PolicyReviewWorkflowImpl(
-            @Value("${policy.review-workflow-enabled:false}") boolean enabled,
-            PolicyCoverageService coverage,
-            PolicyReviewSettingsService settings,
-            PolicyReviewWorkflowMapper workflow,
-            PolicyReviewNotifications notifications,
-            ObjectMapper json) {
-        this.enabled = enabled;
-        this.coverage = coverage;
-        this.settings = settings;
-        this.workflow = workflow;
-        this.notifications = notifications;
-        this.json = json;
-    }
-
     @Override
-    public int lockForSubmission(PolicyApply entry) {
-        if (!enabled) return 0;
+    public void lockForSubmission(PolicyApply entry) {
         if (settings.lockForSubmission(entry.getTenantKey(), entry.getApplicantId()) == 0) {
             throw new ApiException(
                     HttpStatus.CONFLICT,
                     "POLICY_REVIEW_SETTINGS_REQUIRED",
                     "请管理员先配置产品运营和采购审核人，再提交本单。");
         }
-        return 1;
     }
 
     @Override
     public String submitted(PolicyApply entry, Snapshot confirmed, LocalDateTime at) {
         if (entry.getCurrentVersion() > 0) closePreviousRevision(entry, at);
-        if (!enabled) return null;
         var route = coverage.workflowRoute(entry, confirmed, at);
         var tenant = entry.getTenantKey();
         var assigned =
@@ -92,7 +74,6 @@ class PolicyReviewWorkflowImpl implements PolicyReviewWorkflow {
         long id = entry.getId();
         int version = entry.getCurrentVersion();
         long owner = entry.getApplicantId();
-        // 切换开关只决定新轮。上一轮为旧流程或尚无修改指派时，没有待办需要结办。
         var memberId = workflow.activeRevision(tenant, id, version, owner);
         if (memberId == null) return;
         if (workflow.finishRevision(tenant, id, version, memberId, owner) != 1)

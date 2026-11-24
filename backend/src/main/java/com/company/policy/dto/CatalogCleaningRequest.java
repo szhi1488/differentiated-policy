@@ -26,7 +26,6 @@ public final class CatalogCleaningRequest {
     public record Review(
             @NotNull @PositiveOrZero Integer recordVersion,
             @NotNull Decision decision,
-            @Size(max = 512) String reason,
             @Valid Target target) {}
 
     public enum Decision {

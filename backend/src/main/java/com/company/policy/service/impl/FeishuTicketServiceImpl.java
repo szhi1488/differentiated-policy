@@ -3,6 +3,7 @@ package com.company.policy.service.impl;
 import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.service.FeishuApiTransport;
+import com.company.policy.service.FeishuTenantTokenService;
 import com.company.policy.service.FeishuTicketService;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Clock;
@@ -12,7 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
-public class FeishuTicketServiceImpl implements FeishuTicketService {
+public class FeishuTicketServiceImpl implements FeishuTicketService, FeishuTenantTokenService {
     private final FeishuProperties properties;
     private final FeishuApiTransport transport;
     private final Clock clock;
@@ -27,13 +28,10 @@ public class FeishuTicketServiceImpl implements FeishuTicketService {
     }
 
     @Override
-    public synchronized String getTicket() {
+    public synchronized String getTenantAccessToken() {
         if (!properties.isConfigured()) {
             throw new ApiException(
                     HttpStatus.SERVICE_UNAVAILABLE, "FEISHU_NOT_CONFIGURED", "请先配置后端飞书应用凭证。");
-        }
-        if (fresh(ticket)) {
-            return ticket.value();
         }
         if (!fresh(token)) {
             JsonNode response =
@@ -47,9 +45,25 @@ public class FeishuTicketServiceImpl implements FeishuTicketService {
                             null);
             token = cache(response.path("tenant_access_token"), response.path("expire"));
         }
+        return token.value();
+    }
+
+    @Override
+    public synchronized void invalidateTenantAccessToken(String rejectedToken) {
+        if (token != null && token.value().equals(rejectedToken)) {
+            token = null;
+        }
+    }
+
+    @Override
+    public synchronized String getTicket() {
+        if (fresh(ticket) && properties.isConfigured()) {
+            return ticket.value();
+        }
+        String accessToken = getTenantAccessToken();
         try {
             JsonNode response =
-                    transport.post("/open-apis/jssdk/ticket/get", Map.of(), token.value());
+                    transport.post("/open-apis/jssdk/ticket/get", Map.of(), accessToken);
             ticket =
                     cache(
                             response.path("data").path("ticket"),

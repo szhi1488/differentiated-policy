@@ -1,18 +1,30 @@
 # 差异化政策管理文档库
 
-管理员在「系统管理 → 用户管理 → 负责平台」按渠道分工，申请人按实际负责平台核对交叉时段，管理员审核本轮申请内容。已有库在 Navicat 整份运行[平台分工统一升级脚本](sql/upgrade_user_platform_assignments.sql)。
+管理员在「系统管理 → 用户管理 → 负责平台」按渠道分工。申请人按负责平台填报并决定交叉时段采用哪些政策，产品运营按需初审，采购终审。已有库的平台分工升级由用户在 Navicat 执行。[平台分工统一升级脚本](sql/upgrade_user_platform_assignments.sql)
 
-更新日期：2026-11-23。项目指令见 [AGENTS.md](../AGENTS.md)，启动和配置见 [项目 README](../README.md)。
+更新日期：2026-11-24。项目指令见 [AGENTS.md](../AGENTS.md)，启动和配置见 [项目 README](../README.md)。
 
 管理员与申请人的侧栏、标题横幅、主内容区背景及标题图标的当前约定统一见[两角色工作台视觉](architecture/frontend-development.md#两角色工作台视觉)，各轮测试与预览证据保留在同一文档的验证记录中。
 
-配置文件分工、环境参数、飞书测试转正式、部署监听地址，以及关闭网页或飞书客户端后任务继续执行的前提，统一见[环境配置、部署与后台任务](architecture/environment-configuration.md)。2026-11-18 本次讨论同步仅维护文档及项目指令，不代表重新执行业务测试或完成正式部署。
+配置文件分工、飞书测试转正式、部署监听地址及后台任务运行条件见[环境配置、部署与后台任务](architecture/environment-configuration.md)。
 
 ## 当前实现
 
+- **申请人选单，运营复核，采购终审。** 首提和退回重提均按本轮提交内容分流。无确认段也无随单调整时，直接给采购。其余由申请人在「确认政策适用范围」核对整单，再交产品运营。即使同段有 A、B 两张政策，申请人只留原单 A，也要初审。运营可在本轮详情查看选了谁、哪些候选未选及各自的商品和补贴。只保留随单时间调整时，即使重算后没有交叉，运营也能核对该批调整。[分流与实例](architecture/policy-workflow-feishu-technical-design.md#classification) · [按轮详情](architecture/policy-workflow-phase-d.md)
+
+- **运营在飞书私聊卡上审核。** 开启自动投递后，进入初审时，机器人分别给本轮每名运营发审核卡。首个有效的「通过」或填写原因的「拒绝」在 ERP 保存后，后台向已配置的业务群投递一条初审结果。通过时 @ 采购到管理员「差异化政策」办理终审，终审批准即结束。初审拒绝时 @ 原申请人修改，其他运营的卡转为只读。两角色工作台均已移除独立「待我审核」页面。F 阶段已接入执行期、平台交接和商品批次提醒。用户提供的群截图可见平台交接、提交采购、初审退回或通过以及终审通过通知。个人待办、手机办理、定时业务实发及目标 MySQL 待现场联验。[执行期交付及切换](architecture/policy-workflow-phase-f.md) · [E 阶段交付记录](architecture/policy-workflow-phase-e.md) · [后续开发提示词](architecture/policy-workflow-development-prompts.md)
+
+  2026-11-23 的后端验收中，A 阶段通过 267/269 项，B 阶段通过 291/293 项，C 阶段通过 307/309 项，各次均按配置跳过真实 MySQL 和吉客云实查。C 阶段的 27 项站内审核专项覆盖退回、原单按新名单重提、两级审签、按轮附件和在途改派。两名采购并发批准同一批调整时，每个延期目标只生成一张子单。[A 阶段逐段样例](architecture/policy-workflow-phase-a.md) · [B 阶段权限与验证](architecture/policy-workflow-phase-b.md) · [C 阶段站内审核](architecture/policy-workflow-phase-c.md)
+
+- **群消息与投递编号。** 启用新版后端后，群通知正文显示业务摘要、@ 人员及适用的办理链接。管理员在「政策审核设置 → 飞书投递记录」查看防重编号、投递状态及回执。[投递字段与 Navicat 定位](sql/database-design.md#群消息投递编号与飞书回执) · [未知回执核对](api/policy-review-settings.md#飞书投递记录与人工核对)
+
+- **内网部署和单卡自验。** 后端通过长连接接收卡片回调。`http://172.50.50.32:5173` 是同事在内网打开 ERP 的前端入口。将来部署到内网服务器可沿用长连接。ZC-000033 给 Becca 的单卡自验由用户手动发送，发送前先核对实际轮次和她的投递记录。[同事打开群链接时转圈或报代理错误](architecture/environment-configuration.md#从飞书群打开内网政策链接) · [单卡自验步骤](architecture/policy-workflow-phase-e.md#内网发送一张初审卡)
+
+- **政策详情读取失败。** 普通「查看」分别加载政策内容和本轮审核信息。若仅成员读取失败，仍可查看已取得的商品、补贴和附件，并单独重试。若整窗显示“服务暂时不可用”，按详情故障说明检查基础详情与快照回读。[管理员政策详情](architecture/admin-workspace.md#差异化政策) · [本地回归记录](architecture/frontend-harness.md#2026-11-24-现行数据契约与政策详情验收)
+
 - 申请人在「政策提交 → 机型补贴查询」使用与管理员相同的查询页面，平台选项为「全部负责平台」和本人当前负责的渠道、平台组合。零售与百亿分别授权，接手人可以查看该范围内前任提交并获批的政策。尚无分工时显示提示。[页面与权限](api/page-api-plan.md#申请人机型补贴查询)
 
-- 两个角色的机型补贴查询首次进入和重置时均展示北京时间本月。零售和百亿普通单整组申报且补贴一致时标为「整组配置」。后续只给一个颜色另报政策，仅在该时段拆出该颜色，其余一致的商品合并，交叉结束后恢复整组。零售按商品核对采用名单，百亿按该段实际审核范围展示选单或叠加结果，原单申报的商品可在明细中核对。已获批的未来安排也可查询。[双图展示与历史兼容](architecture/frontend-development.md#零售与百亿时间轴统一展示商品范围) · [预估政策的冲突与覆盖](business/override-engine.md#零售预估政策)
+- 两个角色的机型补贴查询首次进入和重置时均展示北京时间本月。零售和百亿普通单整组申报且补贴一致时标为「整组配置」。后续只给一个颜色另报政策，仅在该时段拆出该颜色，其余一致的商品合并，交叉结束后恢复整组。零售按商品核对采用名单，百亿按平台和配置展示该段的选单或叠加结果，原单申报的商品可在明细中核对。已获批的未来安排也可查询。[两渠道的分段展示](architecture/frontend-development.md#零售与百亿时间轴统一展示商品范围) · [预估政策的冲突与覆盖](business/override-engine.md#零售预估政策)
 
 - 「我的提交」可对本人已通过的政策独立申请提前结束或延期。申请表及「确认政策适用范围」的「调整政策时间」可选择多张已通过的旧单，每张都须填写新的北京时间截止和原因，证明文件选传。提前结束须负责原单至少一个实际使用平台，延期须为本人提交且仍负责原单全部平台。随单选择的缩短和延期随当前申请一次通过或整批驳回。[独立调整](api/policy-api.md#延长已通过的政策) · [随单调整与审核](api/policy-api.md#整单提前结束)
 
@@ -35,7 +47,7 @@
 
 - 2026-11-17 商品中心修复「复制货号」在普通 HTTP 或剪贴板接口拒绝写入时直接失败的问题。两种自动复制方式均受限时可从弹窗手动复制完整货号。[修复与粘贴验证](architecture/frontend-development.md#2026-11-17-商品中心复制货号)
 
-- 2026-11-17 后端结构检查记录了八项问题。第 1、3、4 项已修复，涉及参数格式错误、政策附件下载授权及新旧提交快照读写。该轮 Maven 验证共 189 项，187 项通过、2 项外部环境测试跳过。[检查清单与验证范围](architecture/system-overview.md#2026-11-17-后端结构检查) · [快照存储与兼容](api/policy-api.md#提交快照的存储与兼容) · [附件备份与迁移](api/attachment-api.md#存储和配置)
+- 2026-11-17 后端结构检查记录了八项问题。第 1、3、4 项已修复，涉及参数格式错误、政策附件下载授权及新旧提交快照读写。该轮 Maven 验证共 189 项，187 项通过、2 项外部环境测试跳过。[检查清单与验证范围](architecture/system-overview.md#2026-11-17-后端结构检查) · [快照存储与回读](api/policy-api.md#提交快照的存储与回读) · [附件备份与迁移](api/attachment-api.md#存储和配置)
 
 - 管理员「系统管理 → 用户管理」已接入后端七个接口，包含平台分工查询及修改。查询按姓名／部门、角色和状态分页，全公司统计独立读取。调整角色和启停使用最新详情并校验旧值，成功后同步刷新列表、统计和已打开的详情。页面从当前会话识别本人，业务历史归属保留。[页面规则](architecture/admin-workspace.md#用户管理) · [接口契约](api/user-api.md) · [页面验证记录](architecture/frontend-development.md#2026-11-17-用户管理页面接入)
 
@@ -81,15 +93,17 @@
 
 ## 当前数据库基线与重设计约定
 
-项目处于第一开发阶段，所有表都可以按生产级 MySQL 标准重新设计。每次重设计前，先说明拟调整范围、原因及数据和代码影响，再向用户重新确认。收到明确同意后开始设计和实施。[项目约定第 13 条](../AGENTS.md#3-核心技术规则与边界)
+项目仍处于开发阶段，尚未部署线上业务服务器。代码可清理已废弃的旧入口和旧格式分支。现行流程仍使用按轮快照、已批准的逐段决定和附件引用。所有表都可以按生产级 MySQL 标准重新设计。每次重设计前，先说明拟调整范围、原因及数据和代码影响，再向用户重新确认。收到明确同意后开始设计和实施。[项目约定第 13 条](../AGENTS.md#3-核心技术规则与边界)
 
 查库、变更和验证所需 SQL 保存为 `docs/sql/` 下的 `.sql` 文件，由用户在 Navicat 执行。
+
+已有十五表库升级政策审核工作流前，先停写并备份数据库和附件，再在同一 Navicat 查询窗口分段执行增量脚本，最后运行核对脚本。刚升级时，原申请、快照和商品明细的差异数应为 0，七张新表均为空。已升级到 B 阶段二十二表的库按现有投递约束核对是否需要卡片增量。新空库执行两份完整基线中的一份。[工作流增量脚本](sql/upgrade_policy_review_workflow.sql) · [升级后核对脚本](sql/verify_policy_review_workflow.sql) · [飞书卡片约束升级条件](sql/database-design.md#已有库升级飞书审核卡投递) · [空库建表步骤](sql/database-design.md#1-在-navicat-建表)
 
 平台分工升级保留已有分工。脚本结束后核对末行 `upgrade_result` 为「完成」、升级前后分工数相同。首次建表时两者均为 0。新空库直接使用二十二表基线。2026-11-15 的十四表重建属于原始 SKU 调整的历史记录。[现有库升级步骤](sql/database-design.md#已有库升级申请人平台分工) · [空库建表步骤](sql/database-design.md#1-在-navicat-建表)
 
 本项目是嵌入飞书的公司内部 ERP，所有有效管理员共用同一套商品数据。二十二表空库基线使用 `brand`、`series`、`spu`、`color_dict` 和 `goods` 保存公司共用标准目录。每条通过的来源一对一映射标准商品并继承自身原始 SKU，不同来源的相同规格颜色分别建档；政策以实际选中的商品 ID 确定适用商品，机型加 RAM、ROM 用于配置查询。商品目录、导入、源商品、清洗及政策明细均省去租户标识。源商品仅按吉客云 SKU ID 唯一匹配，源内容未变时保留原商品和清洗结果。空库使用最新二十二表建表脚本中的一份。已采用原始 SKU 一对一基线的现有库按增量升级，保留已有商品与政策历史。目标 MySQL 待用户在 Navicat 执行并联调。[数据字典](sql/database-design.md)
 
-来源保留原始七字段、SKU ID、完整分类路径、两种修改时间和状态标记。建档日取自按日导入命中或可追溯的旧任务。原文先入库，再经管理员确认后按当前代码识别系列、型号、配置和颜色，明确结果自动入标准库。清洗和审核通过写入或复用该来源自身的 `goods`，同时回填来源映射。候选、证据和当前映射保存在来源表，独立清洗任务固定本轮 SKU 和结果。商品导入记录继续支撑建档日查询，新基线不保存清洗日志。[商品表关联示例](sql/database-design.md#商品表关联示例) · [商品同步方案](architecture/catalog-admin-design.md) · [商品清洗细则](business/catalog-cleaning.md)
+来源保留原始七字段、SKU ID、完整分类路径、两种修改时间和状态标记。建档日取自按日导入的命中日志。原文先入库，再经管理员确认后按当前代码识别系列、型号、配置和颜色，明确结果自动入标准库。清洗和审核通过写入或复用该来源自身的 `goods`，同时回填来源映射。候选、证据和当前映射保存在来源表，独立清洗任务固定本轮 SKU 和结果。商品导入记录继续支撑建档日查询，新基线不保存清洗日志。[商品表关联示例](sql/database-design.md#商品表关联示例) · [商品同步方案](architecture/catalog-admin-design.md) · [商品清洗细则](business/catalog-cleaning.md)
 
 政策三表已确认并写入空库 SQL。`policy_apply` 保存当前表单，`policy_audit_log` 保存各轮快照和审核结果，`policy_goods_detail` 保存按轮次展开的商品范围。草稿、提交、本人列表与历史查询及商品中心引用检查复用这三张表，目标 MySQL 待联调。[政策三表](sql/database-design.md#政策三表)
 
@@ -97,8 +111,8 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [政策审核与飞书通知技术设计书（开发版）](architecture/policy-workflow-feishu-technical-design.md) | 申请人逐段确认、运营初审和采购终审、群通知、待办与改派 | 已交付 [A 阶段分流](architecture/policy-workflow-phase-a.md)、[B 阶段后端基础](architecture/policy-workflow-phase-b.md)、[C 阶段站内审核 API](architecture/policy-workflow-phase-c.md) 和 [D 阶段工作台及按轮回跳](architecture/policy-workflow-phase-d.md)。E 阶段从直提与确认整单的分流对齐开始，飞书私聊卡和结果群通知见[后续开发提示词 P23–P26](architecture/policy-workflow-development-prompts.md) |
-| [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、[服务接口与注释](architecture/ai-development.md#服务接口与注释)、Vue/Java 代码写法、API 兼容、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
+| [政策审核与飞书通知技术设计书（开发版）](architecture/policy-workflow-feishu-technical-design.md) | 申请人逐段确认、运营初审和采购终审、群通知、待办与改派 | 已交付 [A 阶段分流](architecture/policy-workflow-phase-a.md)、[B 阶段后端基础](architecture/policy-workflow-phase-b.md)、[C 阶段站内审核 API](architecture/policy-workflow-phase-c.md)、[D 阶段工作台及按轮回跳](architecture/policy-workflow-phase-d.md)、[E 阶段飞书投递及补偿](architecture/policy-workflow-phase-e.md) 和 [F 阶段执行期提醒及切换手册](architecture/policy-workflow-phase-f.md)。 |
+| [AI 辅助全栈开发规范](architecture/ai-development.md) | [前后端文件放置](architecture/ai-development.md#2-项目文件放置)、[服务接口与注释](architecture/ai-development.md#服务接口与注释)、Vue/Java 代码写法、API 契约、SQL 事务和验收模板 | 工程规范；示例不代表功能已实现 |
 | [整体架构](architecture/system-overview.md) | 技术栈、[服务层整理记录](architecture/system-overview.md#2026-11-17-服务层整理)、源码进度、二十二表基线 | 实现与设计分别标注 |
 | [环境配置、部署与后台任务](architecture/environment-configuration.md) | 配置文件分工、完整参数、测试转正式、监听地址、调度开关及关闭客户端后的执行条件 | 配置已接入；实际部署和关闭客户端的完整流程待现场核对 |
 | [前端架构与开发规范](architecture/frontend-development.md) | 目录职责、数据流、接口适配、会话路由、样式、AI 开发验收与整改清单 | 已接入商品、申请、当前详情及管理员审核，含菜单和筛选排版验证 |
@@ -135,8 +149,8 @@
 
 1. 吉客云已实测两品牌的 `brandName` 筛选和 `lastMaxId` 续拉。目标 MySQL 上的全量导入额度、停用来源覆盖、清洗及标准商品维护待联调。完整批次回放待设计。
 2. 固定方式的上限是否必填、是否要求整单每个平台都有明细，以及实单平台名称映射。[动态表单](business/perspective-rules.md)
-3. 目标 MySQL 与真实飞书会话待联调。核对平台移交前后的有效旧单、并发审批后重新确认、旧单在截止日最后一秒与次日的查询结果；各实例统一设置实际切换时间。[验收案例](business/override-engine.md#6-决策表与验收案例) · [切换配置](architecture/environment-configuration.md)
-4. 目标环境配置采购管理员名单。本公司管理员读取本公司已提交的申请，由其他管理员审核其本人提交的申请，驳回意见选填。
+3. 目标 MySQL 与真实飞书会话待联调。核对平台移交前后的有效旧单、并发审批后重新确认、旧单在截止日最后一秒与次日的查询结果。[验收案例](business/override-engine.md#6-决策表与验收案例)
+4. 目标环境需配置产品运营和采购两组人员，并核对按轮办理权限。只有本轮当前节点的合格成员可办理，并排除自审，实际初审人与终审人须不同。初审退回必填原因，采购驳回意见选填。目标 MySQL 以用户在 Navicat 回传的结果验收，测试企业实发及手机回跳列入 P32。[按轮切换](architecture/policy-workflow-phase-b.md#切换与运行边界) · [联调清单](architecture/policy-workflow-development-prompts.md)
 5. 附件、备注及链接必填要求、最终容量和未绑定文件自动清理；实际部署域名及多实例会话。
 6. 用真实手机扫码确认，核对当前角色入口及会话刷新。回归飞书内免登和网页授权，并在部署地址确定后核对重定向配置。[飞书真实联调步骤](architecture/feishu-auth-flow.md#浏览器真实联调步骤)
 7. 在目标 MySQL 上联调本人筛选、草稿回填、历轮快照、跨账号隔离及管理员驳回后的原单重提。[我的提交验收记录](architecture/frontend-development.md#2026-11-14-我的提交接口接入) · [管理员审核验收记录](architecture/frontend-development.md#2026-11-15-管理员审核与有效政策)

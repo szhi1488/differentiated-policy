@@ -24,7 +24,7 @@ const roundKey = (policy) => `${policy.policyId}/${policy.submissionVersion}`
 const roundName = (policy) => `${policy.policyCode}（第 ${policy.submissionVersion} 轮）`
 const roundList = (policies) => policies.map(roundName).join('、')
 function policyGroups(change) {
-  const candidates = change.candidates ?? []
+  const candidates = change.candidates
   const groups = [
     { label: '原执行名单', policies: change.before },
     {
@@ -45,7 +45,7 @@ function policyGroups(change) {
 }
 function scopeLabel(change) {
   const scope = change.scope
-  const product = [...change.after, ...change.before, ...(change.candidates ?? [])]
+  const product = [...change.after, ...change.before, ...change.candidates]
     .flatMap((policy) => policy.selections)
     .flatMap((row) => row.products)
     .find((item) => !scope.goodsId || item.goodsId === scope.goodsId)

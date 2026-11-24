@@ -11,19 +11,6 @@ export function createSubsidy() {
   }
 }
 
-/** 名称组合也用于已失效商品的回填展示。 */
-function policyModelParts({ brand, series, model, version }) {
-  return [brand, series, model, version]
-}
-
-export function policyModelKey(goods) {
-  return goods.spuId ?? JSON.stringify(policyModelParts(goods))
-}
-
-export function policyGoodsKey(goods) {
-  return goods.id ?? JSON.stringify([...policyModelParts(goods), goods.config])
-}
-
 export function policyConfigurationKey({ spuId, ram, rom }) {
   return [spuId, ram, rom].join('/')
 }

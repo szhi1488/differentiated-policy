@@ -25,15 +25,6 @@ public record PolicyReviewRoundResponse(
         List<Change> changes,
         List<Adjustment> adjustments) {
 
-    public record Item(
-            String id,
-            String policyCode,
-            int submissionVersion,
-            int recordVersion,
-            String reviewStage,
-            String summary,
-            String submittedAt) {}
-
     public record Member(
             String assignmentId,
             String userId,

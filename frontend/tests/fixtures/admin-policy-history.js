@@ -29,9 +29,7 @@ export function historySnapshot(version) {
       perspective: 'RETAIL',
       selectedPlatforms: ['JD'],
       verifyType: 'SALES',
-      ...(version === 1
-        ? { sceneType: 'SELF_SUB' }
-        : { sceneTypes: ['NATIONAL_SUB', 'LOCAL_SUB'] }),
+      sceneTypes: version === 1 ? ['SELF_SUB'] : ['NATIONAL_SUB', 'LOCAL_SUB'],
       estimated: false,
       startTime: '2026-11-16T00:00:00+08:00',
       endTime: '2026-12-16T00:00:00+08:00',
@@ -75,10 +73,82 @@ export function currentDetail() {
     },
     audit: auditLogs[0],
     snapshot: historySnapshot(2),
-    coverage: {
-      at: '2026-11-16T12:00:00+08:00',
-      effectiveFrom: '2026-11-16T12:00:00+08:00',
-      items: [],
-    },
   }
+}
+
+// 与管理员示例一致：3 个普通颜色加 1 个其他配置，每个商品适用两个平台。
+export function groupedPolicyDetail() {
+  const detail = currentDetail()
+  const goods = [
+    {
+      goodsId: '100',
+      spuId: '10',
+      modelName: 'Reno17 Pro',
+      ram: '12GB',
+      rom: '256GB',
+      colorName: '可可棕',
+    },
+    {
+      goodsId: '101',
+      spuId: '10',
+      modelName: 'Reno17 Pro',
+      ram: '12GB',
+      rom: '256GB',
+      colorName: '初雪白',
+    },
+    {
+      goodsId: '102',
+      spuId: '10',
+      modelName: 'Reno17 Pro',
+      ram: '12GB',
+      rom: '256GB',
+      colorName: '奇遇喵',
+    },
+    {
+      goodsId: '103',
+      spuId: '11',
+      modelName: 'Reno17',
+      ram: '12GB',
+      rom: '512GB',
+      colorName: '可可棕',
+    },
+  ].map((item) => ({
+    ...item,
+    edition: null,
+    goodsName: `${item.modelName} ${item.ram}+${item.rom} ${item.colorName}`,
+  }))
+  detail.snapshot.goods = goods
+  detail.snapshot.form.selectedPlatforms = ['ZHAOSHANG', 'KUAISHOU']
+  detail.snapshot.form.goodsForm.cards = [goods.slice(0, 3), goods.slice(3)].map(
+    (products, index) => ({
+      key: `common-${index}`,
+      cardType: 'COMMON',
+      followsOrderPlatforms: true,
+      targets: products.map(({ goodsId, spuId, ram, rom }) => ({ goodsId, spuId, ram, rom })),
+      subsidyPlans:
+        index === 0
+          ? [
+              { key: 'ratio', subsidyMode: 'RATIO', ratio: '25.00', priceBase: 'RETAIL_PRICE' },
+              {
+                key: 'fixed',
+                subsidyMode: 'FIXED',
+                fixedAmount: '50.00',
+                maxSubsidyAmount: '250.00',
+              },
+            ]
+          : [
+              {
+                key: 'fixed',
+                subsidyMode: 'FIXED',
+                fixedAmount: '10.00',
+                maxSubsidyAmount: '30.00',
+              },
+            ],
+      platformAssignments: [
+        { platformCode: 'ZHAOSHANG', planKey: index === 0 ? 'ratio' : 'fixed' },
+        { platformCode: 'KUAISHOU', planKey: 'fixed' },
+      ],
+    }),
+  )
+  return detail
 }

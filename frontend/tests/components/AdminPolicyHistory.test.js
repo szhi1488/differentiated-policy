@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import AdminPoliciesPage from '../../src/views/admin/policies/AdminPoliciesPage.vue'
 import AdminPolicyHistory from '../../src/views/admin/policies/AdminPolicyHistory.vue'
 import { auditLogs, currentDetail, historySnapshot } from '../fixtures/admin-policy-history'
+import { reviewRound } from '../fixtures/policy-review-round'
 
 let wrapper
 afterEach(() => {
@@ -26,8 +27,20 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
     if (path.startsWith('/api/admin/policies/5/audit-logs?')) {
       return Response.json({ items: auditLogs, total: 2 })
     }
-    if (path === '/api/admin/policies/5?includeCoverage=false') {
+    if (path === '/api/admin/policies/5') {
       return Response.json(detail)
+    }
+    if (path === '/api/policy-reviews/5?submissionVersion=2') {
+      return Response.json({ ...reviewRound(), reviewStage: 'PURCHASE_REVIEW' })
+    }
+    if (path === '/api/policy-reviews/5?submissionVersion=1') {
+      return Response.json({
+        ...reviewRound(),
+        submissionVersion: 1,
+        status: 'REJECTED',
+        reviewStage: null,
+        allowedActions: [],
+      })
     }
     return Response.json({
       items: [
@@ -102,10 +115,23 @@ it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖�
 
 it('记录和快照读取失败分别显示实际错误并可重试，空历史不生成演示记录', async () => {
   let failList = true,
-    failSnapshot = true
+    failSnapshot = true,
+    failRound = true
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path) => {
+      if (path === '/api/policy-reviews/5?submissionVersion=1') {
+        if (failRound) {
+          return Response.json({ message: '第一轮成员暂不可用' }, { status: 503 })
+        }
+        return Response.json({
+          ...reviewRound(),
+          submissionVersion: 1,
+          status: 'REJECTED',
+          reviewStage: null,
+          allowedActions: [],
+        })
+      }
       if (path.endsWith('/901')) {
         if (failSnapshot) {
           return Response.json({ message: '本轮快照暂不可用' }, { status: 503 })
@@ -135,6 +161,14 @@ it('记录和快照读取失败分别显示实际错误并可重试，空历史�
   await button(wrapper, '重试读取本轮内容').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain('未填写审核意见')
+  expect(wrapper.text()).toContain('历史机型名称')
+  expect(wrapper.text()).toContain('第一轮成员暂不可用')
+  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(false)
+  failRound = false
+  await button(wrapper, '重新读取本轮审核信息').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(true)
+  expect(fetch.mock.calls.filter(([path]) => path.endsWith('/901'))).toHaveLength(2)
   await button(wrapper, '返回审核记录').trigger('click')
   vi.mocked(fetch).mockResolvedValue(Response.json({ items: [], total: 0 }))
   await wrapper.setProps({ policyId: '6' })

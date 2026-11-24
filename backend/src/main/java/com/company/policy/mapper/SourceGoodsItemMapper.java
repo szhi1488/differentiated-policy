@@ -23,30 +23,16 @@ public interface SourceGoodsItemMapper {
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
           AND marker.batch_key LIKE 'CREATED-DATE-%' AND marker.action_type = 'CREATE'
         """;
-    String CREATED_DATE_JOB =
-            """
-        FROM goods_sync_job dated
-        WHERE dated.source_key = item.source_key
-          AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
-          AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
-        """;
     String CREATED_DATE_COLUMN =
             """
         <choose>
           <when test="createdDate != null">CAST(#{createdDate} AS DATE)</when>
           <otherwise>
-            COALESCE(
-              (SELECT CAST(RIGHT(marker.batch_key, 10) AS DATE)
+            (SELECT CAST(RIGHT(marker.batch_key, 10) AS DATE)
         """
                     + CREATED_DATE_LOG
                     + """
-               ORDER BY marker.id DESC LIMIT 1),
-              (SELECT dated.sync_date
-        """
-                    + CREATED_DATE_JOB
-                    + """
-               ORDER BY dated.id DESC LIMIT 1)
-            )
+               ORDER BY marker.id DESC LIMIT 1)
           </otherwise>
         </choose>
         AS created_date
@@ -54,18 +40,11 @@ public interface SourceGoodsItemMapper {
     String DATE_FILTER =
             """
         <if test="createdDate != null">
-          AND (
-            EXISTS (SELECT 1
+          AND EXISTS (SELECT 1
         """
                     + CREATED_DATE_LOG
                     + """
-                    AND marker.batch_key = CONCAT('CREATED-DATE-', #{createdDate}))
-            OR EXISTS (SELECT 1
-        """
-                    + CREATED_DATE_JOB
-                    + """
-                       AND dated.sync_date = #{createdDate})
-          )
+               AND marker.batch_key = CONCAT('CREATED-DATE-', #{createdDate}))
         </if>
         """;
     String FILTER =
@@ -137,18 +116,14 @@ public interface SourceGoodsItemMapper {
         <script>
         INSERT INTO catalog_operation_log
           (actor_type, entity_type, entity_id, action_type, batch_key, reason)
-        SELECT DISTINCT 'SYSTEM', 'SOURCE_GOODS_ITEM',
-               item.id, 'CREATE', CONCAT('CREATED-DATE-', dated.sync_date), '吉客云按建档日查询命中。'
+        SELECT 'SYSTEM', 'SOURCE_GOODS_ITEM',
+               item.id, 'CREATE', CONCAT('CREATED-DATE-', #{job.syncDate}), '吉客云按建档日查询命中。'
         FROM source_goods_item item
-        JOIN goods_sync_job dated
-          ON dated.source_key = item.source_key
-          AND dated.brand_name = item.brand_name AND dated.sync_mode = 'CREATED'
-          AND dated.id IN (item.first_seen_job_id, item.last_seen_job_id)
         LEFT JOIN catalog_operation_log marker
           ON marker.entity_type = 'SOURCE_GOODS_ITEM'
           AND marker.entity_id = item.id AND marker.actor_type = 'SYSTEM'
           AND marker.action_type = 'CREATE'
-          AND marker.batch_key = CONCAT('CREATED-DATE-', dated.sync_date)
+          AND marker.batch_key = CONCAT('CREATED-DATE-', #{job.syncDate})
         WHERE item.source_key = #{job.sourceKey}
           AND item.brand_name = #{job.brandName}
           AND marker.id IS NULL AND item.sku_id IN

@@ -17,6 +17,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 })
 public class PolicyApplication {
     public static void main(String[] args) {
+        if (args.length > 0 && "send-review-card".equals(args[0])) {
+            PolicyCardCommand.run(args);
+            return;
+        }
         SpringApplication.run(PolicyApplication.class, args);
     }
 }

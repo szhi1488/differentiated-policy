@@ -2,12 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { nextTick, ref } from 'vue'
 import { useSubsidyTimelineNavigation } from '../../src/composables/useSubsidyTimelineNavigation'
 import { readTimelineHistory } from '../../src/utils/policy-timeline'
-import {
-  billionGroupHistory,
-  history,
-  mixedBillionHistory,
-  retailGroupHistory,
-} from '../fixtures/subsidy-history'
+import { billionGroupHistory, retailGroupHistory } from '../fixtures/subsidy-history'
 import {
   timelineContainsAt,
   timelinePlanCaption,
@@ -82,13 +77,12 @@ describe('零售时间轴按当段商品范围展示', () => {
     expect(slices('21T00:00:00')).toHaveLength(0)
   })
 
-  it('仅部分配置商品命中、不同平台合计覆盖、旧响应缺少总数时均保留具体商品范围', () => {
+  it('仅部分配置商品命中、不同平台合计覆盖时均保留具体商品范围', () => {
     const sample = retailGroupHistory()
     const [one, two] = sample.tracks
     for (const response of [
       { ...sample, tracks: [two] },
       { ...sample, tracks: [{ ...one, platformCode: 'TMALL' }, two] },
-      { asOf: sample.asOf, tracks: sample.tracks },
     ]) {
       const { segments, rows } = readTimelineHistory(response)
       expect(segments.length).toBeGreaterThan(0)
@@ -97,13 +91,12 @@ describe('零售时间轴按当段商品范围展示', () => {
     }
   })
 
-  it('同名平台的零售与百亿分别分组，百亿历史商品轨道保留原定范围', () => {
+  it('同名平台的零售与百亿分别分组', () => {
     const sample = retailGroupHistory()
     const modern = { ...billionGroupHistory().tracks[0], platformCode: 'JD' }
-    const legacy = { ...history.tracks[0], perspective: 'BILLION', platformCode: 'PDD' }
     const { segments } = readTimelineHistory({
       ...sample,
-      tracks: [...sample.tracks, modern, legacy],
+      tracks: [...sample.tracks, modern],
     })
     const billion = segments.filter((s) => s.channel === 'BILLION')
     const jd = billion.filter((s) => s.platformCode === 'JD')
@@ -116,67 +109,11 @@ describe('零售时间轴按当段商品范围展示', () => {
         .map((s) => s.label)
         .sort(),
     ).toEqual(['初雪白、奇遇喵', '可可棕'].sort())
-    expect([
-      ...new Set(billion.filter((s) => s.platformCode === 'PDD').map((s) => s.label)),
-    ]).toEqual(['浮光白'])
+    expect(segments.some((s) => s.channel === 'RETAIL' && s.platformCode === 'JD')).toBe(true)
   })
 })
 
 describe('百亿时间轴按原单商品展示，保留配置级审核结果', () => {
-  it('混合轨按秒切换逐商品与配置级审核，相同配置段只算一次并按平台隔开', () => {
-    const sample = mixedBillionHistory()
-    const [jd] = billionGroupHistory().tracks
-    jd.platformCode = 'JD'
-    jd.policies = [jd.policies[0]]
-    const sameRound = (part) => ({
-      ...part,
-      adoptedAuditLogIds: ['1023'],
-      excludedAuditLogIds: [],
-      configurationDecision: true,
-    })
-    jd.segments = jd.segments.map(sameRound)
-    jd.plannedSegments = jd.plannedSegments.map(sameRound)
-    const { rows, segments } = readTimelineHistory({ ...sample, tracks: [...sample.tracks, jd] })
-    function at(time, platform = 'PDD') {
-      return segments.filter(
-        (s) => s.platformCode === platform && timelineContainsAt(s, '2026-11-' + time),
-      )
-    }
-    const old = at('07T23:59:59')
-    expect(old).toHaveLength(2)
-    for (const s of old) {
-      expect(s.configurationDecision).toBeFalsy()
-      expect(s.label).toBe(s.goods.length === 1 ? '可可棕' : '初雪白、奇遇喵')
-      expect(s.policies.map((p) => p.policyCode)).toEqual([
-        s.goods.length === 1 ? 'ZC-000021' : 'ZC-000022',
-      ])
-    }
-    for (const time of ['08T00:00:00', '14T23:59:59', '18T00:00:00']) {
-      const full = at(time)
-      expect(full).toHaveLength(1)
-      expect(full[0]).toMatchObject({ configurationDecision: true, label: '整组配置' })
-      expect(full[0].policies.map((p) => p.policyCode)).toEqual(['ZC-000023'])
-    }
-    for (const time of ['15T00:00:00', '16T12:00:00', '16T12:00:01', '17T23:59:59']) {
-      const split = at(time)
-      expect(split.map((s) => s.label).sort()).toEqual(['可可棕', '初雪白、奇遇喵'].sort())
-      for (const scope of split) {
-        expect(scope.configurationDecision).toBe(true)
-        expect([...scope.policies, ...scope.excluded].map((p) => p.policyCode).sort()).toEqual([
-          'ZC-000023',
-          'ZC-000024',
-        ])
-      }
-      const pddRows = rows.filter(
-        (r) =>
-          r.segment.platformCode === 'PDD' &&
-          r.parts.some((p) => timelineContainsAt(p, '2026-11-' + time)),
-      )
-      expect(pddRows).toHaveLength(3)
-      expect(at(time, 'JD').map((s) => s.label)).toEqual(['整组配置'])
-    }
-  })
-
   it.each(['COMMON', 'SPECIFIED'])(
     '单色 %s 原单仅在重叠时段拆组，换单和叠加保留整份名单',
     (type) => {
@@ -210,7 +147,7 @@ describe('百亿时间轴按原单商品展示，保留配置级审核结果', (
         for (const slice of slices) {
           expect(slice).toMatchObject({
             fullConfiguration: false,
-            configurationDecision: true,
+            channel: 'BILLION',
             planned,
             decision: stacked ? '同配置叠加' : '单独适用',
           })
@@ -236,22 +173,21 @@ describe('百亿时间轴按原单商品展示，保留配置级审核结果', (
     },
   )
 
-  it('单报部分普通商品显示颜色，缺少配置总数的历史配置轨沿用原始范围', () => {
+  it('单报部分普通商品显示颜色，数据遗漏配置总数时报告错误', () => {
     const partial = billionGroupHistory()
     partial.tracks[0].policies[0].selections[0].products.pop()
     const projected = readTimelineHistory(partial)
     expect(projected.rows.some((row) => row.segment.label === '整组配置')).toBe(false)
     expect(projected.segments.some((slice) => slice.label === '整组配置')).toBe(false)
     const { asOf, tracks } = billionGroupHistory()
-    const historical = readTimelineHistory({ asOf, tracks })
-    expect(new Set(historical.segments.map((slice) => slice.label))).toEqual(new Set(['整组配置']))
+    expect(() => readTimelineHistory({ asOf, tracks })).toThrow('配置商品总数')
   })
 
   it('原单没有已知时段时仍能看到完整或部分范围，不补画采用时段；无色名的商品按 ID 显示', () => {
     const sample = billionGroupHistory()
     const [track] = sample.tracks
     track.segments = []
-    delete track.plannedSegments
+    track.plannedSegments = []
     track.policies[1].selections[0].products = [{ goodsId: '61' }]
     const { rows, segments } = readTimelineHistory(sample)
     expect(segments).toEqual([])

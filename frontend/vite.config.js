@@ -14,6 +14,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-    proxy: { '/api': 'http://127.0.0.1:8080' },
+    proxy: {
+      '/api': 'http://127.0.0.1:8080',
+      '^/callbacks/feishu/policy-review$': 'http://127.0.0.1:8080',
+    },
   },
 })

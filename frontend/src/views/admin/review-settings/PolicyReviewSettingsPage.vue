@@ -7,6 +7,7 @@ import { readReviewSettings, saveReviewSettings } from '../../../api/policy-revi
 import { useLatestQuery } from '../../../composables/useLatestQuery'
 import { useReviewerSelectionWrite } from '../../../composables/useReviewerSelectionWrite'
 import ReviewerPicker from './ReviewerPicker.vue'
+import ReviewDeliveries from './ReviewDeliveries.vue'
 
 const { data: settings, loading, error, run } = useLatestQuery()
 const { saving, error: saveError, needsReload, reset, run: write } = useReviewerSelectionWrite()
@@ -79,7 +80,7 @@ function save() {
       </el-alert>
       <template v-else-if="settings">
         <el-alert
-          v-if="settings.policyChatConfigured === false"
+          v-if="!settings.policyChatConfigured"
           title="飞书业务群尚未配置，请部署人员核对服务端环境变量 FEISHU_POLICY_CHAT_ID。"
           type="warning"
           :closable="false"
@@ -100,6 +101,7 @@ function save() {
         </footer>
       </template>
     </section>
+    <ReviewDeliveries />
   </section>
 </template>
 

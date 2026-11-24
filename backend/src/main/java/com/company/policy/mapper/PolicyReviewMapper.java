@@ -23,8 +23,7 @@ public interface PolicyReviewMapper {
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.perspective')), 'null') AS channel_type,
             JSON_EXTRACT(snapshot_data, '$.form.selectedPlatforms') AS platforms,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.verifyType')), 'null') AS write_off_type,
-            COALESCE(JSON_EXTRACT(snapshot_data, '$.form.sceneTypes'),
-                     JSON_EXTRACT(snapshot_data, '$.form.sceneType')) AS scene_types
+            JSON_EXTRACT(snapshot_data, '$.form.sceneTypes') AS scene_types
           FROM policy_audit_log
         ) a
           ON a.policy_id = p.id AND a.tenant_key = p.tenant_key AND a.version = p.current_version
@@ -128,15 +127,31 @@ public interface PolicyReviewMapper {
     // 调整适用于整张旧单，查询独立于发起调整的新单商品、平台及自身有效期。
     @Select(
             """
-            SELECT a.policy_id AS request_id, a.audit_time, JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') AS changes
+            <script>
+            SELECT a.policy_id AS request_id, a.audit_time, JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') AS changes,
+              <choose><when test="targetId != null">target_audit.id</when><otherwise>NULL</otherwise></choose> AS target_audit_id
             FROM policy_audit_log a JOIN policy_apply p ON p.id=a.policy_id AND p.tenant_key=a.tenant_key AND p.current_version=a.version
+            <if test="targetId != null">
+                JOIN policy_apply target ON target.id=#{targetId} AND target.tenant_key=p.tenant_key
+                  AND target.is_deleted=0 AND target.status='APPROVED'
+                JOIN policy_audit_log target_audit ON target_audit.policy_id=target.id AND target_audit.tenant_key=target.tenant_key
+                  AND target_audit.version=target.current_version AND target_audit.audit_status='APPROVED'
+                  <if test="targetAuditId != null">AND target_audit.id=#{targetAuditId}</if>
+            </if>
             WHERE p.tenant_key=#{tenant} AND p.is_deleted=0 AND p.status='APPROVED' AND a.audit_status='APPROVED'
-              AND a.audit_time <= #{asOf} AND JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') IS NOT NULL
+              AND a.audit_time &lt;= #{asOf} AND JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') IS NOT NULL
+              <if test="targetId != null">
+                AND JSON_CONTAINS(JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments'),
+                    CONCAT('{"target":{"policyId":"', target.id, '","auditLogId":"', target_audit.id, '"}}'))
+              </if>
             ORDER BY a.audit_time,a.id
+            </script>
             """)
-    List<ApprovedChanges> approvedChanges(String tenant, LocalDateTime asOf);
+    List<ApprovedChanges> approvedChanges(
+            String tenant, LocalDateTime asOf, Long targetId, Long targetAuditId);
 
-    record ApprovedChanges(long requestId, LocalDateTime auditTime, String changes) {}
+    record ApprovedChanges(
+            long requestId, LocalDateTime auditTime, String changes, Long targetAuditId) {}
 
     // 负责一个实际使用的平台即可发起整单调整。旧单的分工、日期和渠道独立于本次表单。
     String ADJUSTABLE =
@@ -224,8 +239,7 @@ public interface PolicyReviewMapper {
           AND p.id != #{draftId} AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
           AND a.audit_time &lt;= #{asOf}
           AND ((LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
-          AND (<if test="includeExpiredLegacy">JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL OR </if>
-                 LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate}))
+          AND LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
           <if test="workflow">
               OR ((p.start_time IS NULL OR LEFT(p.start_time, 10) &lt;= #{lastDate})
                   AND (p.end_time IS NULL OR LEFT(p.end_time, 10) &gt;= #{firstDate}))
@@ -250,7 +264,6 @@ public interface PolicyReviewMapper {
             String firstDate,
             String lastDate,
             List<Scope> scopes,
-            boolean includeExpiredLegacy,
             boolean workflow);
 
     @Select(
@@ -274,10 +287,9 @@ public interface PolicyReviewMapper {
     @Select(
             """
         <script>
-        SELECT a.id, a.audit_time,
+        SELECT a.id,
             LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) AS first_date,
-            LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) AS last_date,
-            CASE WHEN JSON_EXTRACT(a.snapshot_data, '$.consent.ruleVersion') IS NULL THEN TRUE ELSE FALSE END AS no_consent
+            LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) AS last_date
         FROM policy_apply p
         JOIN policy_audit_log a ON a.policy_id = p.id AND a.version = p.current_version AND a.tenant_key = p.tenant_key
         WHERE p.tenant_key = #{tenant} AND p.is_deleted = 0 AND p.status = 'APPROVED'
@@ -298,12 +310,7 @@ public interface PolicyReviewMapper {
             List<ChannelPlatform> scopes,
             LocalDateTime asOf);
 
-    record TimelineIndex(
-            long id,
-            LocalDateTime auditTime,
-            String firstDate,
-            String lastDate,
-            boolean noConsent) {}
+    record TimelineIndex(long id, String firstDate, String lastDate) {}
 
     @Update(
             """
@@ -336,66 +343,5 @@ public interface PolicyReviewMapper {
             String remark,
             LocalDateTime now);
 
-    @Select(
-            """
-        <script>
-        SELECT platform_code, goods_id, policy_id, policy_no, version, audit_id, submitted_at, effective_from
-        FROM (
-          SELECT d.platform_code, d.goods_id, p.id AS policy_id, p.policy_no, a.version,
-            a.id AS audit_id, a.created_at AS submitted_at,
-            CASE WHEN p.start_time &gt; a.audit_time THEN p.start_time ELSE a.audit_time END AS effective_from,
-            ROW_NUMBER() OVER (PARTITION BY d.platform_code, d.goods_id
-              ORDER BY a.created_at DESC, a.id DESC) AS position_no
-          FROM policy_goods_detail d
-          JOIN policy_apply p ON p.id = d.policy_id AND p.current_version = d.version
-          JOIN policy_audit_log a ON a.policy_id = p.id AND a.version = d.version AND a.tenant_key = p.tenant_key
-          WHERE p.tenant_key = #{tenantKey} AND p.channel_type = #{perspective} AND p.is_deleted = 0
-            AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
-            AND p.start_time &lt;= #{at} AND a.audit_time &lt;= #{at}
-            AND (p.extension_source_id IS NULL OR p.end_time &gt;= #{at})
-          <if test="!ended.isEmpty()">
-            AND a.id NOT IN <foreach collection="ended" item="id" open="(" separator="," close=")">#{id}</foreach>
-          </if>
-          <choose>
-            <when test="policyId != null">
-              AND EXISTS (
-                SELECT 1 FROM policy_goods_detail targets
-                WHERE targets.policy_id = #{policyId} AND targets.version = #{version}
-                  AND targets.platform_code = d.platform_code AND targets.goods_id = d.goods_id
-              )
-            </when>
-            <when test="draftScope != null">
-              AND p.applicant_id = #{draftScope.applicantId}
-              AND (d.platform_code, d.goods_id) IN
-              <foreach collection="draftScope.targets" item="line" open="(" separator="," close=")">(#{line.platform}, #{line.goodsId})</foreach>
-            </when>
-            <otherwise>AND d.platform_code = #{platformCode} AND d.goods_id = #{goodsId}</otherwise>
-          </choose>
-        ) ranked WHERE position_no = 1
-        </script>
-        """)
-    List<WinnerRow> winners(
-            String tenantKey,
-            String perspective,
-            LocalDateTime at,
-            Long policyId,
-            Integer version,
-            String platformCode,
-            Long goodsId,
-            DraftScope draftScope,
-            List<Long> ended);
-
-    record DraftScope(long applicantId, List<PolicyApplyMapper.DetailLine> targets) {}
-
     record StatusCount(String status, long total) {}
-
-    record WinnerRow(
-            String platformCode,
-            long goodsId,
-            long policyId,
-            String policyNo,
-            int version,
-            long auditId,
-            LocalDateTime submittedAt,
-            LocalDateTime effectiveFrom) {}
 }

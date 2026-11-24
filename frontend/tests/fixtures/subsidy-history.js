@@ -51,6 +51,7 @@ const segment = (start, end, adopted, excluded = []) => ({
   excludedAuditLogIds: excluded.map((id) => '10' + id),
 })
 export const history = {
+  configurationGoodsCount: 2,
   asOf: at('16T12:00:00'),
   tracks: [
     {
@@ -169,36 +170,5 @@ export function billionGroupHistory(cardType = 'COMMON') {
         ],
       },
     ],
-  }
-}
-
-// 同平台曾有逐商品审核，接口因此分成两条商品轨。切换后的配置审核段在两轨完全相同。
-export function mixedBillionHistory(cardType = 'COMMON') {
-  const sample = billionGroupHistory(cardType)
-  const [modern] = sample.tracks
-  modern.policies[0].policyFrom = at('08T00:00:00')
-  modern.policies[0].approvedAt = at('08T00:00:00')
-  modern.segments[0].startAt = at('08T00:00:00')
-  const periods = modern.segments.map((part) => ({ ...part, configurationDecision: true }))
-  const planned = modern.plannedSegments.map((part) => ({ ...part, configurationDecision: true }))
-  const products = modern.policies[0].selections[0].products
-  return {
-    ...sample,
-    tracks: [[products[0]], products.slice(1)].map((items, index) => {
-      const code = index === 0 ? '21' : '22'
-      const legacy = policy(code, [{ ...common(fixed), products: items }], {
-        policyThrough: at('07T23:59:59'),
-      })
-      return {
-        ...modern,
-        goodsIds: items.map((g) => g.goodsId),
-        policies: [legacy, ...modern.policies],
-        segments: [
-          { ...segment('01T00:00:00', '08T00:00:00', [code]), configurationDecision: false },
-          ...periods,
-        ],
-        plannedSegments: planned,
-      }
-    }),
   }
 }

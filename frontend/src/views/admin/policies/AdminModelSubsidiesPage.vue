@@ -124,16 +124,11 @@ function relatedScope(a, b) {
   if (a.trackId === b.trackId) {
     return true
   }
-  if (
-    b.channel !== a.channel ||
-    b.platformCode !== a.platformCode ||
-    a.fullConfiguration === undefined ||
-    b.fullConfiguration === undefined
-  ) {
+  if (b.channel !== a.channel || b.platformCode !== a.platformCode) {
     return false
   }
-  if (b.configurationDecision) {
-    return !a.configurationDecision || a.configurationTrackId === b.configurationTrackId
+  if (b.channel === 'BILLION') {
+    return true
   }
   return a.goods.some((item) => b.goods.some((other) => other.id === item.id))
 }
@@ -153,7 +148,7 @@ const selected = computed(() => {
     if (exact) {
       return exact
     }
-    if (active.length > 1 && active[0].configurationDecision) {
+    if (active.length > 1 && active[0].channel === 'BILLION') {
       // 百亿各颜色共用配置审核名单。跨段优先跟随刚才查看的商品。
       const declared = active.find((s) =>
         inspected.segment.goods.some((g) => s.goods.some((item) => item.id === g.id)),
@@ -207,7 +202,7 @@ const upcoming = computed(() => {
     if (!relatedScope(scope, s)) {
       return false
     }
-    if (!s.configurationDecision) {
+    if (s.channel !== 'BILLION') {
       return true
     }
     if (starts.has(s.startAt)) {

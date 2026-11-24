@@ -74,6 +74,7 @@ export function reviewRound() {
       },
     ],
     changeSummary: { summary: '京东零售有一段新增叠加，需产品运营初审。' },
+    adjustments: [],
     changes: [
       {
         perspective: 'RETAIL',
@@ -86,6 +87,7 @@ export function reviewRound() {
         added: [added],
         retained: [old],
         removed: [],
+        candidates: [],
       },
     ],
     snapshot,

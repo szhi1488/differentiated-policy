@@ -120,10 +120,7 @@ public record PolicyResponse(
     }
 
     public record SubmissionPreview(
-            Snapshot snapshot,
-            PolicyReviewResponse.Coverage coverage,
-            String confirmationToken,
-            PolicyApplicability applicability) {}
+            Snapshot snapshot, String confirmationToken, PolicyApplicability applicability) {}
 
     public record AuditSummary(
             String id,

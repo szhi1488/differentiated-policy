@@ -15,9 +15,9 @@ import ApplicantLayout from '../../src/layouts/ApplicantLayout.vue'
 import { createWorkspaceRouter } from '../../src/router'
 import { createMemoryHistory } from 'vue-router'
 import { createAuthSession, authSession } from '../../src/composables/useAuthSession'
-import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
+import { catalogCenterSamples } from '../fixtures/catalog-center'
 import { direct, endOption, matchedPreview } from '../fixtures/policy-applicability'
-import { createForm, policyModelKey } from '../../src/utils/policy-form'
+import { createForm } from '../../src/utils/policy-form'
 
 const retail = RETAIL_PLATFORMS.map(([platformCode]) => ({ perspective: 'RETAIL', platformCode }))
 const crossChannel = [
@@ -33,7 +33,6 @@ const idFor = (value, values) => String(values.indexOf(value) + 1)
 const unique = (values) => [...new Set(values)]
 const brands = unique(active.map(({ brand }) => brand))
 const series = unique(active.map(({ series }) => series))
-const models = unique(active.map(policyModelKey))
 const catalog = active.map((item, index) => {
   const [ram, rom] = item.config.split('+').map((value) => value + 'GB')
   return {
@@ -42,7 +41,7 @@ const catalog = active.map((item, index) => {
     brandName: item.brand,
     seriesId: idFor(item.series, series),
     seriesName: item.series,
-    spuId: idFor(policyModelKey(item), models),
+    spuId: item.spuId,
     modelName: item.model,
     edition: item.version,
     ram,
@@ -121,7 +120,7 @@ beforeEach(() => {
       return reply(options)
     }
     if (url.pathname === '/api/policies/subsidy-timeline') {
-      return reply({ asOf: '2026-11-23T12:00:00+08:00', tracks: [] })
+      return reply({ asOf: '2026-11-23T12:00:00+08:00', configurationGoodsCount: 0, tracks: [] })
     }
     if (url.pathname === '/api/catalog/goods') {
       const filters = ['brandId', 'seriesId', 'spuId', 'ram', 'rom']
@@ -1231,7 +1230,7 @@ describe('申请人工作台组件协作', () => {
         perspective: 'RETAIL',
         selectedPlatforms: ['JD'],
         verifyType: 'SALES',
-        sceneType: 'NATIONAL_SUB',
+        sceneTypes: ['NATIONAL_SUB'],
         estimated: false,
         startTime: null,
         endTime: null,
@@ -1307,7 +1306,7 @@ describe('申请人工作台组件协作', () => {
       perspective: 'RETAIL',
       selectedPlatforms: ['JD'],
       verifyType: 'SALES',
-      sceneType: 'NATIONAL_SUB',
+      sceneTypes: ['NATIONAL_SUB'],
       estimated: false,
       startTime: null,
       endTime: null,

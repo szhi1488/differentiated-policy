@@ -68,7 +68,6 @@ final class PolicyWorkflowReplay {
             if (after.stream().noneMatch(r -> r.policy().proposed())) continue;
             var start = entry.getKey();
             var end = events.higherKey(start).minusSeconds(1);
-            if (before.stream().anyMatch(Round::missingConsent)) throw uncertain();
             var choice = choiceAt(choices, start);
             if (choice == null && after.size() != 1) throw uncertain();
             var selected =
@@ -81,47 +80,9 @@ final class PolicyWorkflowReplay {
                             : policiesById(after, choice.eligiblePolicyIds());
             var remainingOld = new TreeSet<>(PolicyApplicabilityEvaluator.NEWEST);
             after.stream().filter(r -> !r.policy().proposed()).forEach(remainingOld::add);
-            if (!retail && (perProduct(before) || perProduct(remainingOld))) {
-                // 旧单只在当时实际申报的颜色上执行，新单的决定则对整组配置生效。
-                var goods = new TreeSet<Long>();
-                for (var round : before) addGoods(goods, round);
-                for (var round : after) addGoods(goods, round);
-                for (long id : goods) {
-                    var productScope =
-                            new Scope(
-                                    scope.platformCode(),
-                                    id,
-                                    scope.spuId(),
-                                    scope.ram(),
-                                    scope.rom());
-                    compareAt(
-                            false,
-                            productScope,
-                            start,
-                            end,
-                            before,
-                            remainingOld,
-                            selected,
-                            candidates,
-                            changes);
-                }
-            } else {
-                compareAt(
-                        retail,
-                        scope,
-                        start,
-                        end,
-                        before,
-                        remainingOld,
-                        selected,
-                        candidates,
-                        changes);
-            }
+            compareAt(
+                    retail, scope, start, end, before, remainingOld, selected, candidates, changes);
         }
-    }
-
-    private static boolean perProduct(SortedSet<Round> active) {
-        return !active.isEmpty() && active.stream().allMatch(Round::legacy);
     }
 
     private static TreeMap<LocalDateTime, Decision> decisions(
@@ -165,12 +126,11 @@ final class PolicyWorkflowReplay {
             List<Policy> selected,
             List<Policy> candidates,
             List<PolicyExecutionChange> changes) {
-        long id = scope.goodsId() == null ? 0 : scope.goodsId();
-        var original = PolicyApplicabilityEvaluator.effectivePolicies(retail, before, id, start);
+        var original = PolicyApplicabilityEvaluator.effectivePolicies(retail, before, start);
         if (candidates.isEmpty() && remainingOld.size() != before.size()) {
             // 无需在确认窗口核对此段时，纯粹因旧单提前结束而产生的变化由时间调整明细说明。
             var cutOnly =
-                    PolicyApplicabilityEvaluator.effectivePolicies(retail, remainingOld, id, start);
+                    PolicyApplicabilityEvaluator.effectivePolicies(retail, remainingOld, start);
             if (!PolicyExecutionChange.sameMembers(original, cutOnly)
                     && PolicyExecutionChange.sameMembers(cutOnly, selected)) return;
         }
@@ -191,11 +151,6 @@ final class PolicyWorkflowReplay {
         var policies = after.stream().filter(r -> ids.contains(r.id())).map(Round::policy).toList();
         if (policies.size() != ids.size()) throw uncertain();
         return policies;
-    }
-
-    private static void addGoods(SortedSet<Long> ids, Round round) {
-        for (var selection : round.policy().selections())
-            for (var product : selection.products()) ids.add(Long.valueOf(product.goodsId()));
     }
 
     private static Window decisionWindow(boolean retail, Decision decision) {

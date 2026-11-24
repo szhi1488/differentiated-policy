@@ -451,8 +451,8 @@ CREATE TABLE policy_review_reassignment (
 CREATE TABLE policy_review_delivery (
   id BIGINT NOT NULL AUTO_INCREMENT,
   tenant_key VARCHAR(64) NOT NULL,
-  policy_id BIGINT NOT NULL,
-  version INT NOT NULL,
+  policy_id BIGINT DEFAULT NULL,
+  version INT DEFAULT NULL,
   event_key VARCHAR(128) NOT NULL,
   action_type VARCHAR(16) NOT NULL,
   recipient_key BIGINT NOT NULL,
@@ -467,6 +467,9 @@ CREATE TABLE policy_review_delivery (
   receipt_id VARCHAR(128) DEFAULT NULL,
   delivered_at DATETIME DEFAULT NULL,
   last_error VARCHAR(512) DEFAULT NULL,
+  notice_key VARCHAR(128) GENERATED ALWAYS AS (CASE WHEN policy_id IS NULL THEN event_key ELSE NULL END),
+  UNIQUE KEY uk_delivery_notice (tenant_key, notice_key),
+  CONSTRAINT ck_delivery_subject CHECK ((policy_id IS NOT NULL AND version IS NOT NULL) OR (policy_id IS NULL AND version IS NULL AND action_type='GROUP_MESSAGE' AND recipient_key=0)),
   PRIMARY KEY (id),
   UNIQUE KEY uk_review_delivery_event (tenant_key, policy_id, version, event_key, action_type, recipient_key),
   KEY idx_review_delivery_due (delivery_status, next_attempt_at, lease_until, id),
@@ -475,7 +478,7 @@ CREATE TABLE policy_review_delivery (
     REFERENCES policy_review_member (id, policy_id, version, tenant_key),
   CONSTRAINT ck_review_delivery_event CHECK (CHAR_LENGTH(TRIM(event_key)) > 0),
   CONSTRAINT ck_review_delivery_recipient CHECK ((action_type = 'GROUP_MESSAGE' AND recipient_key = 0)
-    OR (action_type IN ('CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
+    OR (action_type IN ('CREATE_TASK','CLOSE_TASK','SEND_CARD','UPDATE_CARD') AND recipient_key > 0)),
   CONSTRAINT ck_review_delivery_status CHECK (delivery_status IN ('PENDING','SENDING','SENT','RETRY','UNKNOWN','FAILED','CANCELLED')),
   CONSTRAINT ck_review_delivery_attempts CHECK (attempts >= 0),
   CONSTRAINT ck_review_delivery_payload CHECK (payload_json IS JSON OBJECT)

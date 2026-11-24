@@ -48,7 +48,7 @@ public final class CatalogCleaningRule {
     private CatalogCleaningRule() {}
 
     /** 检查各文本字段中的完整排除词，证据按来源字段保存。 */
-    public static Candidate directExclusion(SourceGoodsItem source) {
+    private static Candidate directExclusion(SourceGoodsItem source) {
         List<Evidence> hits = new ArrayList<>();
         for (var field :
                 List.of(

@@ -1,6 +1,5 @@
 package com.company.policy.vo;
 
-import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.entity.PolicyConsent;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Snapshot;
@@ -17,7 +16,6 @@ public final class PolicyReviewResponse {
             String perspective,
             List<String> platforms,
             String verifyType,
-            String sceneType,
             List<String> sceneTypes,
             String submittedAt,
             String status,
@@ -35,7 +33,6 @@ public final class PolicyReviewResponse {
             Summary policy,
             Snapshot snapshot,
             AuditSummary audit,
-            Coverage coverage,
             PolicyResponse.ApprovedEnd approvedEnd) {}
 
     public record Review(
@@ -45,15 +42,6 @@ public final class PolicyReviewResponse {
             int submissionVersion,
             String reviewTime,
             String reviewStage) {}
-
-    public record Coverage(String at, String effectiveFrom, List<CoverageItem> items) {}
-
-    public record CoverageItem(
-            String platformCode,
-            String goodsId,
-            String outcome,
-            Winner winner,
-            SubsidyPlan existingSubsidy) {}
 
     public record Winner(
             String id,
@@ -66,7 +54,7 @@ public final class PolicyReviewResponse {
     public record Applied(
             Winner winner, Snapshot snapshot, List<PolicyApplicability.Selection> selections) {}
 
-    public record Effective(String at, Winner winner, Snapshot snapshot, List<Applied> policies) {}
+    public record Effective(String at, List<Applied> policies) {}
 
     public record OverridePreview(
             PolicyApplicability applicability,

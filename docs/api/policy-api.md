@@ -4,7 +4,7 @@
 
 申请页已接入在售目录。「选择手机型号」每次确认新建一张普通卡，普通卡可通过「编辑」追加配置。「指定适用机型」每次选一个具体商品并单独成卡，数量按平台选填。政策接口按已确认三表设计。[动态表单与实单](../business/perspective-rules.md)
 
-更新日期 2026-11-23。已实现本人负责平台查询、草稿创建、继续保存、提交前覆盖确认、正式提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
+更新日期 2026-11-24。已实现本人负责平台查询、草稿创建、继续保存、提交前覆盖确认、正式提交，以及本人分页列表、当前详情和驳回原因。后台保留历轮审核和单轮提交快照接口，申请人页面不提供历史入口。
 
 ## 公共约定
 
@@ -26,8 +26,6 @@
 | POST | `/api/policies/drafts` | 首次保存，可携带当前可不完整的整单表单 | 201 |
 | POST | `/api/policies/{id}/time-adjustment-draft` | 从本人已通过的原单创建缩短或延期草稿 | 200 |
 | PUT | `/api/policies/{id}/time-adjustment-date` | 修改本人时间调整草稿或驳回单的截止时刻、原因及附件 | 200 |
-| POST | `/api/policies/{id}/extension-draft` | 兼容旧的单独延期入口，须填写原因 | 200 |
-| PUT | `/api/policies/{id}/extension-date` | 保存时间调整，字段同 `time-adjustment-date` | 200 |
 | PUT | `/api/policies/{id}/draft` | 整体保存本人草稿/已拒绝申请 | 200 |
 | DELETE | `/api/policies/{id}/draft?recordVersion={version}` | 物理删除本人未提交草稿 | 204 |
 | GET | `/api/policies/{id}/submission-preview?recordVersion={version}` | 核对本人拟提交的整单覆盖范围 | 200 |
@@ -67,7 +65,7 @@
 
 两类调整均从原单的获批轮次继承商品、平台、数量、补贴、特别备注和原附件。截止、原因和本次证明可编辑，调整方向在创建后固定。服务端把调整保存在草稿 `goods_form_json.timeAdjustment` 及提交快照 `$.form.goodsForm.timeAdjustment`。原单已获批的内容继续保留。延期另以 `policy_apply.extension_source_id` 关联直接原单，`sourcePolicyCode` 显示该原单号。相同起止、原因及附件重复创建已有延期草稿时返回原草稿。已有其他延期申请时返回 409 `POLICY_EXTENSION_EXISTS`。已获批的延期单可继续发起下一段延期。
 
-独立缩短草稿通过自身的 `submission-preview` 和 `submit` 接口送审。服务端从草稿绑定目标和调整内容，提交时带 `recordVersion` 与预览的 `confirmationToken` 即可。独立延期只核对新增时段，若有交叉须提交本轮逐段决定。旧的 `extension-draft` 只创建延期，创建或保存仍须填写原因。仅传日期字段 `endDate` 时按该日 23:59:59 处理。旧版未填写原因的延期草稿需补填再提交，已提交的历史轮次继续按原记录展示。[审核与状态](../business/status-machine.md)
+独立缩短草稿通过自身的 `submission-preview` 和 `submit` 接口送审。服务端从草稿绑定目标和调整内容，提交时带 `recordVersion` 与预览的 `confirmationToken` 即可。独立延期只核对新增时段，若有交叉须提交本轮逐段决定。创建或保存时间调整时填写原因及精确到秒的北京时间截止。[审核与状态](../business/status-machine.md)
 
 <a id="整单提前结束"></a>
 
@@ -113,7 +111,7 @@
 
 首次保存与更新使用同一套表单字段。创建最小请求为 `{ "perspective": "RETAIL" }`，创建时省略 `recordVersion`，服务端生成 ID、单号、申请人、状态和版本。创建不能携带任意状态、审核人、提交版本。页面通过 `Idempotency-Key` 发送首次保存 UUID。服务端按本人和该标识生成内部创建幂等标识，继续保存在现有 `policy_no` 字段；对外 `policyCode` 由申请 ID 生成为 `ZC-000005` 这样的短单号，最少六位且不截断更长 ID。同一标识和同一表单可重放未变化的首次草稿，其他冲突返回 409。首次保存结果未知时，页面复用原请求，拿到申请 ID 后再保存后续编辑。
 
-零售请求用 `sceneTypes` 传实际勾选项，「全部」展开为三个编码。空数组可保存草稿，提交至少选一项；未知、重复、空元素或新旧字段冲突均返回 400。百亿传 null 或省略。旧单选请求可继续传 `sceneType`，响应仅在选中一项时附带该标量。旧页面仅传标量或缺失数组，尝试覆盖已有多选零售草稿时返回 409 `POLICY_SCENES_CHANGED`，刷新新版后再保存。本人详情、管理员详情及历轮快照均返回该轮的选择；旧快照读取时将原单值映射成单元素数组。
+零售请求用 `sceneTypes` 数组传实际勾选项，「全部」展开为三个编码。空数组可保存草稿，提交至少选一项。编码未知、重复或包含空元素返回 400。百亿传 null 或省略。申请详情、管理员列表及历轮快照均返回当时选择的数组。管理员列表的单项筛选参数为 `sceneType`。
 
 草稿保存整体替换当前表单，须传 `recordVersion`。平台减少时同步校验卡片适用平台及方案分配。正式明细由后端在提交时生成。
 
@@ -171,37 +169,37 @@
 }
 ```
 
-前端通过白名单适配当前 `channel/platforms/scenes/mode/priceBase` 等字段。将 `remark/links` 分别映射为特别备注及外部链接项。申请内容仅保留一个特别备注字段，旧请求或旧快照中的 `otherExplanation` 作为兼容字段忽略。文件绑定和下载权限见 [附件接口](attachment-api.md)。
+前端通过白名单适配当前 `channel/platforms/scenes/mode/priceBase` 等字段。将 `remark/links` 分别映射为特别备注及外部链接项。申请内容使用一个特别备注字段 `specialRemark`。文件绑定和下载权限见 [附件接口](attachment-api.md)。
 
 ## 保存与提交响应
 
-创建或保存返回至少 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`。其中 `policyCode` 由已有申请 ID 格式化为 `ZC-` 加最少六位数字，重提时保持不变；`submissionVersion` 映射 `current_version`，仅供并发和后台日志使用，申请人页面不展示。`policy_no` 沿用内部创建幂等标识，不调整表结构或改写既有数据。新旧申请、管理员列表、详情、覆盖引用和快照响应统一返回短单号；旧快照仅在读取响应时适配编号，原始快照保持不变。详情还返回 `applicantName`、`form` 和目录展示用的 `goods`。草稿和已驳回申请从 `#/apply?policyId=<id>` 回填当前表单。待审及已通过内容读取当前轮次快照，页面按只读展示。
+创建或保存返回至少 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`。其中 `policyCode` 由已有申请 ID 格式化为 `ZC-` 加最少六位数字，重提时保持不变；`submissionVersion` 映射 `current_version`，仅供并发和后台日志使用，申请人页面不展示。`policy_no` 沿用内部创建幂等标识，不调整表结构或改写既有数据。申请及管理员列表按申请 ID 展示短单号。正式提交时将该编号写入本轮快照，查看详情或历轮记录时读取该轮保存的编号。详情还返回 `applicantName`、`form` 和目录展示用的 `goods`。草稿和已驳回申请从 `#/apply?policyId=<id>` 回填当前表单。待审及已通过内容读取当前轮次快照，页面按只读展示。
 
-提交前用保存返回的版本请求只读 `submission-preview`，限本人 `DRAFT` 和 `REJECTED`。`snapshot` 是该保存版本的拟提交内容，`applicability` 是确认页和提交使用的整单分段结果，`confirmationToken` 标识本次预览。已有 `coverage.items` 为旧客户端保留，仍按本人、渠道、平台及具体商品返回单时点对照；新判定会纳入当前负责平台上前任负责人的有效旧单。
+提交前用保存返回的版本请求只读 `submission-preview`，限本人 `DRAFT` 和 `REJECTED`。`snapshot` 是该保存版本的拟提交内容，`applicability` 是确认页和提交使用的整单分段结果，`confirmationToken` 标识本次预览。预览纳入当前负责平台上前任负责人提交的有效政策。
 
 ### 按日期试算适用范围
 
-同一 GET 响应新增 `applicability`。服务端核验草稿归属、记录版本及当前平台分工。对新增补贴的申请另核验商品在售状态。历史候选取本公司同渠道、同适用平台上已通过的当前提交轮次，包含已移交平台前任负责人的记录，以及已经提前获批的未来政策。交叉段 `scopes` 只返回命中范围的商品、补贴、单号及轮次。`adjustmentOptions` 另按本人分工及原单归属返回可缩短或延长的选项。待审核、驳回、草稿和已删除记录均不进入组合。
+预览响应的 `applicability` 提供整单分段结果。服务端核验草稿归属、记录版本及当前平台分工。对新增补贴的申请另核验商品在售状态。历史候选取本公司同渠道、同适用平台上已通过的当前提交轮次，包含已移交平台前任负责人的记录，以及已经提前获批的未来政策。交叉段 `scopes` 只返回命中范围的商品、补贴、单号及轮次。`adjustmentOptions` 另按本人分工及原单归属返回可缩短或延长的选项。待审核、驳回、草稿和已删除记录均不进入组合。
 
 | 字段 | 含义 |
 | --- | --- |
-| `dateBasis` | `SNAPSHOT_DATES`。新单用已保存表单，历史政策取获批快照的起止日期。上线时旧单同步采用快照截止日期。 |
+| `dateBasis` | `SNAPSHOT_DATES`。新单用已保存表单，历史政策取获批快照的起止日期。 |
 | `asOf / effectiveFrom / effectiveThrough` | 北京时间精确到秒。新单假设在 `asOf` 通过，取申请开始与该时刻较晚者作为起点。普通原单截止到结束日 23:59:59，延期单使用选定的截止时刻。历史单按实际审核通过时间生效，已批准的整单提前结束决定同时限定其截止。 |
 | `status / canDirectSubmit` | `DIRECT / true` 表示整单有可生效时段且没有任何命中；`NEEDS_CONFIRMATION / false` 表示至少一段需要核对；`NO_EFFECTIVE_PERIOD / false` 表示假设此刻审核已晚于截止。正式提交在事务内再次执行该判定。 |
 | `scopes[].scope` | 仅返回命中的范围。零售按 `platformCode + goodsId`；百亿按 `platformCode + spuId + ram + rom`。商品和机型 ID 使用字符串。 |
 | `scopes[].policies[]` | 每个范围内每份政策的当前轮次只出现一次，带 `policyId / policyCode / submissionVersion / auditLogId`、起效时间、核销类型、场景和所选商品行。拟提交轮次的 `proposed=true`，审核时间及日志 ID 为空。每条 `selections[]` 对应一张卡在该范围的商品及实际平台方案；`SPECIFIED` 单列商品、颜色及该平台数量，区分 0 与空值。 |
-| `scopes[].segments[]` | `from / through` 均含该秒，仅列时间上确有历史交集的段。零售 `groups[]` 给出完整的 `sceneTypes`、`verifyType` 和本组全部候选 `policyIds`，预览时 `winnerPolicyId` 为空；`eligiblePolicyIds` 给出该段去重后的政策 ID，可在同一范围的 `policies` 找到对应轮次和补贴。 |
+| `scopes[].segments[]` | `from / through` 均含该秒，仅列时间上确有历史交集的段。零售 `groups[]` 给出完整的 `sceneTypes`、`verifyType` 和本组全部候选 `policyIds`；`eligiblePolicyIds` 给出该段去重后的政策 ID，可在同一范围的 `policies` 找到对应轮次和补贴。 |
 
 | 分段动作 `action` | 申请人需要核对的内容 |
 | --- | --- |
 | `SELECT_RETAIL_POLICIES` | 零售在本段至少选一张，每个完整场景组合与核销类型组最多一张，可只选旧单或跨组选多张。 |
 | `STACK_OR_CHOOSE` | 百亿同配置出现交集，列出该段参与的政策，由申请人选择叠加或只用其中一份。不同颜色也可命中，指定商品在自己的卡片行显示。 |
 
-例如新单 ZC-000113 覆盖 11 月 1–25 日，另两份不同场景的旧单 ZC-000114、ZC-000115 分别覆盖 3–8 日和 15–20 日。两段 `eligiblePolicyIds` 分别引用 113 与 114、113 与 115 的申请 ID，8 日和 20 日的最后一秒均在各自段内。旧单 114 和 115 不会出现在同一段。确认页按 `applicability` 展示这两个交叉段，`coverage` 保留供旧接口调用方读取。服务端通过 `confirmationToken` 识别本次区间判定，另行核验每段选择。
+例如新单 ZC-000113 覆盖 11 月 1–25 日，另两份不同场景的旧单 ZC-000114、ZC-000115 分别覆盖 3–8 日和 15–20 日。两段 `eligiblePolicyIds` 分别引用 113 与 114、113 与 115 的申请 ID，8 日和 20 日的最后一秒均在各自段内。旧单 114 和 115 不会出现在同一段。确认页读取 `applicability.scopes` 展示这两个交叉段。服务端通过 `confirmationToken` 识别本次区间判定，另行核验每段选择。
 
 ### 正式提交
 
-启用 `POLICY_REVIEW_WORKFLOW_ENABLED` 后，服务端按本轮实际核验的内容分流，响应追加 `reviewStage`。有交叉段需要确认，或随本单提交了其他政策的截止调整，对应页面「确认整单并提交」，整轮进入 `PRODUCT_REVIEW`。例如 A 与 B 重叠后只留 A，或随单调整后没有交叉但仍需确认所选调整，均先给产品运营。没有确认段也没有随单调整，对应直接提交，取 `PURCHASE_REVIEW`。独立缩短本身所需的凭证只用于核验调整。服务端冻结本轮依据、审核人员和配置版本，按事务登记投递动作。[E 阶段分流与飞书投递](../architecture/policy-workflow-feishu-technical-design.md#nodes)
+正式提交时，服务端按本轮实际核验的内容分流，响应追加 `reviewStage`。有交叉段需要确认，或随本单提交了其他政策的截止调整，对应页面「确认整单并提交」，整轮进入 `PRODUCT_REVIEW`。例如 A 与 B 重叠后只留 A，或随单调整后没有交叉但仍需确认所选调整，均先给产品运营。没有确认段也没有随单调整，对应直接提交，取 `PURCHASE_REVIEW`。独立缩短本身所需的凭证只用于核验调整。服务端冻结本轮依据、审核人员和配置版本，按事务登记投递动作。外部投递由 `POLICY_REVIEW_DELIVERY_ENABLED` 单独控制，响应中的 `reviewStage` 表示 ERP 审核阶段。真实送达以投递回执为准。[各节点的收件人与回执](../architecture/policy-workflow-phase-e.md#各节点的收件人与回执)
 
 关闭开关时，新轮走原采购流程，省略 `reviewStage`。原申请人成功重提时，按原指派结办上轮修改待办。缺设置返回 409 `POLICY_REVIEW_SETTINGS_REQUIRED`，所需组无人合格或无法由两人分别签署返回 409 `POLICY_REVIEW_ASSIGNEES_MISSING`，原状态、轮次和附件保留。[审核设置接口](policy-review-settings.md) · [切换条件](../architecture/policy-workflow-phase-b.md#切换与运行边界)
 
@@ -234,9 +232,9 @@
 | 京东、该商品 ID | `2026-11-24T23:59:59+08:00` | `SELECT` | `["6","7"]` |
 | 京东、该商品 ID | `2026-11-25T23:59:59+08:00` | `SELECT` | `["3"]` |
 
-零售允许在当前段单用任一候选，也可返回编辑。若客户端已发送 `RETURN_TO_EDIT`，服务端也保留原状态、表单及附件。缺段、额外范围、空选择、重复 ID、越界或零售同组选多张均返回 409 `POLICY_CONFIRMATION_REQUIRED`。成功后 `snapshot.consent` 保存对照单号 ID 和审核轮次、各段候选和最终选中 ID。普通提交和仅独立延期沿用版本 2。调整清单仅含缩短时使用版本 3，含随单延期时发起单及生成的延期子单使用版本 4。直提轮次保存空的决定列表。旧快照继续按原内容读取。
+零售允许在当前段单用任一候选，也可返回编辑。若客户端已发送 `RETURN_TO_EDIT`，服务端也保留原状态、表单及附件。缺段、额外范围、空选择、重复 ID、越界或零售同组选多张均返回 409 `POLICY_CONFIRMATION_REQUIRED`。成功后 `snapshot.consent` 保存对照单号 ID 和审核轮次、各段候选和最终选中 ID。普通提交和仅独立延期沿用版本 2。调整清单仅含缩短时使用版本 3，含随单延期时发起单及生成的延期子单使用版本 4。直提轮次保存空的决定列表。回看历轮申请时读取该轮冻结的提交内容。
 
-零售确认页和提交接口须配套更新。已打开的旧预览须刷新后重新选择。已通过的旧版决定仍可回查。审核旧版待审单时，仍可生效的时段、分组及候选均一致，可沿用已有确认。分组或候选变化时由管理员驳回、申请人重新确认。此次修改使用已有快照字段，无需执行 SQL。
+审核时复核仍可生效的时段、分组和候选。依据发生变化时由管理员驳回，申请人重新确认后提交。
 
 提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照并转 PENDING。新增补贴的申请同时写入商品适用明细，独立缩短申请只保存快照。成功响应示例如下。
 
@@ -269,16 +267,16 @@
 
 `audit-logs` 使用同样的分页参数和响应外层，按提交轮次倒序。每条含字符串 `id`、`submissionVersion`、`submittedAt`、`auditStatus`、`auditorName`、`auditComment` 和 `auditTime`。审核状态为 `SUBMITTED`、`APPROVED` 或 `REJECTED`，待审轮次的审核信息为 `null`，未提交的草稿返回空页。
 
-本人列表及详情的 `reviewStage` 在待审时标明产品运营初审或采购终审。申请详情及继续编辑页在状态为 `REJECTED` 时，通过 `audit-logs?page=1&pageSize=1` 读取最新审核记录，核对 `submissionVersion` 与当前申请一致且日志为 `REJECTED`。页面顶部按该记录显示退回环节、原因、实际退回人和北京时间。`rejectedAtStage` 从新流程本轮的退回决定取得，可为 `PRODUCT_REVIEW` 或 `PURCHASE_REVIEW`，旧流程的驳回属于采购终审。未记录环节时页面明示缺失。采购未填意见时提示「审核人未填写驳回原因」，读取失败或轮次不一致时可重试。重提沿用原单与原申请人，服务端重新取得最新名单并冻结新轮。
+本人列表及详情的 `reviewStage` 在待审时标明产品运营初审或采购终审。申请详情及继续编辑页在状态为 `REJECTED` 时，通过 `audit-logs?page=1&pageSize=1` 读取最新审核记录，核对 `submissionVersion` 与当前申请一致且日志为 `REJECTED`。页面顶部按该记录显示退回环节、原因、实际退回人和北京时间。`rejectedAtStage` 从该轮的退回决定取得，可为 `PRODUCT_REVIEW` 或 `PURCHASE_REVIEW`。未记录环节时页面明示缺失。采购未填意见时提示「审核人未填写驳回原因」，读取失败或轮次不一致时可重试。重提沿用原单与原申请人，服务端重新取得最新名单并冻结新轮。
 
 单轮详情按列表返回的日志 `id` 查询，响应为 `{ "log": { ... }, "snapshot": { ... } }`。`snapshot` 包含原提交轮次的申请 ID、单号、申请人、完整表单与商品名称快照。每次读取先校验父申请的租户、申请人和删除状态，再按该申请匹配日志。草稿及驳回的编辑入口读取当前表单，历轮快照始终取自提交时保存的内容。
 
-### 提交快照的存储与兼容
+### 提交快照的存储与回读
 
 一次快照记录某份政策某一轮正式提交时的完整内容。`PolicySnapshotData` 是 Java 的 `record`（记录类），每次提交都有各自的字段值。固定金额、比例这样的有限选项才适合用枚举（`enum`）表达。快照使用现有审核日志的一个 JSON 字段，无需单独建表。[快照模型](../../backend/src/main/java/com/company/policy/entity/PolicySnapshotData.java)
 
 1. **提交。** 服务端校验已保存的表单和在售商品，取得该时点的商品名称、规格和颜色。`PolicySnapshotCodec` 将表单、补贴、附件引用、商品及本轮确认的 `consent` 序列化为 JSON。提交事务将 JSON 写入 MySQL 的 `policy_audit_log.snapshot_data`，同时更新申请状态。新增补贴的申请保存本轮商品明细，独立缩短单保留原申请的商品快照供审核。[快照编解码](../../backend/src/main/java/com/company/policy/support/policy/PolicySnapshotCodec.java)
-2. **回读。** 本人已提交详情、管理员审核详情、历轮记录和补贴对照读取所需轮次的快照。旧单号在展示时格式化，已移除的 `otherExplanation` 在响应中省略，数据库中的原文保留。新旧记录使用相同的 `form.goodsForm`、`form.attachmentInfo` 和 `goods` 路径，金额与比例保留十进制字符串，数量区分 0 和未填写。[旧格式回归样本](../../backend/src/test/java/com/company/policy/support/policy/PolicySnapshotCodecTest.java)
+2. **回读。** 本人已提交详情、管理员审核详情、历轮记录和补贴对照读取所需轮次的快照。当前轮直接读取提交时写入的对外单号、表单、商品与附件。读取器按当前字段解码。例如一轮的表单同时含 `sceneTypes` 和额外的 `sceneType` 时，只使用 `sceneTypes` 展示该轮的实际场景，原快照保持完整。金额与比例保留十进制字符串，数量区分 0 和未填写。[快照往返回归](../../backend/src/test/java/com/company/policy/support/policy/PolicySnapshotCodecTest.java)
 3. **重启和迁移。** 后端重启或更换 JAR 后，连接原 MySQL 数据库即可继续读取历轮政策。快照中的文件 ID 和文件名用于定位附件，原文件及元数据保存在附件目录，迁移时须一并保留。[附件存储和配置](attachment-api.md#存储和配置)
 
 ## 错误与实现要求

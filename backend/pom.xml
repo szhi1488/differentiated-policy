@@ -32,6 +32,20 @@
         </dependencies>
     </dependencyManagement>
     <dependencies>
+        <!-- 使用飞书官方长连接帧及其配套 Protobuf；HTTP、WebSocket 和 JSON 沿用 Java 17 与 Jackson。 -->
+        <dependency>
+            <groupId>com.larksuite.oapi</groupId>
+            <artifactId>oapi-sdk</artifactId>
+            <version>2.9.0</version>
+            <exclusions>
+                <exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.larksuite.oapi</groupId>
+            <artifactId>larksuite-oapi-shaded-protobuf</artifactId>
+            <version>2.4.6</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

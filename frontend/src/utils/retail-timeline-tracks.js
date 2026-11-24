@@ -64,7 +64,7 @@ export function groupPlatform(tracks, asOf) {
   const afterAsOf = Date.parse(asOf) + 1000
   for (const source of sources) {
     for (const planned of [false, true]) {
-      const intervals = planned ? (source.track.plannedSegments ?? []) : source.track.segments
+      const intervals = planned ? source.track.plannedSegments : source.track.segments
       for (const segment of intervals) {
         const from = Date.parse(segment.startAt)
         const through = segment.endAt === null ? afterAsOf : Date.parse(segment.endAt)
@@ -156,10 +156,6 @@ export function groupPlatform(tracks, asOf) {
 }
 
 export function retailDisplayTracks(response) {
-  // 旧接口没有配置总数，沿用明确的商品范围。
-  if (!(response.configurationGoodsCount > 0)) {
-    return response.tracks
-  }
   const platforms = new Map()
   for (const track of response.tracks) {
     if (track.perspective === 'RETAIL') {

@@ -3,8 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { expect, it } from 'vitest'
 import { ElSelect } from 'element-plus'
 import PolicyModelCard from '../../src/views/apply/components/PolicyModelCard.vue'
-import { createPolicyModel, policyGoodsKey } from '../../src/utils/policy-form'
-import { catalogCenterSamples } from '../../src/mocks/fixtures/catalog-center'
+import { createPolicyModel } from '../../src/utils/policy-form'
+import { catalogCenterSamples } from '../fixtures/catalog-center'
 
 it('回显商品型号，补贴输入只发修改意图，并显示共用方案的平台', async () => {
   const draft = { ...createPolicyModel(), goods: [catalogCenterSamples[0]] }
@@ -54,7 +54,7 @@ it('同型号的配置显示在同一行，多个型号和品牌分别显示', a
     props: {
       model: {
         ...createPolicyModel(),
-        goods: [...samples, differentColor].map((item) => ({ ...item, key: policyGoodsKey(item) })),
+        goods: [...samples, differentColor].map((item) => ({ ...item, key: item.id })),
       },
       platforms: [],
     },

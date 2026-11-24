@@ -15,7 +15,7 @@ public record PolicyConsent(
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<EndAdjustment> endAdjustments,
         @JsonInclude(JsonInclude.Include.NON_NULL) String batchPolicyKey) {
     public boolean supported() {
-        return ruleVersion >= 1 && ruleVersion <= 4;
+        return ruleVersion >= 2 && ruleVersion <= 4;
     }
 
     public PolicyConsent(

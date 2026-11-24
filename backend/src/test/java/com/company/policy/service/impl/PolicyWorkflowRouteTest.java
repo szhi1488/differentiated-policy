@@ -46,8 +46,7 @@ class PolicyWorkflowRouteTest {
                     mock(UserPlatformMapper.class),
                     snapshots,
                     mock(PolicyBatchExtensions.class),
-                    new ObjectMapper(),
-                    "");
+                    new ObjectMapper());
     private final PolicyApply entry = new PolicyApply();
     private final PolicyAuditLog approved = new PolicyAuditLog();
     private final Snapshot proposed = snapshot("128", "LOCAL_SUB", true);
@@ -71,7 +70,6 @@ class PolicyWorkflowRouteTest {
                         anyString(),
                         anyString(),
                         anyList(),
-                        eq(false),
                         anyBoolean()))
                 .thenReturn(List.of(42L));
         when(reviews.coverageSnapshots("company", List.of(42L))).thenReturn(List.of(approved));
@@ -185,7 +183,6 @@ class PolicyWorkflowRouteTest {
                         "RETAIL",
                         PLATFORMS,
                         "SALES",
-                        scene,
                         List.of(scene),
                         false,
                         "2026-12-01T00:00:00+08:00",

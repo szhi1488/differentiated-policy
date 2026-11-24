@@ -68,7 +68,6 @@ public class PolicyApplyController {
     }
 
     @GetMapping("/subsidy-timeline")
-    @ApiResponse(responseCode = "409", description = "历史涉及旧政策且未配置规则切换时间，POLICY_CUTOVER_REQUIRED")
     @Operation(
             summary = "查询本人负责渠道平台的机型补贴",
             description =
@@ -101,36 +100,23 @@ public class PolicyApplyController {
         return policies.create(sessions.requireLogin(request).user(), body, requestKey);
     }
 
-    @PostMapping(path = "/{id}/extension-draft", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(
-            summary = "从本人已通过政策创建延期草稿",
-            description = "延长段从原截止后一秒开始。原因必填，证明选传。相同时间、原因和附件的延期草稿可重复取得。")
-    public PolicyResponse extend(
-            @PathVariable long id,
-            @RequestBody PolicyDraftRequest.Extension body,
-            HttpServletRequest request) {
-        return policies.extend(sessions.requireLogin(request).user(), id, body);
-    }
-
     @PostMapping(path = "/{id}/time-adjustment-draft", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "对本人已通过政策创建时间调整申请", description = "新截止早于原截止为提前结束，晚于原截止为延期。原因必填，证明文件选传。")
     public PolicyResponse adjustTime(
             @PathVariable long id,
-            @RequestBody PolicyDraftRequest.Extension body,
+            @RequestBody PolicyDraftRequest.TimeAdjustment body,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestKey,
             HttpServletRequest request) {
         return policies.adjustTime(sessions.requireLogin(request).user(), id, body, requestKey);
     }
 
-    @PutMapping(
-            path = {"/{id}/extension-date", "/{id}/time-adjustment-date"},
-            consumes = MediaType.APPLICATION_JSON_VALUE)
+    @PutMapping(path = "/{id}/time-adjustment-date", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "修改本人时间调整草稿的截止、原因和证明文件", description = "限草稿或已驳回状态，须携带当前记录版本。")
-    public PolicyResponse saveExtensionDate(
+    public PolicyResponse saveTimeAdjustment(
             @PathVariable long id,
-            @RequestBody PolicyDraftRequest.Extension body,
+            @RequestBody PolicyDraftRequest.TimeAdjustment body,
             HttpServletRequest request) {
-        return policies.saveExtensionDate(sessions.requireLogin(request).user(), id, body);
+        return policies.saveTimeAdjustment(sessions.requireLogin(request).user(), id, body);
     }
 
     @PutMapping(path = "/{id}/draft", consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -2,7 +2,6 @@
 import { computed, ref } from 'vue'
 import PolicySubsidyFields from './PolicySubsidyFields.vue'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
-import { policyModelKey } from '../../../utils/policy-form'
 
 const props = defineProps({
   model: { type: Object, required: true },
@@ -33,7 +32,7 @@ function restoreOrderPlatforms() {
 const modelGroups = computed(() => {
   const groups = new Map()
   for (const item of props.model.goods) {
-    const key = policyModelKey(item)
+    const key = item.spuId
     if (!groups.has(key)) {
       groups.set(key, {
         key,

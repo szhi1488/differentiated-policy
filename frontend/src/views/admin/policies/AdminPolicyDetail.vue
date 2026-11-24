@@ -11,7 +11,13 @@ import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 import { subsidyText } from '../../../utils/policy-coverage'
 
-const props = defineProps({ detail: { type: Object, required: true } })
+const props = defineProps({
+  detail: { type: Object, required: true },
+  round: { type: Object, default: null },
+  roundBusy: Boolean,
+  roundError: { type: Error, default: null },
+})
+defineEmits(['retry-round'])
 const policy = computed(() => props.detail.policy)
 const form = computed(() => props.detail.snapshot.form)
 const audit = computed(() => props.detail.audit)
@@ -232,8 +238,23 @@ const basicFields = computed(() => {
       </section>
     </section>
   </div>
-  <section v-if="detail.round" class="admin-policy-detail-section">
-    <PolicyReviewMembers :round="detail.round" />
-    <slot name="member-actions" />
+  <section v-if="round || roundBusy || roundError" class="admin-policy-detail-section">
+    <p v-if="roundBusy" role="status">正在读取本轮审核信息…</p>
+    <el-alert
+      v-else-if="roundError"
+      title="本轮审核信息未能读取"
+      type="warning"
+      :closable="false"
+      show-icon
+    >
+      <p>{{ roundError.message }}</p>
+      <el-button link type="primary" @click="$emit('retry-round')">
+        {{ roundError.code === 'ROUND_RELOAD_REQUIRED' ? '重新读取政策' : '重新读取本轮审核信息' }}
+      </el-button>
+    </el-alert>
+    <template v-else-if="round">
+      <PolicyReviewMembers :round="round" />
+      <slot name="member-actions" />
+    </template>
   </section>
 </template>

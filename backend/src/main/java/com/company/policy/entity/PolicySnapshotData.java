@@ -3,7 +3,7 @@ package com.company.policy.entity;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
-/** policy_audit_log.snapshot_data 的持久化格式。已有提交和新提交共用这些字段名； 列表筛选、历史附件与补贴对照都依赖其 JSON 结构。 */
+/** policy_audit_log.snapshot_data 的持久化格式。列表筛选、历史附件与补贴对照都依赖其 JSON 结构。 */
 public record PolicySnapshotData(
         String id,
         String policyCode,
@@ -19,7 +19,6 @@ public record PolicySnapshotData(
             String perspective,
             List<String> selectedPlatforms,
             String verifyType,
-            String sceneType,
             List<String> sceneTypes,
             Boolean estimated,
             String startTime,

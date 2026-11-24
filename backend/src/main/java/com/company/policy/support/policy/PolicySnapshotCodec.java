@@ -2,26 +2,28 @@ package com.company.policy.support.policy;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyDraftRequest;
+import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.entity.PolicySnapshotData;
 import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.function.Function;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-/** 提交时冻结表单和商品，读取旧记录时只转换接口需要的字段。 */
+/** 提交时冻结表单和商品，按提交轮次还原。 */
 @Component
 public final class PolicySnapshotCodec {
-    // 快照独立于 HTTP 的 Jackson 配置。旧记录可能带有已移除的 otherExplanation 字段。
+    // 读取冻结快照时只解释当前模型的字段，避免额外的展示字段阻断整单详情。
     private final JsonMapper json =
             JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
 
-    /** 还原执行范围只核对快照中的实际商品、平台与补贴关联，旧目录展示字段可以缺失。 */
+    /** 还原执行范围只核对快照中的实际商品、平台与补贴关联。 */
     public static void requireReplayableCards(Snapshot snapshot) {
         var form = snapshot.form();
         if (form == null
@@ -86,10 +88,19 @@ public final class PolicySnapshotCodec {
         }
     }
 
-    public List<com.company.policy.entity.PolicyConsent.EndAdjustment> readEndAdjustments(
-            String value) {
+    public List<EndAdjustment> readEndAdjustments(String value, Long targetId, Long targetAuditId) {
         try {
-            return json.readValue(value, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            if (targetId == null)
+                return json.readValue(
+                        value, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            var matched = new ArrayList<EndAdjustment>();
+            for (var item : json.readTree(value)) {
+                var target = item.path("target");
+                if (targetId.toString().equals(target.path("policyId").textValue())
+                        && targetAuditId.toString().equals(target.path("auditLogId").textValue()))
+                    matched.add(json.treeToValue(item, EndAdjustment.class));
+            }
+            return matched;
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法读取已通过的整单提前结束记录。", error);
         }
@@ -128,7 +139,6 @@ public final class PolicySnapshotCodec {
                 value.perspective(),
                 value.selectedPlatforms(),
                 value.verifyType(),
-                value.sceneType(),
                 value.sceneTypes(),
                 value.estimated(),
                 value.startTime(),
@@ -142,14 +152,12 @@ public final class PolicySnapshotCodec {
         if (value == null) {
             return null;
         }
-        var scenes = PolicyScenes.fromLegacy(value.sceneTypes(), value.sceneType());
         return new PolicyDraftRequest(
                 value.recordVersion(),
                 value.perspective(),
                 value.selectedPlatforms(),
                 value.verifyType(),
-                PolicyScenes.single(scenes),
-                scenes,
+                value.sceneTypes(),
                 value.estimated(),
                 value.startTime(),
                 value.endTime(),

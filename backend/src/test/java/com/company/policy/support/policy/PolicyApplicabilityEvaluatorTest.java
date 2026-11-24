@@ -21,8 +21,6 @@ import com.company.policy.vo.PolicyApplicability.Scope;
 import com.company.policy.vo.PolicyApplicability.Segment;
 import com.company.policy.vo.PolicyApplicability.Status;
 import com.company.policy.vo.PolicyResponse.Snapshot;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -157,10 +155,9 @@ class PolicyApplicabilityEvaluatorTest {
         assertThat(segments.get(1).action()).isEqualTo(Action.SELECT_RETAIL_POLICIES);
         var national =
                 segments.get(1).groups().stream()
-                        .filter(g -> g.sceneType().equals("NATIONAL_SUB"))
+                        .filter(g -> g.sceneTypes().equals(NATIONAL))
                         .findFirst()
                         .orElseThrow();
-        assertThat(national.winnerPolicyId()).isNull();
         assertThat(national.policyIds()).containsExactly("118", "116");
         assertThat(segments.get(2).from()).isEqualTo(date(16, "00:00:00"));
     }
@@ -273,8 +270,7 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L),
                         PolicyFormValidation.time(date(24, "00:00:00")),
                         PolicyFormValidation.time(date(24, "23:59:59")),
-                        PolicyFormValidation.time(date(26, "12:00:00")),
-                        null);
+                        PolicyFormValidation.time(date(26, "12:00:00")));
         for (var old : List.of(olderCombined, national, local))
             timeline.include(old, Long.parseLong(old.id()), AS_OF.minusDays(3), AS_OF.minusDays(2));
         timeline.include(saved, 7, AS_OF, AS_OF.plusDays(1));
@@ -289,86 +285,10 @@ class PolicyApplicabilityEvaluatorTest {
                             "RETAIL", scope, LocalDateTime.of(2026, 11, day, 23, 59, 59));
             for (var old : List.of(olderCombined, national, local)) add(query, old);
             query.include(saved, 7, AS_OF, AS_OF.plusDays(1));
-            assertThat(query.effectivePolicies(scope, 8001).stream().map(p -> p.policyId()))
+            assertThat(query.effectivePolicies(scope).stream().map(p -> p.policyId()))
                     .containsExactlyInAnyOrderElementsOf(
                             day == 24 ? List.of("6", "3") : List.of("7"));
         }
-    }
-
-    @Test
-    void readsFrozenVersionOneGroupsAndRestoresTheirResultAfterANewDecisionEnds() throws Exception {
-        var combined = policy("3", 1, 30, "SALES", BOTH, PDD);
-        var codec = new PolicySnapshotCodec();
-        var json = new ObjectMapper();
-        var stored =
-                (ObjectNode) json.readTree(codec.write(policy("6", 1, 30, "SALES", NATIONAL, PDD)));
-        var oldConsent =
-                json.readTree(
-                        """
-                {"ruleVersion":1,"comparedRounds":[{"policyId":"3","submissionVersion":1,"auditLogId":"3"}],
-                 "decisions":[{"scope":{"platformCode":"PDD","goodsId":"8001"},
-                 "from":"2026-11-01T00:00:00+08:00","through":"2026-11-30T23:59:59+08:00",
-                 "action":"CONFIRM_STACK","groups":[
-                 {"sceneType":"NATIONAL_SUB","verifyType":"SALES","policyIds":["6","3"],"winnerPolicyId":"6"},
-                 {"sceneType":"LOCAL_SUB","verifyType":"SALES","policyIds":["3"],"winnerPolicyId":"3"}],
-                 "eligiblePolicyIds":["6","3"],"selectedPolicyIds":["6","3"]}]}
-                """);
-        stored.set("consent", oldConsent);
-        var old = codec.read(stored.toString());
-        var draft = policy("7", 23, 25, "SALES", BOTH, PDD);
-        var trial = new PolicyApplicabilityEvaluator(draft, AS_OF);
-        add(trial, combined);
-        add(trial, old);
-        var scope = trial.result().scopes().get(0).scope();
-        var choice =
-                new PolicyDraftRequest.Choice(
-                        scope, date(25, "23:59:59"), "SELECT", null, List.of("3"));
-        var saved = draft.withConsent(PolicyConfirmation.confirm(trial.result(), List.of(choice)));
-        for (var day : List.of(22, 23, 25, 26)) {
-            var query =
-                    new PolicyApplicabilityEvaluator(
-                            "RETAIL", scope, LocalDateTime.of(2026, 11, day, 23, 59, 59));
-            add(query, combined);
-            add(query, old);
-            query.include(saved, 7, AS_OF, AS_OF.plusDays(1));
-            assertThat(query.effectivePolicies(scope, 8001).stream().map(p -> p.policyId()))
-                    .containsExactlyElementsOf(
-                            day == 22 || day == 26 ? List.of("6", "3") : List.of("3"));
-        }
-    }
-
-    @Test
-    void pendingVersionOneConsentCanKeepItsConfirmedOutcomeWhenTheGroupsStillMatch() {
-        var draft = policy("7", 23, 25, "SALES", NATIONAL, PDD);
-        var trial = new PolicyApplicabilityEvaluator(draft, AS_OF);
-        var old = policy("3", 1, 30, "SALES", NATIONAL, PDD);
-        add(trial, old);
-        var preview = trial.result();
-        var range = PolicyConfirmation.ranges(preview).get(0);
-        var saved =
-                new PolicyConsent(
-                        1,
-                        PolicyConfirmation.comparedRounds(preview),
-                        List.of(
-                                new Decision(
-                                        range.scope(),
-                                        range.from(),
-                                        range.through(),
-                                        Action.ACKNOWLEDGE_EXCLUSIVE,
-                                        List.of(
-                                                new Group(
-                                                        "NATIONAL_SUB",
-                                                        "SALES",
-                                                        List.of("7", "3"),
-                                                        "7",
-                                                        null)),
-                                        List.of("7"),
-                                        List.of("7"))));
-        assertThat(PolicyConfirmation.requiresResubmission(saved, preview)).isFalse();
-        var changed =
-                new PolicyApplicabilityEvaluator(policy("7", 23, 25, "SALES", BOTH, PDD), AS_OF);
-        add(changed, old);
-        assertThat(PolicyConfirmation.requiresResubmission(saved, changed.result())).isTrue();
     }
 
     @Test
@@ -410,8 +330,7 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L, 8002L),
                         day,
                         day.plusHours(23),
-                        clock,
-                        null);
+                        clock);
         timeline.include(base, 81, AS_OF.minusDays(2), AS_OF);
         timeline.include(other, 82, AS_OF.minusDays(1), AS_OF);
         var track = timeline.tracks().get(0);
@@ -420,7 +339,6 @@ class PolicyApplicabilityEvaluatorTest {
         assertThat(track.policies().get(1).selections().get(0).quantity()).isZero();
         assertThat(track.policies().get(1).policyThrough()).isEqualTo(date(17, "23:59:59"));
         assertThat(track.segments()).hasSize(4);
-        assertThat(track.segments()).allMatch(s -> s.configurationDecision());
         assertThat(track.segments().get(1).excludedAuditLogIds()).containsExactly("82");
         assertThat(track.segments().get(1).endAt()).isEqualTo(date(16, "00:00:00"));
         assertThat(track.segments().get(2).adoptedAuditLogIds()).containsExactly("82", "81");
@@ -434,8 +352,7 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L, 8002L),
                         day,
                         day.plusHours(23),
-                        AS_OF,
-                        null);
+                        AS_OF);
         future.include(base, 81, AS_OF.minusDays(2), AS_OF);
         future.include(other, 82, AS_OF.minusDays(1), AS_OF);
         var projected = future.tracks().get(0);
@@ -449,11 +366,9 @@ class PolicyApplicabilityEvaluatorTest {
                 var point = new PolicyApplicabilityEvaluator("BILLION", scope, at);
                 point.include(base, 81, AS_OF.minusDays(2), AS_OF);
                 point.include(other, 82, AS_OF.minusDays(1), AS_OF);
-                for (long id : List.of(8001L, 8002L)) {
-                    assertThat(point.effectivePolicies(scope, id))
-                            .extracting(p -> p.auditLogId())
-                            .containsExactlyElementsOf(part.adoptedAuditLogIds());
-                }
+                assertThat(point.effectivePolicies(scope))
+                        .extracting(p -> p.auditLogId())
+                        .containsExactlyElementsOf(part.adoptedAuditLogIds());
             }
         }
         var onlyOld =
@@ -480,90 +395,12 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L, 8002L),
                         day,
                         day,
-                        clock,
-                        null);
+                        clock);
         single.include(base, 81, AS_OF.minusDays(2), AS_OF);
         single.include(onlyOld, 82, AS_OF.minusDays(1), AS_OF);
         assertThat(single.tracks().get(0).segments())
                 .noneMatch(s -> s.adoptedAuditLogIds().contains("82"));
         assertThat(single.tracks().get(0).policies()).hasSize(2);
-    }
-
-    @Test
-    void mixedBillionTimelineKeepsProductAndConfigurationDecisionBoundaries() {
-        var scope =
-                new com.company.policy.vo.PolicyApplicability.Scope(
-                        "PDD", null, 81L, "12GB", "256GB");
-        var keepOld =
-                new Decision(
-                        scope,
-                        date(1, "00:00:00"),
-                        date(6, "23:59:59"),
-                        Action.STACK_OR_CHOOSE,
-                        List.of(),
-                        List.of("201", "202"),
-                        List.of("201"));
-        var old = policy("201", 1, 8, null, List.of(), PDD).withConsent(null);
-        var white = card("COMMON", "PDD", null, WHITE);
-        var newer =
-                policy("202", 1, 6, null, List.of(), white)
-                        .withConsent(new PolicyConsent(2, List.of(), List.of(keepOld)));
-        var clock = PolicyFormValidation.time(date(20, "12:00:00"));
-        var timeline =
-                new PolicyTimelineBuilder(
-                        "BILLION",
-                        List.of("PDD"),
-                        81,
-                        "12GB",
-                        "256GB",
-                        List.of(8001L, 8002L),
-                        AS_OF,
-                        clock,
-                        clock,
-                        PolicyFormValidation.time(date(3, "00:00:00")));
-        timeline.include(old, 81, AS_OF, PolicyFormValidation.time(date(2, "00:00:00")));
-        timeline.include(
-                newer, 82, AS_OF.plusDays(2), PolicyFormValidation.time(date(5, "00:00:00")));
-        timeline.include(
-                policy("203", 12, 15, null, List.of(), white),
-                83,
-                AS_OF.plusDays(9),
-                PolicyFormValidation.time(date(13, "00:00:00")));
-
-        var tracks = timeline.tracks();
-        assertThat(tracks).hasSize(2);
-        for (var track : tracks) {
-            var segments = track.segments();
-            var first = segments.get(0);
-            assertThat(first.configurationDecision()).isFalse();
-            assertThat(first.adoptedAuditLogIds()).isEmpty();
-            if (track.goodsIds().contains("8001")) {
-                assertThat(first.excludedAuditLogIds()).containsExactly("82", "81");
-                var prior = segments.get(1);
-                assertThat(prior.configurationDecision()).isFalse();
-                assertThat(prior.endAt()).isEqualTo(date(5, "00:00:00"));
-                assertThat(prior.adoptedAuditLogIds()).containsExactly("81");
-                assertThat(prior.excludedAuditLogIds()).containsExactly("82");
-            } else {
-                assertThat(first.excludedAuditLogIds()).containsExactly("82");
-            }
-            // 新单获批后，两个颜色的采用和未采用名单均按配置决定。
-            var shared =
-                    segments.stream()
-                            .filter(s -> s.startAt().equals(date(5, "00:00:00")))
-                            .findFirst()
-                            .orElseThrow();
-            assertThat(shared.configurationDecision()).isTrue();
-            assertThat(shared.adoptedAuditLogIds()).containsExactly("81");
-            assertThat(shared.excludedAuditLogIds()).containsExactly("82");
-            // 新单已申报、尚未到获批时刻，其他日期的旧单不能改变其配置范围。
-            var waiting = segments.get(segments.size() - 2);
-            assertThat(waiting.startAt()).isEqualTo(date(12, "00:00:00"));
-            assertThat(waiting.configurationDecision()).isTrue();
-            assertThat(waiting.excludedAuditLogIds()).containsExactly("83");
-            assertThat(segments.get(segments.size() - 1).adoptedAuditLogIds())
-                    .containsExactly("83");
-        }
     }
 
     @Test
@@ -581,21 +418,19 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L, 8002L),
                         clock.toLocalDate().atStartOfDay(),
                         clock,
-                        clock,
-                        null);
+                        clock);
         timeline.include(shared, 10, AS_OF, AS_OF);
         var together = timeline.tracks().get(0);
         assertThat(together.goodsIds()).containsExactly("8001", "8002");
         assertThat(together.policies().get(0).selections().get(0).products()).hasSize(2);
         assertThat(together.segments().get(0).endAt()).isNull();
-        var late = policy("11", 10, 18, "SALES", NATIONAL, PDD);
+        var late = selectRetail(policy("11", 10, 18, "SALES", NATIONAL, PDD), shared);
         var approved = LocalDateTime.parse("2026-11-11T10:30:00");
         timeline.include(late, 11, AS_OF.plusDays(1), approved);
         var tracks = timeline.tracks();
         assertThat(tracks).hasSize(2);
         assertThat(tracks.get(0).goodsIds()).containsExactly("8001");
         var periods = tracks.get(0).segments();
-        assertThat(periods).noneMatch(s -> s.configurationDecision());
         assertThat(periods.get(1).excludedAuditLogIds()).containsExactly("11");
         assertThat(periods.get(1).endAt()).isEqualTo(date(11, "10:30:00"));
         assertThat(periods.get(2).adoptedAuditLogIds()).containsExactly("11");
@@ -607,17 +442,16 @@ class PolicyApplicabilityEvaluatorTest {
                             "RETAIL", scope, PolicyFormValidation.time(part.startAt()));
             point.include(shared, 10, AS_OF, AS_OF);
             point.include(late, 11, AS_OF.plusDays(1), approved);
-            assertThat(point.effectivePolicies(scope, 8001L))
+            assertThat(point.effectivePolicies(scope))
                     .extracting(p -> p.auditLogId())
                     .containsExactlyElementsOf(part.adoptedAuditLogIds());
         }
     }
 
     @Test
-    void historicalTimelineRequiresCutoverForLegacyAndReturnsContextOutsideTheFilter() {
+    void timelineReturnsApprovedContextOutsideTheFilter() {
         var query = PolicyFormValidation.time(date(3, "10:00:00"));
         var clock = PolicyFormValidation.time(date(23, "12:00:00"));
-        var cutoff = query.minusYears(1);
         var track =
                 new PolicyTimelineBuilder(
                         "RETAIL",
@@ -628,10 +462,9 @@ class PolicyApplicabilityEvaluatorTest {
                         List.of(8001L),
                         query,
                         query,
-                        clock,
-                        cutoff);
+                        clock);
         var base = policy("1", 1, 20, "SALES", NATIONAL, PDD);
-        var late = policy("2", 10, 12, "SALES", NATIONAL, PDD);
+        var late = selectRetail(policy("2", 10, 12, "SALES", NATIONAL, PDD), base);
         track.include(base, 1, AS_OF, AS_OF);
         track.include(late, 2, AS_OF.plusHours(1), AS_OF.plusHours(1));
         var result = track.tracks().get(0);
@@ -640,24 +473,6 @@ class PolicyApplicabilityEvaluatorTest {
                 .containsExactly(true, false);
         assertThat(result.segments().get(1).adoptedAuditLogIds()).containsExactly("2");
         assertThat(result.segments().get(2).adoptedAuditLogIds()).containsExactly("1");
-
-        var uncertain =
-                new PolicyTimelineBuilder(
-                        "RETAIL",
-                        List.of("PDD"),
-                        81,
-                        "12GB",
-                        "256GB",
-                        List.of(8001L),
-                        query,
-                        query,
-                        clock,
-                        null);
-        uncertain.include(base.withConsent(null), 1, AS_OF, AS_OF);
-        assertThatThrownBy(uncertain::tracks)
-                .isInstanceOfSatisfying(
-                        ApiException.class,
-                        e -> assertThat(e.getCode()).isEqualTo("POLICY_CUTOVER_REQUIRED"));
     }
 
     @Test
@@ -787,35 +602,6 @@ class PolicyApplicabilityEvaluatorTest {
                             assertThat(c.added().get(0).selections().get(0).quantity()).isZero();
                             assertThat(c.requiresProductReview()).isTrue();
                         });
-    }
-
-    @Test
-    void workflowRetainsEachLegacyBillionProductsOwnBaseline() {
-        var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
-        var trial =
-                new PolicyApplicabilityEvaluator(
-                        policy("403", 10, 15, null, null, card("COMMON", "PDD", null, WHITE)),
-                        AS_OF);
-        add(trial, policy("401", 1, 20, null, null, PDD).withConsent(null));
-        add(
-                trial,
-                policy("402", 1, 20, null, null, card("COMMON", "PDD", null, WHITE))
-                        .withConsent(null));
-        var confirmed =
-                PolicyConfirmation.confirm(
-                        trial.result(),
-                        List.of(
-                                new PolicyDraftRequest.Choice(
-                                        scope, date(15, "23:59:59"), "CHOOSE_ONE", "402", null)));
-        var changes = trial.workflowSegments(confirmed, Map.of());
-        assertThat(changes).hasSize(2);
-        assertThat(changes.get(0).scope().goodsId()).isEqualTo(8001L);
-        assertThat(changes.get(0).before()).extracting(Policy::policyId).containsExactly("401");
-        assertThat(changes.get(0).requiresProductReview()).isTrue();
-        assertThat(changes.get(1).scope().goodsId()).isEqualTo(8002L);
-        assertThat(changes.get(1).before()).extracting(Policy::policyId).containsExactly("402");
-        assertThat(changes.get(1).requiresProductReview()).isTrue();
-        assertThat(changes.get(1).kind()).isEqualTo(PolicyExecutionChange.Kind.UNCHANGED);
     }
 
     @ParameterizedTest
@@ -964,28 +750,15 @@ class PolicyApplicabilityEvaluatorTest {
                 .isInstanceOfSatisfying(
                         ApiException.class,
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
-        trial.include(
-                policy("302", 10, 14, "SALES", NATIONAL, PDD).withConsent(null),
-                302L,
-                AS_OF,
-                AS_OF,
-                false,
-                false);
-        var range = PolicyConfirmation.ranges(trial.result()).get(0);
-        var confirmed =
-                PolicyConfirmation.confirm(
-                        trial.result(),
-                        List.of(
-                                new PolicyDraftRequest.Choice(
-                                        range.scope(),
-                                        range.through(),
-                                        "SELECT",
-                                        null,
-                                        List.of("301"))));
-        assertThatThrownBy(() -> trial.workflowSegments(confirmed, Map.of()))
-                .isInstanceOfSatisfying(
-                        ApiException.class,
-                        e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
+        assertThatThrownBy(
+                        () ->
+                                trial.include(
+                                        policy("302", 10, 14, "SALES", NATIONAL, PDD)
+                                                .withConsent(null),
+                                        302L,
+                                        AS_OF,
+                                        AS_OF))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     private static String date(int day, String time) {
@@ -998,12 +771,12 @@ class PolicyApplicabilityEvaluatorTest {
                 new PolicyApplicabilityEvaluator(policy("303", 10, 14, "SALES", BOTH, PDD), AS_OF);
         var wrongColor =
                 policy("301", 10, 14, "SALES", NATIONAL, card("COMMON", "PDD", null, WHITE));
-        assertThatThrownBy(() -> trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF, false))
+        assertThatThrownBy(() -> trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF))
                 .isInstanceOfSatisfying(
                         ApiException.class,
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
         trial.includeApprovedEnd("301", PolicyFormValidation.time(date(9, "23:59:59")));
-        trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF, false);
+        trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF);
         assertThat(trial.result().canDirectSubmit()).isTrue();
     }
 
@@ -1032,6 +805,24 @@ class PolicyApplicabilityEvaluatorTest {
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
     }
 
+    private static Snapshot selectRetail(Snapshot proposal, Snapshot previous) {
+        var evaluator = new PolicyApplicabilityEvaluator(proposal, AS_OF);
+        add(evaluator, previous);
+        var preview = evaluator.result();
+        var choices =
+                PolicyConfirmation.ranges(preview).stream()
+                        .map(
+                                range ->
+                                        new PolicyDraftRequest.Choice(
+                                                range.scope(),
+                                                range.through(),
+                                                "SELECT",
+                                                null,
+                                                List.of(proposal.id())))
+                        .toList();
+        return proposal.withConsent(PolicyConfirmation.confirm(preview, choices));
+    }
+
     private static void add(PolicyApplicabilityEvaluator trial, Snapshot prior) {
         trial.include(prior, Long.parseLong(prior.id()), AS_OF.minusDays(3), AS_OF.minusDays(2));
     }
@@ -1054,7 +845,6 @@ class PolicyApplicabilityEvaluatorTest {
                         verify == null ? "BILLION" : "RETAIL",
                         List.of("PDD"),
                         verify,
-                        PolicyScenes.single(scenes),
                         scenes,
                         verify == null ? null : false,
                         date(from, "00:00:00"),
@@ -1091,6 +881,6 @@ class PolicyApplicabilityEvaluatorTest {
                 1,
                 form,
                 goods,
-                new PolicyConsent(1, List.of(), List.of()));
+                new PolicyConsent(2, List.of(), List.of()));
     }
 }

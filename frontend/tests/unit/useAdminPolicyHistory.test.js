@@ -74,7 +74,6 @@ it('切换申请后迟到的旧快照不能覆盖新记录，返回列表和卸�
   history.selectedLogId.value = '902'
   await settle()
   expect(history.detail.value.policy.reviewable).toBe(false)
-  expect(history.detail.value.coverage).toBeNull()
   history.selectedLogId.value = ''
   await settle()
   expect(history.detail.value).toBeNull()

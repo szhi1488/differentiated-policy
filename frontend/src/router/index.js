@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { parseReviewTarget } from '../utils/review-link'
 import { workspaceDestination } from '../utils/workspace-route'
 import { authSession } from '../composables/useAuthSession'
 
@@ -27,26 +28,19 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         props: { applicant: true },
       },
       {
-        path: '/reviews',
-        name: 'review-inbox',
-        meta: { reviewWorkspace: true },
-        component: () => import('../views/reviews/PolicyReviewInboxPage.vue'),
-      },
-      {
         path: '/reviews/unavailable',
         name: 'review-link-unavailable',
-        meta: { reviewWorkspace: true, menu: 'review-inbox' },
+        meta: { reviewWorkspace: true },
         component: () => import('../views/reviews/ReviewLinkUnavailable.vue'),
       },
       {
         path: '/reviews/:id',
         name: 'review-round',
-        meta: { reviewWorkspace: true, menu: 'review-inbox' },
+        meta: { reviewWorkspace: true },
         component: () => import('../views/reviews/PolicyReviewRoundPage.vue'),
         props: (route) => ({
           policyId: route.params.id,
           submissionVersion: Number(route.query.round),
-          node: route.query.node || '',
         }),
       },
       {
@@ -72,6 +66,7 @@ export function createWorkspaceRouter(history = createWebHashHistory(), session 
         name: 'admin-policies',
         meta: { role: 'ADMIN' },
         component: () => import('../views/admin/policies/AdminPoliciesPage.vue'),
+        props: (route) => ({ linkedReview: parseReviewTarget(route.fullPath) }),
       },
       {
         path: '/admin/model-subsidies',

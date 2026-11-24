@@ -48,10 +48,10 @@ const goodsText = (goods) =>
   goods.map((g) => [g.color, '#' + g.id].filter(Boolean).join(' ')).join('、')
 const policyCodes = (plans) => [...new Set(plans.map((plan) => plan.policyCode))].join('、')
 const scheduleScope = (period) =>
-  period.configurationDecision ? '审核范围 · 整组配置' : period.label
+  period.channel === 'BILLION' ? '审核范围 · 整组配置' : period.label
 const upcomingScopes = computed(
   () =>
-    new Set(props.upcoming.map((s) => (s.configurationDecision ? 'configuration' : s.trackId)))
+    new Set(props.upcoming.map((s) => (s.channel === 'BILLION' ? 'configuration' : s.trackId)))
       .size,
 )
 const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.length > 0)
@@ -96,7 +96,7 @@ const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.len
         </span>
         <h3>{{ segment.decision }}</h3>
         <p>{{ configuration }}</p>
-        <template v-if="segment.configurationDecision">
+        <template v-if="segment.channel === 'BILLION'">
           <p v-if="!segment.fullConfiguration && segment.goods.length">
             本段申报商品 · {{ goodsText(segment.goods) }}
           </p>

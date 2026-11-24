@@ -166,7 +166,7 @@ CREATE TABLE policy_review_delivery (
     REFERENCES policy_review_member (id, policy_id, version, tenant_key),
   CONSTRAINT ck_review_delivery_event CHECK (CHAR_LENGTH(TRIM(event_key)) > 0),
   CONSTRAINT ck_review_delivery_recipient CHECK ((action_type = 'GROUP_MESSAGE' AND recipient_key = 0)
-    OR (action_type IN ('CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
+    OR (action_type IN ('SEND_CARD','UPDATE_CARD','CREATE_TASK','CLOSE_TASK') AND recipient_key > 0)),
   CONSTRAINT ck_review_delivery_status CHECK (delivery_status IN ('PENDING','SENDING','SENT','RETRY','UNKNOWN','FAILED','CANCELLED')),
   CONSTRAINT ck_review_delivery_attempts CHECK (attempts >= 0),
   CONSTRAINT ck_review_delivery_payload CHECK (JSON_TYPE(payload_json) = 'OBJECT')

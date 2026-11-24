@@ -11,6 +11,7 @@ import com.company.policy.mapper.UserManagementMapper;
 import com.company.policy.mapper.UserManagementMapper.DetailRow;
 import com.company.policy.mapper.UserPlatformMapper;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.ExecutionNotices;
 import com.company.policy.service.UserManagementService;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PageResponse;
@@ -43,12 +44,15 @@ public class UserManagementServiceImpl implements UserManagementService {
     private final UserManagementMapper users;
     private final UserPlatformMapper platforms;
     private final Clock clock;
+    private final ExecutionNotices executionNotices;
 
     public UserManagementServiceImpl(
             CatalogAccess access,
             UserManagementMapper users,
             UserPlatformMapper platforms,
-            Clock clock) {
+            Clock clock,
+            ExecutionNotices executionNotices) {
+        this.executionNotices = executionNotices;
         this.access = access;
         this.users = users;
         this.clock = clock;
@@ -182,7 +186,7 @@ public class UserManagementServiceImpl implements UserManagementService {
             throw stale("USER_ROLE_CONFLICT");
         }
         if ("ADMIN".equals(request.roleType())) {
-            platforms.release(admin.getTenantKey(), id);
+            releaseAll(admin.getTenantKey(), id);
         }
         return detailResponse(users.detail(admin.getTenantKey(), id));
     }
@@ -227,7 +231,7 @@ public class UserManagementServiceImpl implements UserManagementService {
             throw stale("USER_STATUS_CONFLICT");
         }
         if (deleted == 1) {
-            platforms.release(admin.getTenantKey(), id);
+            releaseAll(admin.getTenantKey(), id);
         }
         return detailResponse(users.detail(admin.getTenantKey(), id));
     }
@@ -265,9 +269,21 @@ public class UserManagementServiceImpl implements UserManagementService {
             for (var scope : request.platforms()) {
                 platforms.assign(tenant, id, scope);
             }
+            for (var scope : current)
+                if (!request.platforms().contains(scope))
+                    executionNotices.platformChanged(tenant, scope, id, false);
+            for (var scope : request.platforms())
+                if (!current.contains(scope))
+                    executionNotices.platformChanged(tenant, scope, id, true);
         } catch (DuplicateKeyException error) {
             throw conflict("USER_PLATFORMS_CONFLICT", "所选渠道的平台已有负责人，请重新读取后确认。");
         }
+    }
+
+    private void releaseAll(String tenant, long id) {
+        var released = platforms.assigned(tenant, id);
+        platforms.release(tenant, id);
+        released.forEach(s -> executionNotices.platformChanged(tenant, s, id, false));
     }
 
     private static boolean validScopes(List<ChannelPlatform> scopes) {
