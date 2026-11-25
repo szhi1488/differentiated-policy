@@ -291,7 +291,6 @@ class PolicyPurchaseReviewTest {
                 TENANT,
                 owner.id());
         review(buyer, source, "APPROVE").andExpect(status().isOk());
-        jdbc.update("UPDATE policy_apply SET extension_source_id=? WHERE id=?", source, extension);
         seedScopedSnapshot(extension, goods, source);
         member(extension, buyer, "PURCHASE", "ACTIVE");
         mvc.perform(
@@ -354,7 +353,7 @@ class PolicyPurchaseReviewTest {
                 .doesNotContain(demoted.id(), signer);
         if (signer == buyer.id()) assertThat(notified).hasSize(2);
         else assertThat(notified).contains(buyer.id()).hasSize(3);
-        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isOne();
+        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
         assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
         expectProductFailure(operator, id, "REJECT", "晚到", HttpStatus.CONFLICT);
         review(peer, id, "APPROVE", 3, 1).andExpect(status().isOk());
@@ -469,7 +468,7 @@ class PolicyPurchaseReviewTest {
         assertThat(rejected.recordVersion()).isEqualTo(3);
         expectProductFailure(buyer, id, "APPROVE", null, HttpStatus.CONFLICT);
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
-        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isOne();
+        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
         assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(owner.id());
         assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
         assertThat(
@@ -497,7 +496,7 @@ class PolicyPurchaseReviewTest {
         member(id, peer, "PURCHASE", "ACTIVE");
         raceProduct(id, first, second, "REJECT");
         assertThat(count(id, "policy_review_decision")).isOne();
-        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isOne();
+        assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
         if ("PENDING".equals(state(id)))
             assertThat(taskOwners(id, "PRODUCT_DECIDED"))
                     .containsExactlyInAnyOrder(buyer.id(), peer.id());
@@ -517,7 +516,7 @@ class PolicyPurchaseReviewTest {
         review(peer, id, "APPROVE").andExpect(status().isConflict());
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
         assertThat(taskOwners(id, "PURCHASE_DECIDED")).containsExactly(owner.id());
-        assertThat(groupMessages(id, "PURCHASE_DECIDED")).isOne();
+        assertThat(groupMessages(id, "PURCHASE_DECIDED")).isZero();
         assertThat(closedReasons(id, "CLOSE_TASK")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
     }
 
@@ -617,6 +616,7 @@ class PolicyPurchaseReviewTest {
                                         "SELECT snapshot_data FROM policy_audit_log WHERE policy_id=?",
                                         String.class,
                                         id));
+        snapshot.put("policyCode", "ZC-%06d".formatted(id));
         var form = (ObjectNode) snapshot.path("form");
         var goodsForm = (ObjectNode) form.path("goodsForm");
         var card =
@@ -642,17 +642,19 @@ class PolicyPurchaseReviewTest {
                 .put("platformCode", "JD")
                 .put("planKey", "plan");
         if (source != null) {
-            snapshot.put("sourcePolicyCode", "ZC-%06d".formatted(source));
-            form.put("startTime", "2099-04-06T00:00:00+08:00")
-                    .put("endTime", "2099-04-08T15:30:31+08:00");
+            form.put("startTime", "2099-05-01T00:00:00+08:00")
+                    .put("endTime", "2099-05-03T15:30:31+08:00");
             var adjustment =
-                    goodsForm
-                            .putObject("timeAdjustment")
+                    ((ObjectNode) snapshot.get("consent"))
+                            .put("ruleVersion", 4)
+                            .putArray("endAdjustments")
+                            .addObject()
                             .put("endTime", "2099-04-08T15:30:31+08:00")
                             .put("reason", "延长活动");
             adjustment
                     .putObject("target")
                     .put("policyId", source.toString())
+                    .put("recordVersion", 3)
                     .put(
                             "auditLogId",
                             jdbc.queryForObject(
@@ -661,7 +663,12 @@ class PolicyPurchaseReviewTest {
                                     source))
                     .put("previousEnd", "2099-04-05T23:59:59+08:00");
         }
-        jdbc.update("UPDATE policy_apply SET platforms=? WHERE id=?", "[\"JD\"]", id);
+        jdbc.update(
+                "UPDATE policy_apply SET platforms=?,start_time=?,end_time=? WHERE id=?",
+                "[\"JD\"]",
+                java.time.OffsetDateTime.parse(form.get("startTime").asText()).toLocalDateTime(),
+                java.time.OffsetDateTime.parse(form.get("endTime").asText()).toLocalDateTime(),
+                id);
         jdbc.update(
                 "UPDATE policy_audit_log SET snapshot_data=? WHERE policy_id=?",
                 snapshot.toString(),

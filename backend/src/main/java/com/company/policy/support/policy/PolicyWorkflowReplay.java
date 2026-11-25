@@ -38,13 +38,14 @@ final class PolicyWorkflowReplay {
     }
 
     static void compare(
+            PolicyApplicabilityEvaluator evaluator,
             boolean retail,
             Scope scope,
             Window requested,
             List<Round> approved,
             List<Round> adjusted,
             List<Decision> confirmed,
-            List<PolicyExecutionChange> changes) {
+            PolicyRouteSummary.Evaluation evaluation) {
         var events = new TreeMap<LocalDateTime, Boundary>();
         for (var round : approved) {
             var window = requested.intersect(round.window());
@@ -72,16 +73,27 @@ final class PolicyWorkflowReplay {
             if (choice == null && after.size() != 1) throw uncertain();
             var selected =
                     choice == null
-                            ? List.of(after.first().policy())
-                            : policiesById(after, choice.selectedPolicyIds());
+                            ? List.of(after.first())
+                            : roundsById(after, choice.selectedPolicyIds());
             var candidates =
                     choice == null
                             ? List.<Policy>of()
-                            : policiesById(after, choice.eligiblePolicyIds());
+                            : roundsById(after, choice.eligiblePolicyIds()).stream()
+                                    .map(Round::policy)
+                                    .toList();
             var remainingOld = new TreeSet<>(PolicyApplicabilityEvaluator.NEWEST);
             after.stream().filter(r -> !r.policy().proposed()).forEach(remainingOld::add);
             compareAt(
-                    retail, scope, start, end, before, remainingOld, selected, candidates, changes);
+                    evaluator,
+                    retail,
+                    scope,
+                    start,
+                    end,
+                    before,
+                    remainingOld,
+                    selected,
+                    candidates,
+                    evaluation);
         }
     }
 
@@ -117,24 +129,25 @@ final class PolicyWorkflowReplay {
     }
 
     private static void compareAt(
+            PolicyApplicabilityEvaluator evaluator,
             boolean retail,
             Scope scope,
             LocalDateTime start,
             LocalDateTime end,
             SortedSet<Round> before,
             SortedSet<Round> remainingOld,
-            List<Policy> selected,
+            List<Round> selectedRounds,
             List<Policy> candidates,
-            List<PolicyExecutionChange> changes) {
-        var original = PolicyApplicabilityEvaluator.effectivePolicies(retail, before, start);
+            PolicyRouteSummary.Evaluation evaluation) {
+        var original = evaluator.effectivePolicies(before, start);
+        var selected = selectedRounds.stream().map(Round::policy).toList();
         if (candidates.isEmpty() && remainingOld.size() != before.size()) {
             // 无需在确认窗口核对此段时，纯粹因旧单提前结束而产生的变化由时间调整明细说明。
-            var cutOnly =
-                    PolicyApplicabilityEvaluator.effectivePolicies(retail, remainingOld, start);
+            var cutOnly = evaluator.effectivePolicies(remainingOld, start);
             if (!PolicyExecutionChange.sameMembers(original, cutOnly)
                     && PolicyExecutionChange.sameMembers(cutOnly, selected)) return;
         }
-        changes.add(
+        evaluation.add(
                 PolicyExecutionChange.compare(
                         retail ? "RETAIL" : "BILLION",
                         scope,
@@ -142,13 +155,14 @@ final class PolicyWorkflowReplay {
                         end,
                         original,
                         selected,
-                        candidates));
+                        candidates),
+                selectedRounds);
     }
 
-    private static List<Policy> policiesById(SortedSet<Round> after, List<String> policyIds) {
-        // 本轮确认使用正式候选 ID。已经获批的延期单在历史回放时由 effectivePolicies 还原别名。
+    private static List<Round> roundsById(SortedSet<Round> after, List<String> policyIds) {
+        // 当前拟定的新增时段可带临时 ID，与本轮确认中冻结的候选一致。
         var ids = new HashSet<>(policyIds);
-        var policies = after.stream().filter(r -> ids.contains(r.id())).map(Round::policy).toList();
+        var policies = after.stream().filter(r -> ids.contains(r.id())).toList();
         if (policies.size() != ids.size()) throw uncertain();
         return policies;
     }

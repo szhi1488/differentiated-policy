@@ -25,7 +25,35 @@ export const timelineDecimal = (value) =>
     .replace(/(\.\d*?)0+$/, '$1')
 
 export function timelineGoodsLabel(goods) {
-  return [...new Set(goods.map((g) => g.color || '#' + g.id))].join('、')
+  return goods.map((g) => g.label || g.color || '#' + g.id).join('、')
+}
+
+export function timelinePartStatus(part) {
+  return part.status ?? (part.mixed ? '部分采用' : part.used ? '采用' : '未采用')
+}
+
+// 新普通卡以当轮确认的商品总数和申报 ID 为准；早期普通卡按原有目录口径识别。
+export function timelineGoodsScope(goods, plans, configurationGoodsCount) {
+  const fullConfiguration =
+    goods.length > 0 &&
+    plans.length > 0 &&
+    plans.every((plan) => {
+      if (plan.cardType !== 'COMMON') {
+        return false
+      }
+      if (plan.wholeConfigurationGoodsCount === null) {
+        return goods.length === configurationGoodsCount
+      }
+      if (goods.length !== plan.wholeConfigurationGoodsCount) {
+        return false
+      }
+      const declared = new Set(plan.goods.map((g) => g.id))
+      return goods.every((g) => declared.has(g.id))
+    })
+  return {
+    fullConfiguration,
+    label: fullConfiguration ? '整组配置' : timelineGoodsLabel(goods) || '原单未注明商品',
+  }
 }
 
 export function appendTimelinePart(parts, startAt, endAt, used, open, planned) {
@@ -45,9 +73,12 @@ export function timelinePlanText(segment) {
 }
 
 export function timelinePlanDetail(segment) {
-  return segment.subsidyMode === 'FIXED'
-    ? `补贴上限：${segment.maxSubsidyAmount === null ? '未填写' : timelineDecimal(segment.maxSubsidyAmount) + ' 元'}`
-    : `计算基数：${PRICE_BASE_LABELS[segment.priceBase] ?? '未填写'}`
+  if (segment.subsidyMode === 'FIXED') {
+    const cap = segment.maxSubsidyAmount
+    const amount = cap === null || cap === undefined ? '未填写' : timelineDecimal(cap) + ' 元'
+    return `补贴上限：${amount}`
+  }
+  return `计算基数：${PRICE_BASE_LABELS[segment.priceBase] ?? '未填写'}`
 }
 
 export function timelinePlanCaption(segment) {

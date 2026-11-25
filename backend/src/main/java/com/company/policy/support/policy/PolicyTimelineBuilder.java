@@ -54,8 +54,8 @@ public final class PolicyTimelineBuilder {
         evaluator.includeTimeline(snapshot, auditId, submitted, approved);
     }
 
-    public void includeApprovedEnd(String auditId, LocalDateTime actualEnd) {
-        evaluator.includeApprovedEnd(auditId, actualEnd);
+    public void includeTimeChange(long auditId, PolicyEffectivePeriods.Change change) {
+        evaluator.includeTimeChange(auditId, change);
     }
 
     public List<Track> tracks() {
@@ -78,7 +78,7 @@ public final class PolicyTimelineBuilder {
         LocalDateTime start = null;
         LocalDateTime end = null;
         for (var round : rounds) {
-            var span = round.original();
+            var span = round.visibleWindow();
             if (span.intersect(query).expired()) continue;
             if (start == null || span.from().isBefore(start)) start = span.from();
             if (end == null || span.through().isAfter(end)) end = span.through();
@@ -99,7 +99,7 @@ public final class PolicyTimelineBuilder {
     private static TreeMap<LocalDateTime, Event> events(List<Round> rounds, Window window) {
         var events = new TreeMap<LocalDateTime, Event>();
         for (var round : rounds) {
-            var visible = round.original().intersect(window);
+            var visible = round.visibleWindow().intersect(window);
             if (!visible.expired()) {
                 events.computeIfAbsent(visible.from(), k -> new Event()).show.add(round);
                 events.computeIfAbsent(visible.through().plusSeconds(1), k -> new Event())
@@ -148,9 +148,7 @@ public final class PolicyTimelineBuilder {
             var at = item.getKey();
             var next = events.higherKey(at);
             var adopted =
-                    PolicyApplicabilityEvaluator.effectivePolicies(
-                                    channel.equals("RETAIL"), active, at)
-                            .stream()
+                    evaluator.effectivePolicies(active, at).stream()
                             .map(p -> p.auditLogId())
                             .toList();
             var excluded =
@@ -167,52 +165,47 @@ public final class PolicyTimelineBuilder {
             String end =
                     !at.isAfter(asOf)
                                     && next.isAfter(asOf)
-                                    && (visible.stream()
-                                                    .anyMatch(
-                                                            r ->
-                                                                    r.original()
-                                                                            .through()
-                                                                            .isAfter(asOf))
-                                            || active.stream()
-                                                    .anyMatch(
-                                                            r ->
-                                                                    r.window()
-                                                                            .through()
-                                                                            .isAfter(asOf)))
+                                    && visible.stream()
+                                            .anyMatch(r -> r.window().through().isAfter(asOf))
                             ? null
                             : time(next);
             append(
                     at.isAfter(asOf) ? plannedSegments : segments,
                     new Segment(time(at), end, adopted, excluded));
         }
-        var policies =
-                rounds.stream()
-                        .filter(
-                                r ->
-                                        seen.contains(r.policy().auditLogId())
-                                                || (r.original().through().isAfter(asOf)
-                                                        && !r.original()
-                                                                .intersect(query)
-                                                                .expired()))
-                        .map(
-                                r -> {
-                                    var p = r.policy();
-                                    return new Policy(
-                                            p.policyId(),
-                                            p.policyCode(),
-                                            p.auditLogId(),
-                                            p.submissionVersion(),
-                                            time(r.original().from()),
-                                            time(r.original().through()),
-                                            p.approvedAt(),
-                                            p.verifyType(),
-                                            p.sceneTypes(),
-                                            r.estimated(),
-                                            !r.original().intersect(query).expired()
-                                                    || adoptedInQuery.contains(p.auditLogId()),
-                                            p.selections());
-                                })
-                        .toList();
+        var periodsByAudit = new LinkedHashMap<String, List<Round>>();
+        for (var round : rounds) {
+            periodsByAudit
+                    .computeIfAbsent(round.policy().auditLogId(), k -> new ArrayList<>())
+                    .add(round);
+        }
+        var policies = new ArrayList<Policy>();
+        for (var entry : periodsByAudit.entrySet()) {
+            var periods = entry.getValue();
+            var round = periods.get(0);
+            var p = round.policy();
+            boolean matches =
+                    periods.stream().anyMatch(r -> !r.visibleWindow().intersect(query).expired());
+            if (!seen.contains(entry.getKey())
+                    && !(matches
+                            && periods.stream().anyMatch(r -> r.window().through().isAfter(asOf))))
+                continue;
+            policies.add(
+                    new Policy(
+                            p.policyId(),
+                            p.policyCode(),
+                            p.auditLogId(),
+                            p.submissionVersion(),
+                            time(round.original().from()),
+                            time(round.original().through()),
+                            p.effectiveThrough(),
+                            p.approvedAt(),
+                            p.verifyType(),
+                            p.sceneTypes(),
+                            round.estimated(),
+                            matches || adoptedInQuery.contains(p.auditLogId()),
+                            p.selections()));
+        }
         return new Track(
                 channel,
                 platform,
@@ -227,8 +220,10 @@ public final class PolicyTimelineBuilder {
             int last = segments.size() - 1;
             var old = segments.get(last);
             if (next.startAt().equals(old.endAt())
-                    && old.adoptedAuditLogIds().equals(next.adoptedAuditLogIds())
-                    && old.excludedAuditLogIds().equals(next.excludedAuditLogIds())) {
+                    && java.util.Set.copyOf(old.adoptedAuditLogIds())
+                            .equals(java.util.Set.copyOf(next.adoptedAuditLogIds()))
+                    && java.util.Set.copyOf(old.excludedAuditLogIds())
+                            .equals(java.util.Set.copyOf(next.excludedAuditLogIds()))) {
                 segments.set(
                         last,
                         new Segment(
@@ -299,7 +294,11 @@ public final class PolicyTimelineBuilder {
                     products.addAll(track.policies().get(i).selections().get(j).products());
                 selections.add(
                         new Selection(
-                                s.cardType(), List.copyOf(products), s.subsidy(), s.quantity()));
+                                s.cardType(),
+                                List.copyOf(products),
+                                s.subsidy(),
+                                s.quantity(),
+                                s.wholeConfigurationGoodsCount()));
             }
             merged.add(
                     new Policy(
@@ -309,6 +308,7 @@ public final class PolicyTimelineBuilder {
                             p.submissionVersion(),
                             p.policyFrom(),
                             p.policyThrough(),
+                            p.effectiveThrough(),
                             p.approvedAt(),
                             p.verifyType(),
                             p.sceneTypes(),

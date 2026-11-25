@@ -18,7 +18,11 @@ const snapshot = computed(() => {
   for (const item of submitted.consent?.endAdjustments ?? []) {
     adjustments.set(item.target.policyId, item)
   }
-  return { ...submitted, endAdjustments: [...adjustments.values()] }
+  return {
+    ...submitted,
+    timeHistory: props.round.timeHistory,
+    endAdjustments: [...adjustments.values()],
+  }
 })
 const attachmentUrl = (fileId) =>
   reviewRoundAttachmentUrl(props.round.id, props.round.submissionVersion, fileId)

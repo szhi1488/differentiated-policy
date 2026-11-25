@@ -46,8 +46,8 @@ feishu:
   app-id: ${FEISHU_APP_ID:}
   app-secret: ${FEISHU_APP_SECRET:}
   allowed-origins: ${FEISHU_ALLOWED_ORIGINS:}
-  policy-chat-id: ${FEISHU_POLICY_CHAT_ID:}
   policy-erp-url: ${FEISHU_POLICY_ERP_URL:}
+  policy-chat-id: ${FEISHU_POLICY_CHAT_ID:}
   policy-callback-mode: ${FEISHU_POLICY_CALLBACK_MODE:http}
   callback-encrypt-key: ${FEISHU_CALLBACK_ENCRYPT_KEY:}
   callback-verification-token: ${FEISHU_CALLBACK_VERIFICATION_TOKEN:}

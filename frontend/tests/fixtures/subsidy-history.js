@@ -28,13 +28,15 @@ const specified = (quantity) => ({
   quantity,
 })
 function policy(id, selections, extra = {}) {
+  const through = extra.policyThrough ?? at('30T23:59:59')
   return {
     policyId: id,
     policyCode: 'ZC-' + id.padStart(6, '0'),
     auditLogId: '10' + id,
     submissionVersion: 1,
     policyFrom: at('01T00:00:00'),
-    policyThrough: at('30T23:59:59'),
+    policyThrough: through,
+    effectiveThrough: through,
     approvedAt: at('01T00:00:00'),
     verifyType: null,
     sceneTypes: [],
@@ -50,6 +52,40 @@ const segment = (start, end, adopted, excluded = []) => ({
   adoptedAuditLogIds: adopted.map((id) => '10' + id),
   excludedAuditLogIds: excluded.map((id) => '10' + id),
 })
+
+// 12 月 7 日零点开始，申报截止是次日零点，接口区间的右开边界晚一秒。
+export function midnightPolicyHistory(perspective) {
+  const policyFrom = '2026-12-07T00:00:00+08:00'
+  const policyThrough = '2026-12-08T00:00:00+08:00'
+  return {
+    asOf: '2026-11-24T19:45:00+08:00',
+    configurationGoodsCount: 1,
+    tracks: [
+      {
+        perspective,
+        platformCode: 'PDD',
+        goodsIds: perspective === 'RETAIL' ? ['51'] : [],
+        policies: [
+          policy('13', [common(fixed)], {
+            policyFrom,
+            policyThrough,
+            approvedAt: '2026-11-24T19:43:08+08:00',
+          }),
+        ],
+        segments: [],
+        plannedSegments: [
+          {
+            startAt: policyFrom,
+            endAt: '2026-12-08T00:00:01+08:00',
+            adoptedAuditLogIds: ['1013'],
+            excludedAuditLogIds: [],
+          },
+        ],
+      },
+    ],
+  }
+}
+
 export const history = {
   configurationGoodsCount: 2,
   asOf: at('16T12:00:00'),

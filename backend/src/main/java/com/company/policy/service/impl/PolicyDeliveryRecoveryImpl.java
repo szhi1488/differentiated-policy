@@ -4,6 +4,7 @@ import com.company.policy.common.exception.ApiException;
 import com.company.policy.mapper.PolicyDeliveryAdminMapper;
 import com.company.policy.mapper.PolicyDeliveryAdminMapper.Row;
 import com.company.policy.service.CatalogAccess;
+import com.company.policy.service.ExecutionNotices;
 import com.company.policy.service.FeishuWorkflowClient;
 import com.company.policy.service.PolicyDeliveryRecovery;
 import com.company.policy.service.PolicyFeishuSender;
@@ -60,18 +61,19 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
         boolean delivered = "CONFIRM_RECEIPT".equals(request.operation());
         String receipt = request.receiptId();
         var original = payload(row);
+        String action =
+                PolicyFeishuSender.deliveryAction(row.policyId(), row.actionType(), original);
         LocalDateTime groupMessageTime;
         if (delivered) {
             if (!"UNKNOWN".equals(row.deliveryStatus())
-                    || !Set.of("CREATE_TASK", "GROUP_MESSAGE", "SEND_CARD")
-                            .contains(row.actionType())
+                    || !Set.of("CREATE_TASK", "GROUP_MESSAGE", "SEND_CARD").contains(action)
                     || receipt == null
                     || !receipt.matches("[A-Za-z0-9_-]{1,128}"))
                 throw invalid("此动作需要有效的飞书消息 ID 或任务 GUID。");
             try {
                 String recipient = original.path("requestRecipient").asText(null);
                 if (recipient == null || recipient.isBlank()) throw invalid("缺少首次请求的收件记录，无法认领该回执。");
-                if ("GROUP_MESSAGE".equals(row.actionType())) {
+                if ("GROUP_MESSAGE".equals(action)) {
                     groupMessageTime =
                             client.verifyGroupReceipt(
                                     receipt,
@@ -82,7 +84,7 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
                 } else {
                     groupMessageTime = null;
                     client.verifyReceipt(
-                            row.actionType(),
+                            action,
                             receipt,
                             recipient,
                             key(tenant, row),
@@ -107,7 +109,8 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
                     var current = requireCurrent(tenant, id, request);
                     var content = payload(current);
                     if (delivered && "GROUP_MESSAGE".equals(current.actionType())) {
-                        checkGroupReceipt(tenant, id, original, content, receipt, groupMessageTime);
+                        checkMessageReceipt(
+                                tenant, id, original, content, receipt, groupMessageTime);
                     }
                     var now = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
                     var audit = content.withArray("manualHistory").addObject();
@@ -152,7 +155,7 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
                 });
     }
 
-    private void checkGroupReceipt(
+    private void checkMessageReceipt(
             String tenant,
             long id,
             ObjectNode original,
@@ -222,14 +225,15 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
     }
 
     private Item item(String tenant, Row row) {
+        var body = payload(row);
         return new Item(
                 Long.toString(row.id()),
                 key(tenant, row),
                 row.eventKey(),
-                row.actionType(),
+                PolicyFeishuSender.deliveryAction(row.policyId(), row.actionType(), body),
                 row.recipientKey() == 0 ? null : Long.toString(row.recipientKey()),
                 row.policyId() == 0
-                        ? noticeLabel(payload(row))
+                        ? noticeLabel(body)
                         : row.recipientKey() == 0 ? "业务群" : row.displayName(),
                 row.deliveryStatus(),
                 row.attempts(),
@@ -238,7 +242,7 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
                 row.nextAttemptAt() == null
                         ? null
                         : PolicyApplyServiceImpl.formatTime(row.nextAttemptAt()),
-                payload(row).path("manualHistory").size(),
+                body.path("manualHistory").size(),
                 "FAILED".equals(row.deliveryStatus())
                         || ("UNKNOWN".equals(row.deliveryStatus()) && row.nextAttemptAt() == null));
     }
@@ -255,7 +259,9 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
         String label =
                 switch (body.path("kind").asText()) {
                     case "START" -> "开始执行";
-                    case "NEAR" -> "临期";
+                    case "NEAR" -> "临期（旧群提醒）";
+                    case ExecutionNotices.EXPIRY_REMINDER ->
+                            "原申请人临期提醒 " + body.path("reminderDate").asText();
                     case "END" -> "截止";
                     case "SHORTENED" -> "提前结束";
                     case "EXTENDED" -> "延期获批";

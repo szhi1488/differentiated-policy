@@ -6,9 +6,91 @@ import { billionGroupHistory, retailGroupHistory } from '../fixtures/subsidy-his
 import {
   timelineContainsAt,
   timelinePlanCaption,
+  timelinePlanDetail,
   timelineTimeFromValue,
   timelineTimeValue,
 } from '../../src/utils/subsidy-timeline'
+
+describe.each([
+  ['零售', retailGroupHistory],
+  ['百亿', billionGroupHistory],
+])('%s按原单核对整组和独立商品', (_channel, historyFor) => {
+  it('目录新增或还有下架商品时沿用申报时的整组，单件交叉期间按范围分开，结束后恢复', () => {
+    const sample = historyFor('SPECIFIED')
+    sample.configurationGoodsCount = 4
+    for (const track of sample.tracks) {
+      track.policies[0].selections[0].wholeConfigurationGoodsCount = 3
+    }
+    const { rows } = readTimelineHistory(sample)
+    function labelsAt(time) {
+      return rows
+        .filter((row) => row.parts.some((part) => timelineContainsAt(part, '2026-11-' + time)))
+        .map((row) => row.segment.label)
+    }
+    expect(labelsAt('14T23:59:59')).toEqual(['整组配置'])
+    expect(labelsAt('16T12:00:00').sort()).toEqual(['整组配置', '独立商品 · 可可棕'].sort())
+    const group = rows.find((row) => row.plan.policyCode === 'ZC-000023')
+    const part = group.parts.find((part) => timelineContainsAt(part, '2026-11-16T12:00:00'))
+    expect(part.scopes.map(({ scope }) => scope.label).sort()).toEqual(
+      ['初雪白、奇遇喵', '可可棕'].sort(),
+    )
+    expect(labelsAt('18T00:00:00')).toEqual(['整组配置'])
+  })
+
+  it('两轮获批的整组成员不同时，同段同商品各按自己的原单标注', () => {
+    const sample = historyFor('COMMON')
+    sample.configurationGoodsCount = 4
+    for (const track of sample.tracks) {
+      for (const policy of track.policies) {
+        policy.selections[0].wholeConfigurationGoodsCount =
+          policy.policyCode === 'ZC-000023' ? 3 : 1
+      }
+    }
+    const { rows } = readTimelineHistory(sample)
+    expect(
+      rows
+        .map((row) => [
+          row.plan.policyCode,
+          row.segment.label,
+          row.segment.goods.map((g) => g.id).sort(),
+        ])
+        .sort(),
+    ).toEqual([
+      ['ZC-000023', '整组配置', ['61', '62', '63']],
+      ['ZC-000024', '整组配置', ['61']],
+    ])
+    for (const row of rows) {
+      const overlapping = row.parts.find((p) => timelineContainsAt(p, '2026-11-16T12:00:00'))
+      expect(overlapping.scopes.some(({ scope }) => scope.goods.some((g) => g.id === '61'))).toBe(
+        true,
+      )
+    }
+  })
+
+  it('不同商品 ID 同色的历史普通商品与独立商品能逐件辨认', () => {
+    const sample = historyFor('SPECIFIED')
+    for (const track of sample.tracks) {
+      for (const policy of track.policies) {
+        for (const selection of policy.selections) {
+          for (const product of selection.products) {
+            if (product.goodsId === '62') {
+              product.colorName = '可可棕'
+            }
+          }
+        }
+      }
+    }
+    const { rows, segments } = readTimelineHistory(sample)
+    const labels = rows.map((row) => row.segment.label)
+    expect(labels).toContain('独立商品 · 可可棕 #61')
+    expect(
+      segments
+        .filter((part) => timelineContainsAt(part, '2026-11-16T12:00:00'))
+        .map((part) => part.label)
+        .sort(),
+    ).toEqual(['可可棕 #61', '可可棕 #62、奇遇喵'].sort())
+  })
+})
 
 describe('零售时间轴按当段商品范围展示', () => {
   it('整组原单单独出现时只显示一行；同轮次各商品补贴金额不同则分别显示', () => {
@@ -66,11 +148,16 @@ describe('零售时间轴按当段商品范围展示', () => {
       expect(brown.policies[0].policyCode).toBe('ZC-000024')
       expect(brown.excluded[0].policyCode).toBe('ZC-000023')
       expect(others.policies[0].policyCode).toBe('ZC-000023')
-      expect(
-        baseRows(time)
-          .map((row) => row.segment.label)
-          .sort(),
-      ).toEqual([brown.label, others.label].sort())
+      const group = baseRows(time)
+      expect(group.map((row) => row.segment.label)).toEqual(['整组配置'])
+      const current = group[0].parts.find((part) => timelineContainsAt(part, '2026-11-' + time))
+      expect(current.mixed).toBe(true)
+      expect(current.scopes.map(({ scope, used }) => [scope.label, used]).sort()).toEqual(
+        [
+          [brown.label, false],
+          [others.label, true],
+        ].sort(),
+      )
     }
     expect(slices('16T12:00:00').every((s) => !s.planned)).toBe(true)
     expect(slices('16T12:00:01').every((s) => s.planned)).toBe(true)
@@ -136,12 +223,12 @@ describe('百亿时间轴按原单商品展示，保留配置级审核结果', (
         const slices = active(segments, time)
         expect(slices.map((s) => s.label).sort()).toEqual(['初雪白、奇遇喵', '可可棕'].sort())
         const baseRows = rowsAt(time).filter((row) => row.plan.policyCode === 'ZC-000023')
-        expect(baseRows.map((row) => row.segment.label).sort()).toEqual(
-          slices.map((s) => s.label).sort(),
+        expect(baseRows.map((row) => row.segment.label)).toEqual(['整组配置'])
+        const current = active(baseRows[0].parts, time)[0]
+        expect(current).toMatchObject({ used: stacked, mixed: false })
+        expect(current.scopes.map(({ scope, used }) => [scope.label, used]).sort()).toEqual(
+          slices.map((s) => [s.label, stacked]).sort(),
         )
-        for (const row of baseRows) {
-          expect(active(row.parts, time)[0].used).toBe(stacked)
-        }
         const [single] = rowsAt(time).filter((row) => row.plan.policyCode === 'ZC-000024')
         expect(single.segment.label).toBe(type === 'SPECIFIED' ? '独立商品 · 可可棕' : '可可棕')
         for (const slice of slices) {
@@ -252,6 +339,10 @@ describe('补贴时间轴的展示与联动状态', () => {
     expect(plan.ratio).toBe('2.50')
     expect(timelinePlanCaption({ ...plan, priceBase: 'RETAIL_PRICE' })).toBe('2.5% · 零售价')
     expect(timelinePlanCaption({ subsidyMode: 'FIXED', fixedAmount: '0.00' })).toBe('固定 0 元')
+    expect(timelinePlanDetail({ subsidyMode: 'FIXED', maxSubsidyAmount: '0.00' })).toBe(
+      '补贴上限：0 元',
+    )
+    expect(timelinePlanDetail({ subsidyMode: 'FIXED' })).toBe('补贴上限：未填写')
     expect(timelineTimeFromValue(timelineTimeValue('2026-11-16T12:00:00'))).toBe(
       '2026-11-16T12:00:00',
     )

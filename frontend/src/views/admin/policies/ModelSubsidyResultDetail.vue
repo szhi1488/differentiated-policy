@@ -16,13 +16,53 @@ const props = defineProps({
   asOf: { type: String, required: true },
   includesFuture: Boolean,
   planKey: { type: String, default: '' },
-  configuration: { type: String, required: true },
   at: { type: String, required: true },
   scopeLabel: { type: String, default: '' },
 })
 const groups = computed(() => {
-  if (!props.segment) {
+  const segment = props.segment
+  if (!segment) {
     return []
+  }
+  if (segment.byGoods) {
+    const allocations = new Map()
+    for (const scope of segment.byGoods) {
+      for (const [used, plans] of [
+        [true, scope.policies],
+        [false, scope.excluded],
+      ]) {
+        for (const plan of plans) {
+          let entry = allocations.get(plan.rowKey)
+          if (!entry) {
+            entry = { plan, used: false, excluded: false }
+            allocations.set(plan.rowKey, entry)
+          }
+          if (used) {
+            entry.used = true
+          } else {
+            entry.excluded = true
+          }
+        }
+      }
+    }
+    const used = [],
+      mixed = [],
+      excluded = []
+    for (const entry of allocations.values()) {
+      const target = entry.used ? (entry.excluded ? mixed : used) : excluded
+      target.push({
+        ...entry.plan,
+        key: entry.plan.rowKey,
+        // 各商品可能在不同时间采用，整组卡仅展示共同核对的本段。
+        otherUsePeriods: [],
+      })
+    }
+    const prefix = segment.planned ? '本段计划' : '该时点'
+    return [
+      { title: prefix + '采用', plans: used, used: true },
+      { title: prefix + '部分采用', plans: mixed, used: true },
+      { title: prefix + '未采用', plans: excluded, used: false },
+    ].map((group) => ({ ...group, count: new Set(group.plans.map((p) => p.auditLogId)).size }))
   }
   return [
     {
@@ -40,7 +80,7 @@ const groups = computed(() => {
     count: new Set(group.source.map((p) => p.auditLogId)).size,
     plans: group.source.map((plan) => ({
       ...plan,
-      usePeriod: group.used ? plan.usePeriods.find((p) => timelineContainsAt(p, props.at)) : null,
+      otherUsePeriods: plan.usePeriods.filter((period) => !timelineContainsAt(period, props.at)),
     })),
   }))
 })
@@ -55,6 +95,12 @@ const upcomingScopes = computed(
       .size,
 )
 const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.length > 0)
+function policyStatus(plan) {
+  if (props.asOf < plan.policyFrom) {
+    return '待生效'
+  }
+  return props.asOf > plan.effectiveThrough ? '已结束' : '生效中'
+}
 </script>
 
 <template>
@@ -90,36 +136,32 @@ const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.len
       </ol>
     </section>
     <template v-if="segment">
-      <div class="model-subsidy-detail-summary">
-        <span>
-          {{ CHANNEL_LABELS[segment.channel] }} · {{ PLATFORM_LABELS[segment.platformCode] }}
-        </span>
-        <h3>{{ segment.decision }}</h3>
-        <p>{{ configuration }}</p>
-        <template v-if="segment.channel === 'BILLION'">
-          <p v-if="!segment.fullConfiguration && segment.goods.length">
-            本段申报商品 · {{ goodsText(segment.goods) }}
-          </p>
-          <p>审核范围 · 整组配置</p>
-        </template>
-        <p v-else-if="segment.fullConfiguration">整组配置</p>
-        <p v-else-if="segment.goods.length">
-          本段商品 ·
-          {{ goodsText(segment.goods) }}
-        </p>
-        <p v-else>按机型版本、RAM 和 ROM 匹配</p>
-      </div>
       <dl class="model-subsidy-detail-fields">
         <div>
-          <dt>{{ segment.planned ? '计划开始' : '组合开始' }}</dt>
+          <dt>{{ segment.planned ? '本段计划开始' : '本段实际开始' }}</dt>
           <dd>{{ timelineTimeText(segment.startAt) }}</dd>
         </div>
         <div>
-          <dt>{{ segment.planned ? '计划结束' : '组合结束' }}</dt>
+          <dt>{{ segment.planned ? '本段计划结束' : '本段实际结束' }}</dt>
           <dd>{{ timelineEndText(segment.endAt, segment.open) }}</dd>
         </div>
       </dl>
 
+      <section v-if="segment.byGoods" aria-label="逐商品审核结果">
+        <h3 class="model-subsidy-source-heading">逐商品审核结果</h3>
+        <ol class="model-subsidy-goods-results">
+          <li v-for="scope in segment.byGoods" :key="scope.trackId">
+            <strong>{{ goodsText(scope.goods) }}</strong>
+            <span>
+              {{ segment.planned ? '计划采用' : '采用' }} ·
+              {{ policyCodes(scope.policies) || '无' }}
+            </span>
+            <span v-if="scope.excluded.length">
+              {{ segment.planned ? '计划未采用' : '未采用' }} · {{ policyCodes(scope.excluded) }}
+            </span>
+          </li>
+        </ol>
+      </section>
       <div v-for="group in groups" :key="group.title">
         <template v-if="group.plans.length">
           <h3 class="model-subsidy-source-heading">
@@ -131,60 +173,32 @@ const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.len
             :key="plan.key"
             class="model-subsidy-source"
             :class="{
-              muted: group.source === segment.excluded,
-              inspected: plan.key === planKey,
+              muted: !group.used,
+              inspected: plan.rowKey === planKey,
             }"
           >
             <header>
-              <strong>
-                {{ plan.policyCode }}
-                <small v-if="plan.policyFrom > asOf">待生效</small>
-                <span v-if="plan.estimated === true" class="model-subsidy-estimate">预估</span>
-              </strong>
+              <strong>{{ plan.policyCode }}</strong>
+              <small>{{ policyStatus(plan) }}</small>
               <span :class="plan.subsidyMode.toLowerCase()">{{ timelinePlanText(plan) }}</span>
+              <span>{{ timelinePlanDetail(plan) }}</span>
             </header>
-            <p>{{ timelinePlanDetail(plan) }}</p>
-            <p v-if="plan.scenes.length || plan.verify">
+            <p v-if="plan.estimated || plan.scenes.length || plan.verify">
+              <span v-if="plan.estimated" class="model-subsidy-estimate">预估</span>
               {{ [plan.scenes.join('、'), plan.verify].filter(Boolean).join(' · ') }}
             </p>
             <p>
               原单{{ 'quantity' in plan ? '指定商品' : '普通商品' }} ·
-              {{ goodsText(plan.goods) }}
+              {{
+                goodsText(
+                  segment.channel === 'RETAIL' ? (plan.declaredGoods ?? plan.goods) : plan.goods,
+                )
+              }}
             </p>
             <p v-if="'quantity' in plan">该平台数量 {{ plan.quantity ?? '未填写' }}</p>
-            <dl>
-              <template v-if="plan.usePeriod">
-                <div>
-                  <dt>实际开始</dt>
-                  <dd>{{ timelineTimeText(plan.usePeriod.startAt) }}</dd>
-                </div>
-                <div>
-                  <dt>实际结束</dt>
-                  <dd>{{ timelineEndText(plan.usePeriod.endAt, plan.usePeriod.open) }}</dd>
-                </div>
-              </template>
-              <div v-else-if="!segment.planned">
-                <dt>采用情况</dt>
-                <dd>此时此范围未采用</dd>
-              </div>
-              <div>
-                <dt>政策日期</dt>
-                <dd>
-                  {{ timelineTimeText(plan.policyFrom) }} 至
-                  {{ timelineTimeText(plan.policyThrough) }}
-                </dd>
-              </div>
-              <div>
-                <dt>审核通过</dt>
-                <dd>{{ timelineTimeText(plan.approvedAt) }}</dd>
-              </div>
-            </dl>
-            <details
-              v-if="plan.usePeriods.length > (plan.usePeriod ? 1 : 0)"
-              class="model-subsidy-source-periods"
-            >
-              <summary>该范围实际采用时段（{{ plan.usePeriods.length }} 段）</summary>
-              <p v-for="period in plan.usePeriods" :key="period.startAt">
+            <details v-if="plan.otherUsePeriods.length" class="model-subsidy-source-periods">
+              <summary>该范围其他实际采用时段（{{ plan.otherUsePeriods.length }} 段）</summary>
+              <p v-for="period in plan.otherUsePeriods" :key="period.startAt">
                 {{ timelineTimeText(period.startAt) }} 至
                 {{ timelineEndText(period.endAt, period.open) }}
               </p>
@@ -208,3 +222,21 @@ const showUpcoming = computed(() => props.at <= props.asOf && props.upcoming.len
     />
   </section>
 </template>
+
+<style scoped>
+.model-subsidy-goods-results {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  max-height: 16em;
+  overflow: auto;
+}
+.model-subsidy-goods-results li {
+  display: grid;
+  gap: 3px;
+  padding: 6px 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+</style>

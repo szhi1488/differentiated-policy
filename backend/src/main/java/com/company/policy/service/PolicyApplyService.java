@@ -25,17 +25,6 @@ public interface PolicyApplyService {
     PolicyResponse create(
             CurrentUserResponse session, PolicyDraftRequest request, String requestKey);
 
-    /** 从本人已通过的政策创建提前结束或延期草稿。 */
-    PolicyResponse adjustTime(
-            CurrentUserResponse session,
-            long id,
-            PolicyDraftRequest.TimeAdjustment request,
-            String requestKey);
-
-    /** 更新草稿或已驳回时间调整申请的截止、原因及证明。 */
-    PolicyResponse saveTimeAdjustment(
-            CurrentUserResponse session, long id, PolicyDraftRequest.TimeAdjustment request);
-
     /** 校验记录版本后，保存本人草稿或已驳回申请的修改。 */
     PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request);
 

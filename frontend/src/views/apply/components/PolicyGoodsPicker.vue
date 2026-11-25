@@ -6,15 +6,18 @@ import { usePolicyGoodsPicker } from '../../../composables/usePolicyGoodsPicker'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 
 const props = defineProps({
-  special: { type: Boolean, default: false },
   editing: { type: Boolean, default: false },
   initialGoods: { type: Array, default: () => [] },
   existingGoods: { type: Array, default: () => [] },
   addedKeys: { type: Array, default: () => [] },
+  specifiedIds: { type: Array, default: () => [] },
   blockedConfigurations: { type: Set, default: () => new Set() },
 })
 const emit = defineEmits(['close', 'confirm'])
 const {
+  mode,
+  special,
+  changeMode,
   brandId,
   seriesId,
   spuId,
@@ -46,6 +49,7 @@ const {
   loadOptions,
   loadPage,
   selectConfigurations,
+  reselectGroups,
   pageSize,
 } = usePolicyGoodsPicker(props)
 
@@ -71,9 +75,27 @@ function checked(item) {
     append-to-body
     size="min(790px, 100%)"
     class="policy-goods-picker"
-    :title="editing ? '编辑适用配置' : special ? '指定适用机型' : '选择手机型号'"
+    :title="editing ? '编辑适用配置' : '选择适用商品'"
     @close="$emit('close')"
   >
+    <el-radio-group
+      v-if="!editing"
+      :model-value="mode"
+      class="policy-picker-mode"
+      aria-label="选品方式"
+      :disabled="selecting"
+      @update:model-value="changeMode"
+    >
+      <el-radio-button value="COMMON">选择手机型号</el-radio-button>
+      <el-radio-button value="SPECIFIED">指定适用机型</el-radio-button>
+    </el-radio-group>
+    <p class="policy-picker-instruction">
+      {{
+        special
+          ? '选择一件具体商品，可按平台填写数量和补贴。'
+          : '选择配置后整组加入，包含该机型配置下的全部在售商品。'
+      }}
+    </p>
     <div class="policy-picker-filters">
       <el-select
         :model-value="brandId"
@@ -115,7 +137,7 @@ function checked(item) {
       </el-select>
       <el-select
         :model-value="config"
-        placeholder="请选择配置"
+        :placeholder="special ? '全部配置' : '请选择整组配置'"
         aria-label="商品配置"
         multiple
         collapse-tags
@@ -175,14 +197,7 @@ function checked(item) {
         >
           <strong>{{ item.brand }} / {{ item.series }} / {{ item.model }}</strong>
         </el-radio>
-        <el-checkbox
-          v-else
-          :model-value="checked(item)"
-          :disabled="selecting || (!added.has(item.id) && isBlocked(item))"
-          @update:model-value="toggle(item, $event)"
-        >
-          <strong>{{ item.brand }} / {{ item.series }} / {{ item.model }}</strong>
-        </el-checkbox>
+        <strong v-else>{{ item.brand }} / {{ item.series }} / {{ item.model }}</strong>
         <span class="policy-picker-spec">
           {{
             [item.version, catalogConfigLabel(item.config), item.color].filter(Boolean).join(' · ')
@@ -192,6 +207,7 @@ function checked(item) {
           {{ removed.has(item.id) ? '待移除' : '已加入' }}
         </el-tag>
         <el-tag v-else-if="isBlocked(item)" size="small" type="info">已在其他卡片</el-tag>
+        <el-tag v-else-if="checked(item)" size="small">已选</el-tag>
       </div>
     </div>
     <el-empty v-else-if="!listBusy" :image-size="60" description="没有符合条件的在售商品" />
@@ -221,11 +237,20 @@ function checked(item) {
                 : `已选 ${selected.size} 件`
           }}
         </span>
+        <el-button
+          v-if="editing && config.length"
+          link
+          type="primary"
+          :disabled="selecting || optionsBusy"
+          @click="reselectGroups"
+        >
+          按在售商品重选整组
+        </el-button>
         <el-button @click="$emit('close')">取消</el-button>
         <el-button
           type="primary"
           :disabled="selecting || !!selectionError || (!selected.size && !removed.size)"
-          @click="emit('confirm', [...selected.values()], [...removed])"
+          @click="emit('confirm', [...selected.values()], [...removed], mode)"
         >
           {{ editing ? '保存配置' : '加入政策' }}
         </el-button>

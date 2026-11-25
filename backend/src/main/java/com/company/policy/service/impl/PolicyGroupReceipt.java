@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 
 /** 将飞书回读的富文本还原成群消息首次发送时参与计算摘要的业务内容。 */
 final class PolicyGroupReceipt {
@@ -33,18 +34,19 @@ final class PolicyGroupReceipt {
         // 获取指定消息时正文可以是已选择语言的内容，发送格式则使用 zh_cn 包裹。
         var post = content.has("zh_cn") ? content.path("zh_cn") : content;
         var rows = post.path("content");
-        if (!post.path("title").asText("").isEmpty()
-                || !rows.isArray()
-                || rows.isEmpty()
-                || rows.size() > 3) return false;
-        var summaryRow = rows.path(0);
-        var summary = summaryRow.path(0);
-        if (!summaryRow.isArray()
-                || summaryRow.size() != 1
-                || !"text".equals(summary.path("tag").textValue())
-                || !summary.path("text").isTextual()) return false;
-
-        int nextRow = 1;
+        if (!post.path("title").asText("").isEmpty() || !rows.isArray() || rows.isEmpty())
+            return false;
+        var paragraphs = new StringJoiner("\n\n");
+        int nextRow = 0;
+        while (nextRow < rows.size()) {
+            var row = rows.get(nextRow);
+            var entry = row.path(0);
+            if (!"text".equals(entry.path("tag").textValue())) break;
+            if (!row.isArray() || row.size() != 1 || !entry.path("text").isTextual()) return false;
+            paragraphs.add(entry.get("text").textValue());
+            nextRow++;
+        }
+        if (nextRow == 0) return false;
         var mentions = new LinkedHashSet<String>();
         var people = rows.path(nextRow);
         if ("at".equals(people.path(0).path("tag").textValue())) {
@@ -61,6 +63,7 @@ final class PolicyGroupReceipt {
         }
         String url = "";
         if (nextRow < rows.size()) {
+            // 改期通知和已有群公告按首次发送的详情链接核对指纹。
             var linkRow = rows.path(nextRow++);
             var link = linkRow.path(0);
             url = link.path("href").asText("");
@@ -76,7 +79,7 @@ final class PolicyGroupReceipt {
                         appId,
                         ACTION,
                         chatId,
-                        List.of(summary.get("text").textValue(), List.copyOf(mentions), url));
+                        List.of(paragraphs.toString(), List.copyOf(mentions), url));
         return expectedFingerprint.equals(actual);
     }
 

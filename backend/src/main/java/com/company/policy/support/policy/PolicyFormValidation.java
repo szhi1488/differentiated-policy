@@ -55,6 +55,9 @@ public final class PolicyFormValidation {
     private PolicyFormValidation() {}
 
     public static PolicyDraftRequest validate(PolicyDraftRequest form, boolean submitting) {
+        require(
+                form.goodsForm() == null || form.goodsForm().timeAdjustment() == null,
+                "请从调整政策时间入口办理原单改期。");
         boolean retail = "RETAIL".equals(form.perspective());
         require(retail || "BILLION".equals(form.perspective()), "请选择政策渠道。");
         var platforms = entries(form.selectedPlatforms());
@@ -194,7 +197,7 @@ public final class PolicyFormValidation {
                     throw invalid(
                             previousCommon == common
                                     ? "同一平台重复选择了同一商品，请整理商品卡片。"
-                                    : "同一平台的该颜色已同时选入普通卡和指定卡，请先编辑普通卡并取消勾选该颜色。");
+                                    : "同一平台的商品已同时选入普通卡和指定卡，请移除重复的指定卡，或将该配置改为仅用指定卡申报。");
                 }
             }
         }

@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /** 仅在回环地址模拟平台的成功、限频、丢回执和错误响应。 */
 class FeishuWorkflowClientTest {
@@ -44,8 +46,6 @@ class FeishuWorkflowClientTest {
     private FeishuWorkflowClientImpl client;
     private static final String KEY = "53951bf1-5690-4961-a326-37bf941bfbee";
     private static final Runnable VALID_LEASE = () -> {};
-    private static final String LINK =
-            "https://erp.example.test/#/admin/policies?policyId=7&version=2";
 
     @BeforeEach
     void startMock() throws Exception {
@@ -118,8 +118,8 @@ class FeishuWorkflowClientTest {
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_group\"}}");
         assertFailure(
                 Kind.UNKNOWN,
-                () -> client.sendGroup("oc_group", summary, recipients, LINK, KEY, VALID_LEASE));
-        assertThat(client.sendGroup("oc_group", summary, recipients, LINK, KEY, VALID_LEASE))
+                () -> client.sendGroup("oc_group", summary, recipients, KEY, VALID_LEASE));
+        assertThat(client.sendGroup("oc_group", summary, recipients, KEY, VALID_LEASE))
                 .isEqualTo("om_group");
         assertThat(requests.remove().path)
                 .isEqualTo(
@@ -134,21 +134,21 @@ class FeishuWorkflowClientTest {
         assertThat(first.body.path("uuid").asText()).isEqualTo(KEY);
         assertThat(first.body.path("content").asText()).doesNotContain(KEY, "投递编号");
         var rows = json.readTree(first.body.path("content").textValue()).at("/zh_cn/content");
-        assertThat(rows.size()).isEqualTo(3);
+        assertThat(rows.size()).isEqualTo(2);
         assertThat(rows.at("/0/0/text").asText()).isEqualTo(summary);
         assertThat(rows.path(1).findValuesAsText("tag")).containsExactly("at", "at");
         assertThat(rows.path(1).findValuesAsText("user_id")).containsExactly("ou_a", "ou_b");
-        assertThat(rows.at("/2/0/href").asText()).isEqualTo(LINK);
+        assertThat(rows.findValuesAsText("tag")).doesNotContain("a");
+        assertThat(rows.findValues("href")).isEmpty();
     }
 
     @Test
-    void createsIndividualTaskWithStableClientTokenAndThreeErpLinks() {
+    void createsIndividualReminderTaskWithStableClientTokenAndNoExternalCompletion() {
         reply(503, "unknown");
         reply(200, "{\"code\":0,\"data\":{\"task\":{\"guid\":\"guid-a\",\"task_id\":\"t71\"}}}");
         assertFailure(
-                Kind.UNKNOWN,
-                () -> client.createTask("ou_a", "ZC-000007 待终审", LINK, KEY, VALID_LEASE));
-        assertThat(client.createTask("ou_a", "ZC-000007 待终审", LINK, KEY, VALID_LEASE))
+                Kind.UNKNOWN, () -> client.createTask("ou_a", "ZC-000007 待终审", KEY, VALID_LEASE));
+        assertThat(client.createTask("ou_a", "ZC-000007 待终审", KEY, VALID_LEASE))
                 .isEqualTo("guid-a");
         var first = requests.remove();
         assertThat(first.path).isEqualTo("/open-apis/task/v2/tasks?user_id_type=open_id");
@@ -159,11 +159,10 @@ class FeishuWorkflowClientTest {
         assertThat(first.body.at("/members/0/id").asText()).isEqualTo("ou_a");
         assertThat(first.body.at("/members/0/role").asText()).isEqualTo("assignee");
         assertThat(first.body.at("/members/0/type").asText()).isEqualTo("user");
-        assertThat(first.body.at("/origin/href/url").asText()).isEqualTo(LINK);
-        for (var device : List.of("pc", "ios", "android")) {
-            assertThat(first.body.at("/custom_complete/" + device + "/href").asText())
-                    .isEqualTo(LINK);
-        }
+        assertThat(first.body.path("summary").asText()).isEqualTo("ZC-000007 待终审");
+        assertThat(first.body.has("custom_complete")).isFalse();
+        assertThat(first.body.has("origin")).isFalse();
+        assertThat(first.body.findValues("href")).isEmpty();
     }
 
     @Test
@@ -221,11 +220,13 @@ class FeishuWorkflowClientTest {
 
     @Test
     void reconcilesGroupOnlyWithOriginalSenderChatContentAndTime() throws Exception {
+        String summary = "采购终审通过\n\n【基础信息】\n京东\n\n【商品及补贴信息】\n补贴 20 元";
         members(List.of("ou_a"), false, "");
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_group\"}}");
-        client.sendGroup("oc_group", "初审通过", List.of("ou_a"), LINK, KEY, VALID_LEASE);
+        client.sendGroup("oc_group", summary, List.of("ou_a"), KEY, VALID_LEASE);
         assertThat(requests.remove().method).isEqualTo("GET");
         var content = requests.remove().body.path("content").asText();
+        assertThat(json.readTree(content).at("/zh_cn/content")).hasSize(4);
         var message = platformMessage("post", "om_group", content);
         var fingerprint =
                 PolicyDeliveryFingerprint.compute(
@@ -233,7 +234,7 @@ class FeishuWorkflowClientTest {
                         "cli_test",
                         "GROUP_MESSAGE",
                         "oc_group",
-                        List.of("初审通过", List.of("ou_a"), LINK));
+                        List.of(summary, List.of("ou_a"), ""));
         var sentAt = LocalDateTime.of(2026, 1, 1, 8, 0);
         reply(200, message);
         assertThat(client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, sentAt))
@@ -241,7 +242,7 @@ class FeishuWorkflowClientTest {
         for (String bad :
                 List.of(
                         message.replace("oc_group", "oc_other"),
-                        message.replace("初审通过", "初审退回"),
+                        message.replace("补贴 20 元", "补贴 50 元"),
                         message.replace("1767225600000", "1767232800000"),
                         message.replace("cli_test", "cli_else"),
                         message.replace("test-company", "other-company"))) {
@@ -252,6 +253,29 @@ class FeishuWorkflowClientTest {
                             client.verifyGroupReceipt(
                                     "om_group", "oc_group", KEY, fingerprint, sentAt));
         }
+    }
+
+    @Test
+    void adjustmentLinkIsClickableAndIncludedInReceiptMatching() throws Exception {
+        String url = "https://policy.example.test/#/reviews/24?round=1";
+        String summary = "政策已延期 · ZC-000024";
+        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_group\"}}");
+        client.sendGroupWithDetail("oc_group", summary, List.of(), url, KEY, VALID_LEASE);
+        String content = requests.remove().body.path("content").asText();
+        var link = json.readTree(content).at("/zh_cn/content/1/0");
+        assertThat(link.path("tag").asText()).isEqualTo("a");
+        assertThat(link.path("href").asText()).isEqualTo(url);
+        var fingerprint =
+                PolicyDeliveryFingerprint.compute(
+                        json,
+                        "cli_test",
+                        "GROUP_MESSAGE",
+                        "oc_group",
+                        List.of(summary, List.of(), url));
+        reply(200, platformMessage("post", "om_group", content));
+        var at = LocalDateTime.of(2026, 1, 1, 8, 0);
+        assertThat(client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, at))
+                .isEqualTo(at);
     }
 
     @Test
@@ -272,7 +296,7 @@ class FeishuWorkflowClientTest {
     @Test
     void noticeWithoutLinkHasOnlyItsBusinessTextAndUsesTheRequestUuid() throws Exception {
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_platform\"}}");
-        client.sendGroup("oc_group", "平台负责人已变更", List.of(), null, KEY, VALID_LEASE);
+        client.sendGroup("oc_group", "平台负责人已变更", List.of(), KEY, VALID_LEASE);
         var request = requests.remove().body;
         assertThat(request.path("uuid").asText()).isEqualTo(KEY);
         assertThat(json.readTree(request.path("content").asText()).at("/zh_cn/content"))
@@ -288,7 +312,6 @@ class FeishuWorkflowClientTest {
                                         "oc_group",
                                         "初审通过",
                                         List.of("ou_missing"),
-                                        LINK,
                                         KEY,
                                         VALID_LEASE))
                 .isInstanceOfSatisfying(
@@ -298,7 +321,7 @@ class FeishuWorkflowClientTest {
                             assertThat(e.getMessage()).contains("未加入业务群", "ou_missing");
                         });
         reply(200, "{\"code\":0,\"data\":{\"task\":{\"guid\":\"guid-independent\"}}}");
-        assertThat(client.createTask("ou_missing", "终审", LINK, "task-key", VALID_LEASE))
+        assertThat(client.createTask("ou_missing", "终审", "task-key", VALID_LEASE))
                 .isEqualTo("guid-independent");
         assertThat(requests.remove().method).isEqualTo("GET");
         assertThat(requests.remove().path).startsWith("/open-apis/task/");
@@ -311,12 +334,7 @@ class FeishuWorkflowClientTest {
         assertThatThrownBy(
                         () ->
                                 client.sendGroup(
-                                        "oc_group",
-                                        "初审通过",
-                                        List.of("ou_a"),
-                                        LINK,
-                                        KEY,
-                                        VALID_LEASE))
+                                        "oc_group", "初审通过", List.of("ou_a"), KEY, VALID_LEASE))
                 .isInstanceOfSatisfying(
                         Failure.class,
                         e -> {
@@ -326,9 +344,7 @@ class FeishuWorkflowClientTest {
         reply(503, "unavailable");
         assertFailure(
                 Kind.RETRYABLE,
-                () ->
-                        client.sendGroup(
-                                "oc_group", "初审通过", List.of("ou_a"), LINK, KEY, VALID_LEASE));
+                () -> client.sendGroup("oc_group", "初审通过", List.of("ou_a"), KEY, VALID_LEASE));
         assertThat(requests).hasSize(2).allMatch(req -> req.method.equals("GET"));
     }
 
@@ -349,8 +365,7 @@ class FeishuWorkflowClientTest {
                 Kind.RETRYABLE,
                 () -> client.sendCard("ou_a", json.createObjectNode(), KEY, leaseCheck));
         leaseActive.set(true);
-        assertFailure(
-                Kind.RETRYABLE, () -> client.createTask("ou_a", "采购终审", LINK, KEY, leaseCheck));
+        assertFailure(Kind.RETRYABLE, () -> client.createTask("ou_a", "采购终审", KEY, leaseCheck));
         assertThat(requests).isEmpty();
     }
 
@@ -371,7 +386,6 @@ class FeishuWorkflowClientTest {
                                         "oc_group",
                                         "初审通过",
                                         List.of("ou_a", "ou_b"),
-                                        LINK,
                                         KEY,
                                         expiredLease))
                 .isInstanceOf(Failure.class)
@@ -441,7 +455,6 @@ class FeishuWorkflowClientTest {
         assertThat(requests.peek().path).endsWith("?card_msg_content_type=user_card_content");
     }
 
-    private static final String LAN = "http://erp.internal.test:5173";
     private static final String TEST_TENANT = "test-company";
 
     private Delivery productDelivery() {
@@ -465,8 +478,6 @@ class FeishuWorkflowClientTest {
 
     private PolicyFeishuSender productCardSender() {
         config.setTenantKey(TEST_TENANT);
-        config.setAllowedOrigins(List.of(LAN));
-        config.setPolicyErpUrl(LAN);
         var mapper = mock(PolicyProductCardMapper.class);
         when(mapper.content(TEST_TENANT, 7, 2, 51))
                 .thenReturn(
@@ -494,15 +505,13 @@ class FeishuWorkflowClientTest {
                 null,
                 mock(PolicyDeliveryAttemptGuard.class),
                 json,
-                new JsSdkSignatureServiceImpl(config, null, null),
+                null,
                 null);
     }
 
     @Test
-    void sendsSingleNetworkCardWithBoundErpLinkAndVerifiableReceipt() throws Exception {
+    void sendsProductCardWithOnlyReviewCallbacksAndVerifiableReceipt() throws Exception {
         var sender = productCardSender();
-        config.setPolicyCallbackMode(FeishuProperties.PolicyCallbackMode.LONG_CONNECTION);
-        config.setPolicyErpUrl(LAN + "/erp");
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_trial\"}}");
         assertThat(sender.send(productDelivery())).isEqualTo("om_trial");
         var body = requests.remove().body;
@@ -511,8 +520,8 @@ class FeishuWorkflowClientTest {
         var rawCard = body.path("content").asText();
         var card = json.readTree(rawCard);
         assertThat(rawCard)
-                .contains("渠道提前结束", "ZC-000041", "查看本轮详情", "callback", "rejection")
-                .doesNotContain("前往 ERP 办理", "待我审核", "投递核对编号");
+                .contains("渠道提前结束", "ZC-000041", "callback", "rejection")
+                .doesNotContain("前往 ERP 办理", "查看本轮详情", "open_url", "待我审核", "投递核对编号");
         assertThat(card.findValues("value"))
                 .extracting(value -> value.path("decision").asText())
                 .containsExactlyInAnyOrder("APPROVE", "REJECT");
@@ -521,8 +530,7 @@ class FeishuWorkflowClientTest {
                         value ->
                                 KEY.equals(value.path("deliveryKey").asText())
                                         && "ou_a".equals(value.path("recipientOpenId").asText()));
-        assertThat(card.findValuesAsText("default_url"))
-                .containsExactly(LAN + "/erp/#/reviews/7?round=2");
+        assertThat(card.findValuesAsText("default_url")).isEmpty();
         var message = platformMessage("interactive", "om_trial", rawCard);
         reply(200, message);
         client.verifyReceipt("SEND_CARD", "om_trial", "ou_a", KEY, 51, 7, 2);
@@ -540,25 +548,95 @@ class FeishuWorkflowClientTest {
                 () -> client.verifyReceipt("SEND_CARD", "om_trial", "ou_a", KEY, 51, 7, 3));
     }
 
-    @Test
-    void httpLinksRequireListedOriginsAndLongConnectionMode() {
+    private static final String PURCHASE_INSTRUCTIONS =
+            "请打开飞书工作台里的「差异化政策管理系统」，进入「政策管理」→「差异化政策」，找到 ZC-000026，点击「审核」，及时完成终审。";
+
+    @ParameterizedTest
+    @CsvSource({
+        "SUBMITTED, ACTIVE, 待你采购终审, " + PURCHASE_INSTRUCTIONS,
+        "REASSIGNED_3, ACTIVE, 待你采购终审, '" + PURCHASE_INSTRUCTIONS + "\n本轮采购终审已改派给你。'",
+        "REASSIGNED_3, REMOVED, 采购终审已改派, 你原先的这次采购指派已撤销。"
+    })
+    void purchaseAndReassignmentNoticesAreTextOnlyAndRetainTheirOwnVerifiableReceipt(
+            String event, String outcome, String expectedTitle, String expectedText)
+            throws Exception {
         var sender = productCardSender();
-        var item = productDelivery();
-        assertFailure(Kind.PERMANENT, () -> sender.send(item));
-        config.setPolicyCallbackMode(FeishuProperties.PolicyCallbackMode.LONG_CONNECTION);
-        for (var badRoot :
-                List.of(
-                        "http://erp.internal.test:5174",
-                        "http://erp.internal.test.example:5173",
-                        "http://user@erp.internal.test:5173",
-                        LAN + "?send=1",
-                        LAN + "/#page",
-                        "file:///erp",
-                        "")) {
-            config.setPolicyErpUrl(badRoot);
-            assertFailure(Kind.PERMANENT, () -> sender.send(item));
-        }
-        assertThat(requests).isEmpty();
+        var payload =
+                json.createObjectNode().put("stage", "PURCHASE_REVIEW").put("outcome", outcome);
+        boolean reassigned = "REASSIGNED_3".equals(event);
+        if (reassigned) payload.put("reason", "原采购本周休假");
+        var item =
+                new Delivery(
+                        81,
+                        TEST_TENANT,
+                        26,
+                        1,
+                        event,
+                        "SEND_CARD",
+                        51,
+                        "PURCHASE",
+                        "ou_a",
+                        "ACTIVE",
+                        1,
+                        payload,
+                        null,
+                        KEY,
+                        LocalDateTime.now());
+        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_notice\"}}");
+        assertThat(sender.send(item)).isEqualTo("om_notice");
+        var post = requests.remove();
+        assertThat(post.path).endsWith("receive_id_type=open_id");
+        assertThat(post.body.path("receive_id").asText()).isEqualTo("ou_a");
+        var raw = post.body.path("content").asText();
+        JsonNode notice = json.readTree(raw);
+        assertThat(notice.at("/header/title/content").asText())
+                .isEqualTo(expectedTitle + " · ZC-000026 · 第 1 轮");
+        assertThat(notice.at("/body/elements/0/text/content").asText())
+                .isEqualTo(expectedText + (reassigned ? "\n改派原因：原采购本周休假" : ""));
+        assertThat(notice.findValuesAsText("tag")).doesNotContain("button", "form", "a");
+        assertThat(notice.findValues("behaviors")).isEmpty();
+        assertThat(notice.findValues("default_url")).isEmpty();
+        var message = platformMessage("interactive", "om_notice", raw);
+        reply(200, message);
+        client.verifyReceipt("SEND_CARD", "om_notice", "ou_a", KEY, 51, 26, 1);
+        reply(200, message);
+        assertFailure(
+                Kind.PERMANENT,
+                () -> client.verifyReceipt("SEND_CARD", "om_notice", "ou_b", KEY, 51, 26, 1));
+        reply(200, message);
+        assertFailure(
+                Kind.PERMANENT,
+                () -> client.verifyReceipt("SEND_CARD", "om_notice", "ou_a", KEY, 50, 26, 1));
+    }
+
+    @Test
+    void stillVerifiesPreviouslyDeliveredCardsWithAMarkedDetailButton() throws Exception {
+        String marker = PolicyFeishuSender.noticeElementId("ou_a", KEY, 51, 7, 2);
+        var content = json.createObjectNode().put("schema", "2.0");
+        var button = content.putObject("body").putArray("elements").addObject();
+        button.put("tag", "button").put("element_id", marker);
+        button.putArray("behaviors")
+                .addObject()
+                .put("type", "open_url")
+                .put("default_url", "https://erp.example.test/#/reviews/7?round=2");
+        var message = platformMessage("interactive", "om_old_notice", content.toString());
+        reply(200, message);
+        client.verifyReceipt("SEND_CARD", "om_old_notice", "ou_a", KEY, 51, 7, 2);
+        reply(200, message);
+        assertFailure(
+                Kind.PERMANENT,
+                () -> client.verifyReceipt("SEND_CARD", "om_old_notice", "ou_b", KEY, 51, 7, 2));
+    }
+
+    @Test
+    void buildingAProductCardNeedsNoSeparateWorkspaceLinkConfiguration() throws Exception {
+        var sender = productCardSender();
+        config.setAppId("");
+        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_product\"}}");
+        assertThat(sender.send(productDelivery())).isEqualTo("om_product");
+        JsonNode card = json.readTree(requests.remove().body.path("content").asText());
+        assertThat(card.findValues("default_url")).isEmpty();
+        assertThat(card.findValues("value")).hasSize(2);
     }
 
     @Test

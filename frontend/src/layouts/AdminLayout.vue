@@ -13,7 +13,7 @@ const route = useRoute()
 const router = useRouter()
 const { collapsed, menuOpen, expanded, toggle } = useWorkspaceSidebar(600)
 const openGroups = reactive({})
-provide('modelSubsidyPreferences', { lastQuery: ref(null), showIndependent: ref(false) })
+provide('modelSubsidyLastQuery', ref(null))
 watch(
   () => route.fullPath,
   () => (menuOpen.value = false),

@@ -12,6 +12,7 @@ const props = defineProps({
   options: { type: Array, required: true },
   changes: { type: Array, required: true },
   apply: { type: Function, required: true },
+  prepareDirectApproval: { type: Function, default: null },
 })
 const emit = defineEmits(['close'])
 const rows = ref(
@@ -62,8 +63,8 @@ function extensionMinimum(option) {
   if (!option.canExtend) {
     return ''
   }
-  // 延期段从原实际截止的下一秒起算，新截止还须晚于延长段开始时刻。
-  const start = Math.max(Date.parse(option.target.previousEnd) + 2000, Date.now())
+  // 新增时段包含首尾所在秒，最短可以只延长一秒。
+  const start = Math.max(Date.parse(option.target.previousEnd) + 1000, Date.now())
   if (start > Date.parse('9999-12-31T23:59:59+08:00')) {
     return ''
   }
@@ -120,12 +121,29 @@ const canReview = computed(
         !row.uploadStatus?.failed,
     ),
 )
-function review() {
-  if (!canReview.value) {
+function readChanges() {
+  return rows.value.map((row) => ({
+    target: optionFor(row).target,
+    endTime: policyApiTime(row.endTime),
+    reason: row.reason.trim(),
+    ...(row.attachmentInfo.length ? { attachmentInfo: row.attachmentInfo } : {}),
+  }))
+}
+async function review() {
+  if (!canReview.value || busy.value) {
     return
   }
   error.value = ''
-  reviewing.value = true
+  busy.value = true
+  try {
+    if (!props.prepareDirectApproval || (await props.prepareDirectApproval(readChanges()))) {
+      reviewing.value = true
+    }
+  } catch (cause) {
+    error.value = cause.message
+  } finally {
+    busy.value = false
+  }
 }
 async function applyChanges() {
   if (busy.value || !reviewing.value || !canReview.value) {
@@ -134,19 +152,15 @@ async function applyChanges() {
   busy.value = true
   error.value = ''
   try {
-    await props.apply(
-      rows.value.map((row) => ({
-        target: optionFor(row).target,
-        endTime: policyApiTime(row.endTime),
-        reason: row.reason.trim(),
-        ...(row.attachmentInfo.length ? { attachmentInfo: row.attachmentInfo } : {}),
-      })),
-    )
+    await props.apply(readChanges())
     evidenceFields.value.forEach((field) => field.retainFiles())
     emit('close')
   } catch (cause) {
     error.value = cause.message
-    if (cause.code === 'POLICY_ADJUSTMENT_CHANGED') {
+    if (
+      cause.code === 'POLICY_ADJUSTMENT_CHANGED' ||
+      (props.prepareDirectApproval && cause.status === 409)
+    ) {
       reviewing.value = false
     }
   } finally {
@@ -164,8 +178,9 @@ async function applyChanges() {
     width="min(1120px, calc(100% - 24px))"
     align-center
     :close-on-click-modal="false"
-    :close-on-press-escape="!reviewing"
-    @update:model-value="!reviewing && emit('close')"
+    :close-on-press-escape="!reviewing && !busy"
+    :show-close="!busy"
+    @update:model-value="!reviewing && !busy && emit('close')"
   >
     <div class="end-adjustments end-editor-content">
       <el-alert
@@ -175,10 +190,10 @@ async function applyChanges() {
         :closable="false"
         show-icon
       />
-      <div class="end-workspace">
+      <div class="end-workspace" :inert="busy || reviewing">
         <section class="end-picker" aria-label="可选政策">
           <header class="end-section-header">
-            <h3>可选政策</h3>
+            <h3>可调整的已通过政策</h3>
             <span>{{ available.length }} 张</span>
           </header>
           <div class="end-search">
@@ -220,7 +235,13 @@ async function applyChanges() {
               </el-checkbox>
             </el-checkbox-group>
             <p v-else class="end-no-options">
-              {{ available.length ? '没有匹配的政策单号' : '没有更多可添加的政策' }}
+              {{
+                available.length
+                  ? '没有匹配的可调整政策，请按政策单号搜索'
+                  : options.length
+                    ? '没有更多可添加的政策'
+                    : '当前没有可调整的已通过政策'
+              }}
             </p>
           </div>
           <div class="end-picker-actions">
@@ -295,7 +316,7 @@ async function applyChanges() {
               <el-alert
                 v-else
                 type="warning"
-                title="这张政策已不可调整，请移除后重新核对。"
+                title="这张政策已不可调整，请移除后重新选择有权调整的政策。"
                 :closable="false"
               />
             </article>
@@ -304,8 +325,13 @@ async function applyChanges() {
       </div>
     </div>
     <template #footer>
-      <el-button @click="emit('close')">取消</el-button>
-      <el-button type="primary" :disabled="!canReview || reviewing" @click="review">
+      <el-button :disabled="busy || reviewing" @click="emit('close')">取消</el-button>
+      <el-button
+        type="primary"
+        :disabled="!canReview || reviewing"
+        :loading="busy && !reviewing"
+        @click="review"
+      >
         核对调整
       </el-button>
     </template>
@@ -326,7 +352,14 @@ async function applyChanges() {
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
       <p v-if="rows.length" class="end-notice">
         <AppIcon name="history" :size="18" />
-        审核通过后，缩短后的截止时间适用于旧单的全部平台和商品。延长段按本轮确认的适用范围执行。
+        <span v-if="prepareDirectApproval">
+          确认后，这
+          {{ rows.length }}
+          张政策的时间调整将直接通过，沿用原单号，并通知业务群。提前结束适用于原单的全部平台和商品，延期按本次核对的适用范围执行。
+        </span>
+        <span v-else>
+          审核通过后，缩短后的截止时间适用于旧单的全部平台和商品。延长段按本轮确认的适用范围执行。
+        </span>
       </p>
       <div v-if="rows.length" class="end-review-list">
         <div aria-hidden="true" class="end-review-heading">
@@ -374,7 +407,9 @@ async function applyChanges() {
     </div>
     <template #footer>
       <el-button :disabled="busy" @click="reviewing = false">返回修改</el-button>
-      <el-button type="primary" :loading="busy" @click="applyChanges">确认调整</el-button>
+      <el-button type="primary" :loading="busy" @click="applyChanges">
+        {{ prepareDirectApproval ? '确认并直接通过' : '确认调整' }}
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -694,6 +729,88 @@ async function applyChanges() {
     height: auto;
     clip-path: none;
     color: var(--policy-muted);
+  }
+}
+</style>
+
+<style>
+.policy-end-dialog,
+.policy-end-confirm-dialog {
+  --policy-line: #e3ebf7;
+  --policy-muted: #556784;
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+}
+.policy-end-dialog .el-dialog__body,
+.policy-end-confirm-dialog .el-dialog__body {
+  overflow-y: auto;
+  min-width: 0;
+}
+.policy-end-layer.el-overlay {
+  background: rgb(23 45 75 / 15%);
+}
+.policy-end-review-layer.el-overlay {
+  background: rgb(23 45 75 / 18%);
+}
+.policy-end-dialog,
+.policy-end-confirm-dialog {
+  --el-dialog-padding-primary: 0px;
+  --el-dialog-border-radius: 12px;
+  --end-dialog-gutter: 22px;
+}
+/* 批量调整在桌面使用独立的候选区和明细区，标题与提交操作保持可见。 */
+.policy-end-dialog {
+  height: min(80dvh, 760px);
+}
+.policy-end-confirm-dialog {
+  min-height: min(46dvh, 400px);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__body {
+  flex: 1;
+}
+@media (max-width: 760px) {
+  .policy-end-dialog {
+    height: 88dvh;
+  }
+  .policy-end-confirm-dialog {
+    min-height: min(40dvh, 300px);
+  }
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__header {
+  flex: none;
+  padding: 14px 48px 14px var(--end-dialog-gutter);
+  border-bottom: 1px solid var(--policy-line);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__title {
+  color: #173a65;
+  font-size: 17px;
+  font-weight: 600;
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__headerbtn {
+  height: 52px;
+  width: 44px;
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__footer {
+  flex: none;
+  padding: 12px var(--end-dialog-gutter);
+  border-top: 1px solid var(--policy-line);
+}
+:is(.policy-end-dialog, .policy-end-confirm-dialog) .el-dialog__body {
+  min-height: 0;
+  padding: 16px var(--end-dialog-gutter);
+  overscroll-behavior: contain;
+}
+@media (max-width: 660px) {
+  .policy-end-dialog,
+  .policy-end-confirm-dialog {
+    --end-dialog-gutter: 14px;
+  }
+}
+@media (max-height: 600px) {
+  .policy-end-dialog,
+  .policy-end-confirm-dialog {
+    max-height: calc(100dvh - 16px);
   }
 }
 </style>

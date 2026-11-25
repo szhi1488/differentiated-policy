@@ -10,6 +10,8 @@ import {
   timelineContainsAt,
   timelineAxisTime,
   timelineEndText,
+  timelineGoodsLabel,
+  timelinePartStatus,
   timelineTimeText,
   timelineAxisValue,
 } from '../utils/subsidy-timeline'
@@ -94,8 +96,15 @@ const escape = (value) =>
     /[&<>"']/g,
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
   )
-function dateLabel(at, boundary) {
-  return at.endsWith(boundary) ? at.slice(0, 10) : timelineTimeText(at)
+function mixedGoods(row, part, used) {
+  const ids = new Set(
+    part.scopes
+      .filter((item) => item.used === used)
+      .flatMap(({ scope }) => scope.goods.map((goods) => goods.id)),
+  )
+  const goods = row.plan.goods.filter((goods) => ids.has(goods.id))
+  const names = timelineGoodsLabel(goods.slice(0, 3))
+  return goods.length > 3 ? names + ' 等 ' + goods.length + ' 件' : names
 }
 function renderChart() {
   if (!chart) {
@@ -123,15 +132,23 @@ function renderChart() {
         formatter: ({ data }) => {
           const row = chartRows[data[0]]
           const part = row.parts[data[3]]
+          const segmentType = part.status ? '本段计划' : '本段实际'
           return [
             '<strong>' +
               escape(row.plan.policyCode) +
               (row.plan.estimated ? ' · 预估' : '') +
               '</strong>',
-            escape(row.caption) + ' · ' + (part.status ?? (part.used ? '采用' : '未采用')),
-            '原政策 ' + escape(row.plan.policyFrom) + ' 至 ' + escape(row.plan.policyThrough),
-            '本段开始 ' + escape(timelineTimeText(part.startAt)),
-            '本段结束 ' + escape(timelineEndText(part.endAt, part.open)),
+            escape(row.caption) + ' · ' + timelinePartStatus(part),
+            ...(part.mixed
+              ? [
+                  '采用商品 ' + escape(mixedGoods(row, part, true)),
+                  '未采用商品 ' + escape(mixedGoods(row, part, false)),
+                ]
+              : []),
+            '政策开始 ' + escape(timelineTimeText(row.plan.policyFrom)),
+            '当前截止 ' + escape(timelineTimeText(row.plan.effectiveThrough)),
+            segmentType + '开始 ' + escape(timelineTimeText(part.startAt)),
+            segmentType + '结束 ' + escape(timelineEndText(part.endAt, part.open)),
           ].join('<br>')
         },
       },
@@ -287,7 +304,7 @@ onBeforeUnmount(() => {
       @pointerup="stopPointerDrag"
       @pointercancel="stopPointerDrag"
     >
-      <span class="timeline-policy-column-title">政策及原始有效期</span>
+      <span class="timeline-policy-column-title">政策及当前有效期</span>
       <div class="timeline-policy-labels" :style="{ width: leftMargin - 8 + 'px' }">
         <div v-for="row in rows" :key="row.key" class="timeline-policy-row">
           <div class="timeline-policy-id">
@@ -304,9 +321,11 @@ onBeforeUnmount(() => {
             {{ row.caption }}
           </div>
           <small>{{ PLATFORM_LABELS[row.segment.platformCode] }} · {{ row.segment.label }}</small>
-          <time>
-            {{ dateLabel(row.plan.policyFrom, '00:00:00') }} 至
-            {{ dateLabel(row.plan.policyThrough, '23:59:59') }}
+          <time :datetime="row.plan.policyFrom + '+08:00'">
+            起 {{ timelineTimeText(row.plan.policyFrom) }}
+          </time>
+          <time :datetime="row.plan.effectiveThrough + '+08:00'">
+            止 {{ timelineTimeText(row.plan.effectiveThrough) }}
           </time>
         </div>
       </div>
@@ -320,7 +339,7 @@ onBeforeUnmount(() => {
       <div class="timeline-policy-states" :style="{ left: leftMargin + 'px' }">
         <div v-for="(part, index) in cursorParts" :key="rows[index].key">
           <span v-if="part" :class="{ used: part.used }">
-            {{ part.status ?? (part.used ? '该时点采用' : '该时点未采用') }}
+            {{ part.status ?? '该时点' + timelinePartStatus(part) }}
           </span>
         </div>
       </div>

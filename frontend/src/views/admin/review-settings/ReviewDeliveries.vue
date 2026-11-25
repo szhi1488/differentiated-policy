@@ -9,7 +9,7 @@ import { useLatestQuery } from '../../../composables/useLatestQuery'
 
 const actions = {
   GROUP_MESSAGE: '群通知',
-  SEND_CARD: '发送初审卡',
+  SEND_CARD: '发送私聊卡',
   UPDATE_CARD: '更新初审卡',
   CREATE_TASK: '创建待办',
   CLOSE_TASK: '结办待办',

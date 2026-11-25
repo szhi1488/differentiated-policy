@@ -72,6 +72,19 @@ public interface PolicyAttachmentMapper {
     Membership reviewRound(
             String tenant, long userId, long id, int version, FileReference reference);
 
+    @Select(
+            "SELECT p.status, a.id AS audit_id, EXISTS (SELECT 1 FROM policy_time_change c"
+                    + " WHERE c.policy_id=p.id AND c.tenant_key=p.tenant_key AND c.audit_log_id=a.id"
+                    + " AND c.id=#{changeId} AND JSON_CONTAINS(c.attachment_json, #{reference.file})) AS attached "
+                    + PolicyReviewRoundMapper.VISIBLE_ROUND)
+    Membership changeFile(
+            String tenant,
+            long userId,
+            long id,
+            int version,
+            long changeId,
+            FileReference reference);
+
     record Membership(String status, Long auditId, boolean attached) {}
 
     // 已删除申请和历轮快照仍保留附件引用，物理删除必须同时排除两类引用。
@@ -80,6 +93,6 @@ public interface PolicyAttachmentMapper {
                     + DRAFT_FILE
                     + ") OR EXISTS(SELECT 1 FROM policy_audit_log a WHERE "
                     + HISTORICAL_FILE
-                    + ")")
+                    + ") OR EXISTS(SELECT 1 FROM policy_time_change c WHERE JSON_CONTAINS(c.attachment_json, #{reference.file}))")
     boolean attachmentReferenced(@Param("reference") FileReference reference);
 }

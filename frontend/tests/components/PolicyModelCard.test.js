@@ -54,7 +54,10 @@ it('同型号的配置显示在同一行，多个型号和品牌分别显示', a
     props: {
       model: {
         ...createPolicyModel(),
-        goods: [...samples, differentColor].map((item) => ({ ...item, key: item.id })),
+        goods: [...samples, differentColor].map((item) => {
+          const [ram, rom] = item.config.split('+').map((size) => size + 'GB')
+          return { ...item, ram, rom, key: item.id }
+        }),
       },
       platforms: [],
     },
@@ -73,6 +76,6 @@ it('同型号的配置显示在同一行，多个型号和品牌分别显示', a
   const configurations = rows[2].get('.policy-model-configs')
   expect(rows[2].element.lastElementChild).toBe(rows[2].get('.policy-model-edit').element)
   await configurations.findAll('.el-tag__close')[1].trigger('click')
-  expect(wrapper.emitted('remove-goods')).toEqual([[[samples.at(-1).id, differentColor.id]]])
+  expect(wrapper.emitted('remove-configuration')).toEqual([[`${samples.at(-1).spuId}/12GB/256GB`]])
   wrapper.unmount()
 })

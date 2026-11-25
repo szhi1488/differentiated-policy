@@ -106,7 +106,12 @@ describe('申请表单状态', () => {
   it('同规格不同颜色保留各自 ID，可一起加入并保留已填补贴', async () => {
     const state = usePolicyForm({ value: retail })
     await state.togglePlatform('JD')
-    const [first, second] = catalogCenterSamples.filter((goods) => goods.model === 'Find X8')
+    const [first, second] = catalogCenterSamples
+      .filter((goods) => goods.model === 'Find X8')
+      .map((item) => {
+        const [ram, rom] = item.config.split('+').map((size) => size + 'GB')
+        return { ...item, ram, rom }
+      })
     const anotherColor = { ...first, id: 'other-color', color: '黑色' }
     const offline = catalogCenterSamples.find((goods) => goods.status === 'offline')
     state.addGoods([first])
@@ -116,7 +121,7 @@ describe('申请表单状态', () => {
     expect(model.goods.map(({ id }) => id)).toEqual([first.id, anotherColor.id, second.id])
     expect(model.subsidies).toHaveLength(1)
     expect(model.subsidies[0].fixedAmount).toBe('50.00')
-    state.removeGoods([first.id, anotherColor.id], model.key)
+    state.removeConfiguration([first.spuId, first.ram, first.rom].join('/'), model.key)
     expect(model.goods.map(({ id }) => id)).toEqual([second.id])
     state.addGoods([firstGoods], model.key)
     expect(model.goods.map(({ name }) => name)).toEqual([second.name, firstGoods.name])

@@ -14,8 +14,8 @@
 ## 切换与运行边界
 
 1. 目标库在 Navicat 核对工作流结构，部署配套服务，并在「政策审核设置」保存运营和采购名单。
-2. 首提和重提均在事务内冻结本轮指派、配置版本和依据。缺节点或有效指派时拒绝办理。随父单一并批准的延期子单复用父单终审结果。
-3. 目标环境接收提交前须部署 [C 阶段审核 API](policy-workflow-phase-c.md) 和 [D 阶段工作台](policy-workflow-phase-d.md)。E 阶段已接入飞书投递，自动发送由独立开关 `POLICY_REVIEW_DELIVERY_ENABLED` 控制，默认关闭。需初审时，机器人向每名本轮初审人私发一张卡，ERP 记录首个有效决定后才向 `FEISHU_POLICY_CHAT_ID` 指定的群发一条初审结果。直达采购时群内通知采购，每名经办人各有一条终审待办。[E 阶段实现与隔离验收](policy-workflow-phase-e.md)
+2. 首提和重提均在事务内冻结本轮指派、配置版本和依据。缺节点或有效指派时拒绝办理。随单改期使用本轮采购终审结果，每个目标分别在原单登记一次调整。
+3. 目标环境接收提交前须部署 [C 阶段审核 API](policy-workflow-phase-c.md) 和 [D 阶段工作台](policy-workflow-phase-d.md)。E 阶段已接入飞书投递，自动发送由独立开关 `POLICY_REVIEW_DELIVERY_ENABLED` 控制，默认关闭。需初审时，机器人向每名本轮初审人私发一张卡，初审通过或直达采购时逐人私发采购办理卡与终审待办，初审退回或采购驳回时私发原申请人。采购批准后向 `FEISHU_POLICY_CHAT_ID` 指定的群发一条政策公告。[E 阶段实现与隔离验收](policy-workflow-phase-e.md)
 
 ## 隔离验收
 

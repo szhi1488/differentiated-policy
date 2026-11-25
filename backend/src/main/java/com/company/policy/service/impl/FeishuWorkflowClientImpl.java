@@ -4,6 +4,7 @@ import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.service.FeishuTenantTokenService;
 import com.company.policy.service.FeishuWorkflowClient;
+import com.company.policy.service.PolicyFeishuSender;
 import com.company.policy.service.PolicyFeishuSender.Failure;
 import com.company.policy.service.PolicyFeishuSender.Kind;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -96,34 +97,30 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
             String chatId,
             String summary,
             List<String> mentionOpenIds,
-            String detailUrl,
             String idempotencyKey,
             Runnable beforePost) {
-        var content = json.createObjectNode();
-        var rows = content.putObject("zh_cn").putArray("content");
-        rows.addArray().addObject().put("tag", "text").put("text", summary);
-        if (!mentionOpenIds.isEmpty()) {
-            var people = rows.addArray();
-            for (String id : new LinkedHashSet<>(mentionOpenIds)) {
-                if (id == null || !id.matches("ou_[A-Za-z0-9_-]{1,128}")) {
-                    throw new Failure(Kind.PERMANENT, "缺少有效的飞书收件人");
-                }
-                people.addObject().put("tag", "at").put("user_id", id);
-            }
-            verifyGroupMembers(chatId, mentionOpenIds);
-        }
-        if (detailUrl != null && !detailUrl.isBlank()) {
-            rows.addArray()
-                    .addObject()
-                    .put("tag", "a")
-                    .put("text", detailUrl.endsWith("#/apply/submissions") ? "打开我的提交" : "查看本轮政策")
-                    .put("href", detailUrl);
-        }
+        return sendGroupWithDetail(chatId, summary, mentionOpenIds, "", idempotencyKey, beforePost);
+    }
+
+    @Override
+    public String sendGroupWithDetail(
+            String chatId,
+            String summary,
+            List<String> mentionOpenIds,
+            String detailsUrl,
+            String idempotencyKey,
+            Runnable beforePost) {
+        var content = FeishuGroupPost.content(json, summary, mentionOpenIds, detailsUrl);
+        if (!mentionOpenIds.isEmpty()) verifyGroupMembers(chatId, mentionOpenIds);
         return sendMessage("chat_id", chatId, "post", content, idempotencyKey, beforePost);
     }
 
     private void verifyGroupMembers(String chatId, List<String> recipients) {
         var missing = new LinkedHashSet<>(recipients);
+        for (String id : missing) {
+            if (id == null || !id.matches("ou_[A-Za-z0-9_-]{1,128}"))
+                throw new Failure(Kind.PERMANENT, "缺少有效的飞书收件人");
+        }
         var pages = new HashSet<String>();
         String base =
                 "/open-apis/im/v1/chats/"
@@ -168,16 +165,7 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
             JsonNode content,
             String idempotencyKey,
             Runnable beforePost) {
-        var body =
-                Map.of(
-                        "receive_id",
-                        recipient,
-                        "msg_type",
-                        messageType,
-                        "content",
-                        content.toString(),
-                        "uuid",
-                        idempotencyKey);
+        var body = FeishuGroupPost.messageRequest(recipient, messageType, content, idempotencyKey);
         JsonNode data =
                 call("POST", MESSAGES + "?receive_id_type=" + recipientType, body, beforePost)
                         .data();
@@ -186,12 +174,7 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
 
     @Override
     public String createTask(
-            String openId,
-            String summary,
-            String detailUrl,
-            String idempotencyKey,
-            Runnable beforePost) {
-        var link = Map.of("href", detailUrl);
+            String openId, String summary, String idempotencyKey, Runnable beforePost) {
         var body =
                 Map.of(
                         "summary",
@@ -201,15 +184,7 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
                         "extra",
                         idempotencyKey,
                         "members",
-                        List.of(Map.of("type", "user", "role", "assignee", "id", openId)),
-                        "origin",
-                        Map.of(
-                                "platform_i18n_name",
-                                Map.of("zh_cn", "差异化政策管理系统"),
-                                "href",
-                                Map.of("url", detailUrl, "title", "查看本轮政策")),
-                        "custom_complete",
-                        Map.of("pc", link, "ios", link, "android", link));
+                        List.of(Map.of("type", "user", "role", "assignee", "id", openId)));
         JsonNode data = call("POST", TASKS + OPEN_ID, body, beforePost).data();
         return receipt(data.at("/task/guid"));
     }
@@ -393,7 +368,9 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
                     && Long.toString(policyId).equals(value.path("policyId").asText())
                     && version == value.path("round").asInt(-1)) return true;
         }
-        return false;
+        String marker =
+                PolicyFeishuSender.noticeElementId(recipient, key, assignmentId, policyId, version);
+        return content.findValuesAsText("element_id").contains(marker);
     }
 
     private String receipt(JsonNode node) {
@@ -414,7 +391,9 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
         } catch (IOException invalid) {
             throw new Failure(Kind.PERMANENT, "飞书投递内容无法编码");
         }
-        if (bytes != null && path.startsWith(MESSAGES) && bytes.length > 30_000) {
+        if (bytes != null
+                && path.startsWith(MESSAGES)
+                && bytes.length > FeishuGroupPost.MAX_MESSAGE_BYTES) {
             throw new Failure(Kind.PERMANENT, "飞书卡片或富文本消息超出 30 KB 限制");
         }
         String token;

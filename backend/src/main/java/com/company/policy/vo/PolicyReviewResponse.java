@@ -33,7 +33,7 @@ public final class PolicyReviewResponse {
             Summary policy,
             Snapshot snapshot,
             AuditSummary audit,
-            PolicyResponse.ApprovedEnd approvedEnd) {}
+            PolicyResponse.TimeHistory timeHistory) {}
 
     public record Review(
             String id,

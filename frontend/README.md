@@ -14,7 +14,7 @@
 
 ## 常用命令
 
-申请地址变更在工作台路由守卫中确认未保存内容，Hash 变化不关闭确认框。普通卡配置移除按完整卡片处理已有商品，抽屉确认后才更新表单；相关回归见 `tests/integration/ApplicantLayout.test.js` 和 `tests/unit/usePolicyGoodsPicker.test.js`。
+申请地址变更在工作台路由守卫中确认未保存内容，Hash 变化不关闭确认框。「选择适用商品」共用一个选品入口。选择手机型号按整组增减和提交，指定适用机型按单件申报，编辑后须确认才更新表单；相关回归见 `tests/integration/ApplicantLayout.test.js` 和 `tests/unit/usePolicyGoodsPicker.test.js`。
 
 在本目录运行，Node.js 要求以 package.json 为准：
 

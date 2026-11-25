@@ -33,6 +33,7 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
     private final PolicyPurchaseReviewMapper purchases;
     private final PolicySnapshotCodec snapshots;
     private final ObjectMapper json;
+    private final PolicyTimeHistory history;
 
     @Override
     public PolicyReviewRoundResponse detail(CurrentUserResponse session, long id, int version) {
@@ -43,13 +44,7 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
         if (row == null)
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到可查看的提交轮次。");
         var snapshot = snapshots.read(row.snapshotData());
-        boolean approvedExtension =
-                "APPROVED".equals(row.auditStatus())
-                        && row.workflowVersion() == 0
-                        && snapshot.sourcePolicyCode() != null
-                        && snapshot.consent() != null
-                        && snapshot.consent().batchPolicyKey() != null;
-        if (!approvedExtension && row.stage() == null)
+        if (row.stage() == null)
             throw new ApiException(
                     HttpStatus.CONFLICT, "POLICY_REVIEW_ROUND_MISSING", "本轮缺少审核阶段，请联系管理员核对。");
         boolean pending = "SUBMITTED".equals(row.auditStatus());
@@ -69,7 +64,7 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
                             .findFirst()
                             .orElse(null);
         }
-        var route = approvedExtension ? null : readRoute(row);
+        var route = readRoute(row, id);
         var summary =
                 route == null
                         ? null
@@ -117,7 +112,10 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
                 snapshot,
                 summary,
                 changes,
-                route == null || route.adjustments() == null ? List.of() : route.adjustments());
+                route == null || route.adjustments() == null ? List.of() : route.adjustments(),
+                "APPROVED".equals(row.auditStatus())
+                        ? history.read(tenant, id, version, snapshot.form().endTime())
+                        : null);
     }
 
     private boolean canDecide(String tenant, long userId, long id, int version, String stage) {
@@ -127,9 +125,10 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
                 && !purchases.permissions(tenant, userId, List.of(id)).isEmpty();
     }
 
-    private PolicyRouteSummary readRoute(Round row) {
+    private PolicyRouteSummary readRoute(Round row, long id) {
         try {
-            return json.readValue(row.routeJson(), PolicyRouteSummary.class);
+            var route = json.readValue(row.routeJson(), PolicyRouteSummary.class);
+            return route == null ? null : route.forDisplay(Long.toString(id));
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("无法还原本轮冻结的分流依据。", e);
         }

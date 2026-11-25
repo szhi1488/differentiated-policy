@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import PolicySubsidyFields from './PolicySubsidyFields.vue'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
+import { policyConfigurationKey } from '../../../utils/policy-form'
 
 const props = defineProps({
   model: { type: Object, required: true },
@@ -12,7 +13,7 @@ const emit = defineEmits([
   'set-model-platforms',
   'update-model-platform',
   'remove-model',
-  'remove-goods',
+  'remove-configuration',
   'edit-goods',
   'add-subsidy',
   'update-subsidy',
@@ -43,11 +44,17 @@ const modelGroups = computed(() => {
       })
     }
     const { configurations } = groups.get(key)
-    if (!configurations.has(item.config)) {
-      configurations.set(item.config, { config: item.config, goodsKeys: [], inactive: false })
+    const configurationKey = policyConfigurationKey(item)
+    if (!configurations.has(configurationKey)) {
+      configurations.set(configurationKey, {
+        key: configurationKey,
+        config: item.config,
+        count: 0,
+        inactive: false,
+      })
     }
-    const configuration = configurations.get(item.config)
-    configuration.goodsKeys.push(item.key)
+    const configuration = configurations.get(configurationKey)
+    configuration.count++
     configuration.inactive ||= item.status === 'inactive'
   }
   return [...groups.values()]
@@ -58,7 +65,7 @@ const modelGroups = computed(() => {
   <article class="policy-model-card" :aria-labelledby="titleId">
     <header class="policy-model-header">
       <h3 :id="titleId">{{ special ? firstGoods.name : '已选机型配置' }}</h3>
-      <el-tag v-if="special" type="warning" size="small">特殊商品</el-tag>
+      <el-tag v-if="special" type="warning" size="small">独立商品</el-tag>
       <el-tag
         v-if="model.goods.some((item) => item.status === 'inactive')"
         type="danger"
@@ -82,11 +89,11 @@ const modelGroups = computed(() => {
             <dd class="policy-model-configs">
               <el-tag
                 v-for="item in group.configurations.values()"
-                :key="item.config"
-                :closable="model.goods.length > item.goodsKeys.length && !confirming"
+                :key="item.key"
+                :closable="model.goods.length > item.count && !confirming"
                 effect="plain"
                 :type="item.inactive ? 'danger' : 'info'"
-                @close="$emit('remove-goods', item.goodsKeys)"
+                @close="$emit('remove-configuration', item.key)"
               >
                 {{ catalogConfigLabel(item.config) }}
               </el-tag>

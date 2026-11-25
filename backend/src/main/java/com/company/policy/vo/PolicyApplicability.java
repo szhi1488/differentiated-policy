@@ -2,6 +2,7 @@ package com.company.policy.vo;
 
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.entity.PolicyConsent.Target;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -16,7 +17,7 @@ public record PolicyApplicability(
         Status status,
         boolean canDirectSubmit,
         List<ScopeResult> scopes,
-        @Schema(description = "当前申请人负责渠道及平台内可申请整单提前结束的旧政策，独立于本单适用范围")
+        @Schema(description = "当前申请人有权提前结束或延期的已通过政策，每张原单附带当前截止和版本")
                 List<AdjustmentOption> adjustmentOptions) {
     public record AdjustmentOption(
             Target target,
@@ -68,10 +69,20 @@ public record PolicyApplicability(
             String effectiveThrough,
             String verifyType,
             List<String> sceneTypes,
-            List<Selection> selections) {}
+            List<Selection> selections) {
+        public boolean isRound(String id, int version) {
+            return id.equals(policyId) && submissionVersion == version;
+        }
+    }
 
     public record Selection(
-            String cardType, List<Product> products, SubsidyPlan subsidy, Integer quantity) {}
+            String cardType,
+            List<Product> products,
+            SubsidyPlan subsidy,
+            Integer quantity,
+            @Schema(description = "经整组校验的普通卡在该配置下的申报商品总数")
+                    @JsonInclude(JsonInclude.Include.NON_NULL)
+                    Integer wholeConfigurationGoodsCount) {}
 
     public record Product(
             String goodsId,
@@ -89,7 +100,8 @@ public record PolicyApplicability(
             String through,
             Action action,
             List<Group> groups,
-            List<String> eligiblePolicyIds) {}
+            List<String> eligiblePolicyIds,
+            @Schema(description = "仅因原单接续其拟延期而相邻，可与上一段共用选择") boolean continuesPrevious) {}
 
     public record Group(List<String> sceneTypes, String verifyType, List<String> policyIds) {}
 }

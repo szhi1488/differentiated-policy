@@ -24,8 +24,12 @@ import com.company.policy.vo.PolicyResponse.Snapshot;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PolicyApplicabilityEvaluatorTest {
@@ -199,6 +203,107 @@ class PolicyApplicabilityEvaluatorTest {
         assertThat(expired.status()).isEqualTo(Status.NO_EFFECTIVE_PERIOD);
         assertThat(expired.canDirectSubmit()).isFalse();
         assertThat(expired.scopes()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"00:00:00", "14:26:53"})
+    void submittedCutoffIsInclusiveAndDoesNotExtendPastTheNextSecond(String endClock) {
+        var start = "2026-12-07T00:00:00+08:00";
+        var end = "2026-12-08T" + endClock + "+08:00";
+        var through = PolicyFormValidation.time(end);
+        var approved = LocalDateTime.parse("2026-11-24T19:43:08");
+        var snapshot =
+                policy("13", start, end, "SALES", BOTH, card("SPECIFIED", "KUAISHOU", null, BLACK));
+        var scope = new Scope("KUAISHOU", 8001L, null, null, null);
+        var before = new PolicyApplicabilityEvaluator("RETAIL", scope, through);
+        before.include(snapshot, 13L, approved.minusHours(1), approved);
+        assertThat(before.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactly("13");
+        var after = new PolicyApplicabilityEvaluator("RETAIL", scope, through.plusSeconds(1));
+        after.include(snapshot, 13L, approved.minusHours(1), approved);
+        assertThat(after.effectivePolicies(scope)).isEmpty();
+
+        var next =
+                policy(
+                        "14",
+                        through.plusSeconds(1).format(PolicyFormValidation.TIME),
+                        "2026-12-09T00:00:00+08:00",
+                        "SALES",
+                        BOTH,
+                        card("SPECIFIED", "KUAISHOU", null, BLACK));
+        var preview = new PolicyApplicabilityEvaluator(next, approved);
+        preview.include(snapshot, 13L, approved.minusHours(1), approved);
+        assertThat(preview.result().canDirectSubmit()).isTrue();
+
+        for (var asOf : List.of(approved, through.plusDays(1))) {
+            var timeline =
+                    new PolicyTimelineBuilder(
+                            "RETAIL",
+                            List.of("KUAISHOU"),
+                            81,
+                            "12GB",
+                            "256GB",
+                            List.of(8001L),
+                            PolicyFormValidation.time(start),
+                            through.plusDays(1),
+                            asOf);
+            timeline.include(snapshot, 13L, approved.minusHours(1), approved);
+            var track = timeline.tracks().get(0);
+            assertThat(track.policies().get(0).policyFrom()).isEqualTo(start);
+            assertThat(track.policies().get(0).policyThrough()).isEqualTo(end);
+            var segments = asOf.isBefore(through) ? track.plannedSegments() : track.segments();
+            assertThat(segments)
+                    .singleElement()
+                    .satisfies(
+                            segment -> {
+                                assertThat(segment.startAt()).isEqualTo(start);
+                                assertThat(PolicyFormValidation.time(segment.endAt()))
+                                        .isEqualTo(through.plusSeconds(1));
+                                assertThat(segment.adoptedAuditLogIds()).containsExactly("13");
+                            });
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"RETAIL", "BILLION"})
+    void olderDecisionStopsExcludingRemainingPolicyAfterChosenPolicyExpires(String channel) {
+        boolean retail = channel.equals("RETAIL");
+        var scope =
+                retail
+                        ? new Scope("PDD", 8001L, null, null, null)
+                        : new Scope("PDD", null, 81L, "12GB", "256GB");
+        var verification = retail ? "SALES" : null;
+        var scenes = retail ? NATIONAL : null;
+        var cutoff = date(10, "00:00:00");
+        var chosen = policy("301", date(1, "00:00:00"), cutoff, verification, scenes, PDD);
+        var oldDecision =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(10, "23:59:59"),
+                        retail ? Action.SELECT_RETAIL_POLICIES : Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("301", "302"),
+                        List.of("301"));
+        var remaining =
+                policy("302", 1, 12, verification, scenes, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(oldDecision)));
+        var atCutoff =
+                new PolicyApplicabilityEvaluator(channel, scope, PolicyFormValidation.time(cutoff));
+        var nextSecond =
+                new PolicyApplicabilityEvaluator(
+                        channel, scope, PolicyFormValidation.time(cutoff).plusSeconds(1));
+        for (var evaluation : List.of(atCutoff, nextSecond)) {
+            add(evaluation, chosen);
+            add(evaluation, remaining);
+        }
+        assertThat(atCutoff.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactly("301");
+        assertThat(nextSecond.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactly("302");
     }
 
     @Test
@@ -404,6 +509,53 @@ class PolicyApplicabilityEvaluatorTest {
     }
 
     @Test
+    void verifiedGroupKeepsSubmittedCountAfterSnapshotRoundTripAndRetailSplitting() {
+        var codec = new PolicySnapshotCodec();
+        var clock = LocalDateTime.parse("2026-11-12T12:00:00");
+        for (var channel : List.of("RETAIL", "BILLION")) {
+            boolean retail = channel.equals("RETAIL");
+            var original =
+                    policy(
+                            "10",
+                            1,
+                            25,
+                            retail ? "SALES" : null,
+                            retail ? NATIONAL : null,
+                            card("COMMON", "PDD", null, BLACK, WHITE));
+            var verified =
+                    new Snapshot(
+                                    original.id(),
+                                    original.policyCode(),
+                                    original.applicantId(),
+                                    original.applicantName(),
+                                    original.submissionVersion(),
+                                    original.form(),
+                                    original.goods(),
+                                    null,
+                                    null,
+                                    true)
+                            .withConsent(original.consent());
+            var frozen = codec.read(codec.write(verified));
+            // 零售此处仅计算黑色轨道，仍应拿到原卡两件的整组基数。
+            var builder =
+                    new PolicyTimelineBuilder(
+                            channel,
+                            List.of("PDD"),
+                            81,
+                            "12GB",
+                            "256GB",
+                            List.of(8001L),
+                            clock.toLocalDate().atStartOfDay(),
+                            clock,
+                            clock);
+            builder.include(frozen, 10, AS_OF, AS_OF);
+            var selection = builder.tracks().get(0).policies().get(0).selections().get(0);
+            assertThat(selection.wholeConfigurationGoodsCount()).isEqualTo(2);
+            assertThat(selection.products()).hasSize(retail ? 1 : 2);
+        }
+    }
+
+    @Test
     void retailTimelineMergesIdenticalColorsButSplitsDifferentSelectionsAndStopsAtAsOf() {
         var shared =
                 policy("10", 1, 25, "SALES", NATIONAL, card("COMMON", "PDD", null, BLACK, WHITE));
@@ -423,6 +575,8 @@ class PolicyApplicabilityEvaluatorTest {
         var together = timeline.tracks().get(0);
         assertThat(together.goodsIds()).containsExactly("8001", "8002");
         assertThat(together.policies().get(0).selections().get(0).products()).hasSize(2);
+        assertThat(together.policies().get(0).selections().get(0).wholeConfigurationGoodsCount())
+                .isNull();
         assertThat(together.segments().get(0).endAt()).isNull();
         var late = selectRetail(policy("11", 10, 18, "SALES", NATIONAL, PDD), shared);
         var approved = LocalDateTime.parse("2026-11-11T10:30:00");
@@ -476,7 +630,7 @@ class PolicyApplicabilityEvaluatorTest {
     }
 
     @Test
-    void workflowSplitsAtApprovedRetailDecisionsInsideOneConfirmedFuturePeriod() {
+    void confirmationAndWorkflowSplitAtDifferentApprovedRetailChoices() {
         var scope = new Scope("PDD", 8001L, null, null, null);
         var oldDecisions =
                 List.of(
@@ -500,20 +654,25 @@ class PolicyApplicabilityEvaluatorTest {
                         .withConsent(new PolicyConsent(2, List.of(), oldDecisions)));
 
         var preview = trial.result();
-        var onlyRange = PolicyConfirmation.ranges(preview).get(0);
+        var ranges = PolicyConfirmation.ranges(preview);
+        assertThat(ranges).hasSize(3);
         var confirmed =
                 PolicyConfirmation.confirm(
                         preview,
-                        List.of(
-                                new PolicyDraftRequest.Choice(
-                                        scope,
-                                        onlyRange.through(),
-                                        "SELECT",
-                                        null,
-                                        List.of("302"))));
+                        ranges.stream()
+                                .map(
+                                        range ->
+                                                new PolicyDraftRequest.Choice(
+                                                        scope,
+                                                        range.through(),
+                                                        "SELECT",
+                                                        null,
+                                                        List.of("302")))
+                                .toList());
         var changes = trial.workflowSegments(confirmed, Map.of());
+        assertThat(changes).noneMatch(PolicyExecutionChange::requiresProductReview);
         assertThat(changes)
-                .filteredOn(PolicyExecutionChange::requiresProductReview)
+                .filteredOn(c -> !c.candidates().isEmpty())
                 .hasSize(3)
                 .allSatisfy(
                         c ->
@@ -558,7 +717,7 @@ class PolicyApplicabilityEvaluatorTest {
     }
 
     @Test
-    void workflowBillionStacksAcrossColorsWithoutRestoringAnExcludedRound() {
+    void billionExecutionStacksAcrossColorsButDistinctGoodsIdsSkipProductReview() {
         var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
         var oldDecision =
                 new Decision(
@@ -600,14 +759,278 @@ class PolicyApplicabilityEvaluatorTest {
                                     .extracting(Policy::policyId)
                                     .containsExactly("401", "403");
                             assertThat(c.added().get(0).selections().get(0).quantity()).isZero();
-                            assertThat(c.requiresProductReview()).isTrue();
+                            assertThat(c.requiresProductReview()).isFalse();
+                        });
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("wholePolicyGoods")
+    void comparesAllSelectedGoodsIdsAcrossBothWholePolicies(
+            String scenario, List<Card> previous, List<Card> proposed, boolean needsReview) {
+        var earlier = policy("401", 1, 20, null, null, previous.toArray(Card[]::new));
+        var draft = policy("402", 10, 15, null, null, proposed.toArray(Card[]::new));
+        PolicyFormValidation.validate(earlier.form(), true);
+        PolicyFormValidation.validate(draft.form(), true);
+        var trial = new PolicyApplicabilityEvaluator(draft, AS_OF);
+        add(trial, earlier);
+        var preview = trial.result();
+        var choices =
+                PolicyConfirmation.ranges(preview).stream()
+                        .map(
+                                range ->
+                                        new PolicyDraftRequest.Choice(
+                                                range.scope(),
+                                                range.through(),
+                                                "STACK",
+                                                null,
+                                                null))
+                        .toList();
+        assertThat(choices).isNotEmpty();
+        var changes =
+                trial.workflowSegments(PolicyConfirmation.confirm(preview, choices), Map.of());
+        assertThat(changes)
+                .filteredOn(change -> change.after().size() == 2)
+                .isNotEmpty()
+                .allSatisfy(
+                        change ->
+                                assertThat(change.requiresProductReview()).isEqualTo(needsReview));
+        assertThat(PolicyRouteSummary.from(changes, List.of()).requiresProductReview())
+                .isEqualTo(needsReview);
+    }
+
+    private static Stream<Arguments> wholePolicyGoods() {
+        var sameColorAndConfiguration = new Target("81", "12GB", "256GB", "8010");
+        var black = card("SPECIFIED", "PDD", 3, BLACK);
+        var other = card("COMMON", "PDD", null, OTHER_CONFIG);
+        var both = List.of(black, other);
+        var grouped = List.of(card("COMMON", "PDD", null, BLACK, OTHER_CONFIG));
+        return Stream.of(
+                Arguments.of("同一批商品在普通卡和指定卡间调整，顺序及数量变化", grouped, List.of(other, black), true),
+                Arguments.of(
+                        "同一商品在另一平台也选中，整单按 ID 去重",
+                        grouped,
+                        List.of(
+                                card("COMMON", "PDD", null, OTHER_CONFIG, BLACK),
+                                card("SPECIFIED", "TAOBAO", 1, BLACK)),
+                        true),
+                Arguments.of("旧单只选其子集", List.of(black), both, false),
+                Arguments.of("新单只选其子集", both, List.of(black), false),
+                Arguments.of(
+                        "同机型配置和颜色，商品 ID 不同",
+                        both,
+                        List.of(card("SPECIFIED", "PDD", 1, sameColorAndConfiguration), other),
+                        false),
+                Arguments.of(
+                        "同机型配置，不同颜色",
+                        both,
+                        List.of(card("SPECIFIED", "PDD", 1, WHITE), other),
+                        false),
+                Arguments.of(
+                        "同配置另加一个颜色商品",
+                        both,
+                        List.of(card("COMMON", "PDD", null, OTHER_CONFIG, WHITE, BLACK)),
+                        false),
+                Arguments.of(
+                        "旧单其他平台多选同配置商品",
+                        List.of(black, card("SPECIFIED", "TAOBAO", 1, WHITE)),
+                        List.of(black),
+                        false),
+                Arguments.of(
+                        "新单其他平台多选同配置商品",
+                        List.of(black),
+                        List.of(black, card("SPECIFIED", "TAOBAO", 1, WHITE)),
+                        false));
+    }
+
+    @Test
+    void kuaishouRoundsWithSixThreeAndFourSelectedGoodsRemainWithProcurement() {
+        var black512 = new Target("81", "12GB", "512GB", "8101");
+        var white512 = new Target("81", "12GB", "512GB", "8102");
+        var blue512 = new Target("81", "12GB", "512GB", "8103");
+        var blue256 = new Target("81", "12GB", "256GB", "8004");
+        var three256 = card("COMMON", "KUAISHOU", null, BLACK, WHITE, blue256);
+        var three512 = card("COMMON", "KUAISHOU", null, black512, white512, blue512);
+        var start = "2026-12-10T00:00:00+08:00";
+        var end = "2026-12-11T00:00:00+08:00";
+        var both = policy("15", start, end, "SALES", BOTH, three256, three512);
+        var national = policy("14", start, end, "SALES", NATIONAL, three256);
+        var earlier = new PolicyApplicabilityEvaluator(national, AS_OF);
+        add(earlier, both);
+        var accepted = selectRetail(earlier, scope -> List.of("15", "14"));
+        var local =
+                policy(
+                        "16",
+                        start,
+                        end,
+                        "SALES",
+                        LOCAL,
+                        three256,
+                        card("SPECIFIED", "KUAISHOU", 3, white512));
+        for (var snapshot : List.of(both, national, local))
+            PolicyFormValidation.validate(snapshot.form(), true);
+        var trial = new PolicyApplicabilityEvaluator(local, AS_OF);
+        add(trial, both);
+        add(trial, national.withConsent(accepted));
+        var decided =
+                selectRetail(
+                        trial,
+                        scope ->
+                                scope.goodsId().equals(8102L)
+                                        ? List.of("15", "16")
+                                        : List.of("14", "16"));
+        var route = PolicyRouteSummary.from(trial.workflowSegments(decided, Map.of()), List.of());
+        assertThat(route.changes())
+                .hasSize(4)
+                .allSatisfy(
+                        change -> {
+                            assertThat(change.scope().platformCode()).isEqualTo("KUAISHOU");
+                            assertThat(change.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactlyInAnyOrderElementsOf(
+                                            change.scope().goodsId().equals(8102L)
+                                                    ? List.of("15", "16")
+                                                    : List.of("14", "16"));
+                        });
+        assertThat(route.requiresProductReview()).isFalse();
+        assertThat(route.triggerSegments()).isZero();
+    }
+
+    @Test
+    void disjointSelectedStacksWithInternallyIdenticalGoodsStillCompareAcrossTheWholeRound() {
+        var x = card("SPECIFIED", "PDD", 3, BLACK);
+        var y = card("SPECIFIED", "PDD", 2, WHITE);
+        var baseX = policy("10", 1, 20, "SALES", NATIONAL, x);
+        var baseY = policy("30", 1, 20, "SALES", NATIONAL, y);
+        var secondX = policy("20", 1, 20, "SALES", LOCAL, x);
+        var secondY = policy("40", 1, 20, "SALES", LOCAL, y);
+        var pairX = new PolicyApplicabilityEvaluator(secondX, AS_OF);
+        add(pairX, baseX);
+        var pairY = new PolicyApplicabilityEvaluator(secondY, AS_OF);
+        add(pairY, baseY);
+        var idsX = List.of("10", "20");
+        var idsY = List.of("30", "40");
+        var current =
+                policy("50", 10, 15, "SALES", BOTH, card("COMMON", "PDD", null, BLACK, WHITE));
+        var trial = new PolicyApplicabilityEvaluator(current, AS_OF);
+        add(trial, baseX);
+        add(trial, secondX.withConsent(selectRetail(pairX, s -> idsX)));
+        add(trial, baseY);
+        add(trial, secondY.withConsent(selectRetail(pairY, s -> idsY)));
+        var confirmation =
+                selectRetail(trial, scope -> scope.goodsId().equals(8001L) ? idsX : idsY);
+        var changes = trial.workflowSegments(confirmation, Map.of());
+        assertThat(changes)
+                .hasSize(2)
+                .allSatisfy(
+                        change -> {
+                            assertThat(change.candidates()).hasSize(3);
+                            assertThat(change.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactlyInAnyOrderElementsOf(
+                                            change.scope().goodsId().equals(8001L) ? idsX : idsY);
+                            assertThat(change.requiresProductReview()).isFalse();
+                        });
+        assertThat(PolicyRouteSummary.from(changes, List.of()).triggerSegments()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void mergedChannelsMustShareTheSameGoodsAcrossAllSelectedStacks(boolean sameGoods) {
+        var evaluation = new PolicyRouteSummary.Evaluation();
+        var retail =
+                new PolicyApplicabilityEvaluator(
+                        policy("12", 10, 15, "SALES", LOCAL, card("SPECIFIED", "PDD", 0, BLACK)),
+                        AS_OF);
+        add(retail, policy("11", 1, 20, "SALES", NATIONAL, card("SPECIFIED", "PDD", 7, BLACK)));
+        retail.workflowSegments(
+                selectRetail(retail, scope -> List.of("11", "12")), Map.of(), evaluation);
+
+        var item = sameGoods ? BLACK : WHITE;
+        var selected = card("SPECIFIED", "TAOBAO", 4, item);
+        var billion =
+                new PolicyApplicabilityEvaluator(policy("22", 10, 15, null, null, selected), AS_OF);
+        add(billion, policy("21", 1, 20, null, null, selected));
+        var preview = billion.result();
+        var range = PolicyConfirmation.ranges(preview).get(0);
+        var choice =
+                new PolicyDraftRequest.Choice(range.scope(), range.through(), "STACK", null, null);
+        billion.workflowSegments(
+                PolicyConfirmation.confirm(preview, List.of(choice)), Map.of(), evaluation);
+
+        var route = PolicyRouteSummary.from(evaluation.changes(), List.of());
+        assertThat(route.changes()).hasSize(2).allMatch(change -> change.after().size() == 2);
+        assertThat(route.requiresProductReview()).isEqualTo(sameGoods);
+        assertThat(route.triggerSegments()).isEqualTo(sameGoods ? 2 : 0);
+    }
+
+    private static PolicyConsent selectRetail(
+            PolicyApplicabilityEvaluator evaluator, Function<Scope, List<String>> selected) {
+        var preview = evaluator.result();
+        return PolicyConfirmation.confirm(
+                preview,
+                PolicyConfirmation.ranges(preview).stream()
+                        .map(
+                                range ->
+                                        new PolicyDraftRequest.Choice(
+                                                range.scope(),
+                                                range.through(),
+                                                "SELECT",
+                                                null,
+                                                selected.apply(range.scope())))
+                        .toList());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void comparesOnlyTheChosenPoliciesAndRequiresAllOfThemToMatch(boolean chooseThird) {
+        var retailScope = new Scope("PDD", 8001L, null, null, null);
+        var approved =
+                new Decision(
+                        retailScope,
+                        date(1, "00:00:00"),
+                        date(20, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("401", "402"),
+                        List.of("401", "402"));
+        var trial =
+                new PolicyApplicabilityEvaluator(
+                        policy(
+                                "403",
+                                10,
+                                15,
+                                "SALES",
+                                BOTH,
+                                card("COMMON", "PDD", null, BLACK, OTHER_CONFIG)),
+                        AS_OF);
+        add(trial, policy("401", 1, 20, "SALES", LOCAL, PDD));
+        add(
+                trial,
+                policy("402", 1, 20, "SALES", NATIONAL, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(approved))));
+        var preview = trial.result();
+        var chosen = chooseThird ? List.of("401", "402", "403") : List.of("401", "402");
+        var choice =
+                new PolicyDraftRequest.Choice(
+                        retailScope, date(15, "23:59:59"), "SELECT", null, chosen);
+        assertThat(
+                        trial.workflowSegments(
+                                PolicyConfirmation.confirm(preview, List.of(choice)), Map.of()))
+                .filteredOn(change -> change.scope().equals(retailScope))
+                .singleElement()
+                .satisfies(
+                        change -> {
+                            assertThat(change.candidates()).hasSize(3);
+                            assertThat(change.after())
+                                    .extracting(Policy::policyId)
+                                    .containsExactlyInAnyOrderElementsOf(chosen);
+                            assertThat(change.requiresProductReview()).isEqualTo(!chooseThird);
                         });
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void oneEligibleBillionCandidateNeedsReviewWhenTheApplicantConfirmedTheRange(
-            boolean alreadyShortened) {
+    void oneEligibleBillionCandidateSkipsProductReviewAfterConfirmation(boolean alreadyShortened) {
         var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
         var target = new PolicyConsent.Target("401", "401", date(20, "23:59:59"));
         var cut = new PolicyConsent.EndAdjustment(target, date(9, "23:59:59"), "提前结束 A");
@@ -628,6 +1051,13 @@ class PolicyApplicabilityEvaluatorTest {
                                 : draft.withConsent(
                                         new PolicyConsent(3, List.of(), List.of(), List.of(cut))),
                         AS_OF);
+        if (alreadyShortened) {
+            var through = PolicyFormValidation.time(cut.endTime());
+            trial.includeTimeChange(
+                    401,
+                    new PolicyEffectivePeriods.Change(
+                            1, false, through.plusSeconds(1), through, AS_OF, List.of()));
+        }
         add(trial, policy("401", 1, 20, null, null, PDD));
         var acceptedA =
                 new Decision(
@@ -642,8 +1072,6 @@ class PolicyApplicabilityEvaluatorTest {
                 trial,
                 policy("402", 1, 20, null, null, PDD)
                         .withConsent(new PolicyConsent(2, List.of(), List.of(acceptedA))));
-        if (alreadyShortened)
-            trial.includeApprovedEnd("401", PolicyFormValidation.time(cut.endTime()));
 
         var preview = trial.result(options);
         assertThat(preview.scopes().get(0).segments().get(0).eligiblePolicyIds())
@@ -666,12 +1094,12 @@ class PolicyApplicabilityEvaluatorTest {
                                             alreadyShortened
                                                     ? PolicyExecutionChange.Kind.ORDINARY_ADDITION
                                                     : PolicyExecutionChange.Kind.REPLACEMENT);
-                            assertThat(change.requiresProductReview()).isTrue();
+                            assertThat(change.requiresProductReview()).isFalse();
                         });
     }
 
     @Test
-    void confirmedOverlapsAreReviewedBothWhenKeepingAndReplacingAfterTheCut() {
+    void confirmedKeptStackNeedsReviewWhileKeepingOnlyOneAfterTheCutSkipsReview() {
         var scope = new Scope("PDD", 8001L, null, null, null);
         var target = new PolicyConsent.Target("302", "302", date(14, "23:59:59"));
         var end = date(10, "18:00:00");
@@ -715,8 +1143,8 @@ class PolicyApplicabilityEvaluatorTest {
                         trial.workflowSegments(
                                 PolicyConfirmation.confirm(preview, List.of(keepBoth, keepOne)),
                                 options))
-                .hasSize(2)
-                .allMatch(PolicyExecutionChange::requiresProductReview);
+                .extracting(PolicyExecutionChange::requiresProductReview)
+                .containsExactly(true, false);
         var replace =
                 new PolicyDraftRequest.Choice(
                         scope, date(14, "23:59:59"), "SELECT", null, List.of("301", "303"));
@@ -728,6 +1156,7 @@ class PolicyApplicabilityEvaluatorTest {
                 .singleElement()
                 .satisfies(
                         c -> {
+                            assertThat(c.requiresProductReview()).isTrue();
                             assertThat(c.from()).isEqualTo("2026-11-10T18:00:01");
                             assertThat(c.added())
                                     .extracting(Policy::policyId)
@@ -775,7 +1204,11 @@ class PolicyApplicabilityEvaluatorTest {
                 .isInstanceOfSatisfying(
                         ApiException.class,
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
-        trial.includeApprovedEnd("301", PolicyFormValidation.time(date(9, "23:59:59")));
+        var shortened = PolicyFormValidation.time(date(9, "23:59:59"));
+        trial.includeTimeChange(
+                301,
+                new PolicyEffectivePeriods.Change(
+                        1, false, shortened.plusSeconds(1), shortened, AS_OF, List.of()));
         trial.includeWorkflow(wrongColor, 301, AS_OF, AS_OF);
         assertThat(trial.result().canDirectSubmit()).isTrue();
     }
@@ -805,6 +1238,343 @@ class PolicyApplicabilityEvaluatorTest {
                         e -> assertThat(e.getCode()).isEqualTo("POLICY_RECONFIRM_REQUIRED"));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void samePolicyNumberOnlyCreatesAnotherConfirmationWhenAdoptionChanges(
+            boolean changeSelection) {
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        var ids = List.of("24", "25");
+        var groups =
+                List.of(
+                        new Group(NATIONAL, "SALES", List.of("24")),
+                        new Group(LOCAL, "SALES", List.of("25")));
+        var first =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(10, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        groups,
+                        ids,
+                        ids);
+        var next =
+                new Decision(
+                        scope,
+                        date(11, "00:00:00"),
+                        date(12, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        groups,
+                        ids,
+                        changeSelection ? List.of("25") : ids);
+        var extension =
+                new PolicyEffectivePeriods.Change(
+                        1,
+                        true,
+                        PolicyFormValidation.time(next.from()),
+                        PolicyFormValidation.time(next.through()),
+                        AS_OF,
+                        List.of(next));
+        var source = policy("24", 1, 10, "SALES", NATIONAL, PDD);
+        var other =
+                policy("25", 1, 12, "SALES", LOCAL, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(first)));
+        var preview =
+                new PolicyApplicabilityEvaluator(
+                        policy("27", 1, 12, "ACTIVATION", LOCAL, PDD), AS_OF);
+        preview.includeTimeChange(24, extension);
+        add(preview, source);
+        add(preview, other);
+        var result = preview.result().scopes().get(0);
+        assertThat(result.policies())
+                .extracting(Policy::policyId)
+                .containsExactlyInAnyOrder("24", "25", "27");
+        assertThat(result.segments()).hasSize(changeSelection ? 2 : 1);
+        assertThat(result.segments().get(0).through())
+                .isEqualTo(changeSelection ? first.through() : next.through());
+        var point =
+                new PolicyApplicabilityEvaluator(
+                        "RETAIL", scope, PolicyFormValidation.time(next.from()));
+        point.includeTimeChange(24, extension);
+        add(point, source);
+        add(point, other);
+        assertThat(point.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactlyInAnyOrderElementsOf(next.selectedPolicyIds());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void proposedExtensionKeepsAnIndependentChoiceWhenOtherAdoptedPoliciesChange(
+            boolean switchOtherPolicy) {
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        var first =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(10, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("24", "25", "26"),
+                        List.of("24", "25"));
+        var next =
+                new Decision(
+                        scope,
+                        date(11, "00:00:00"),
+                        date(14, "23:59:59"),
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("25", "26"),
+                        List.of(switchOtherPolicy ? "26" : "25"));
+        var old = policy("24", 1, 10, "SALES", NATIONAL, PDD);
+        var proposal = policy("24", 11, 14, "SALES", NATIONAL, PDD);
+        var extension =
+                new Snapshot(
+                        "extension:30:24",
+                        old.policyCode() + "（延期）",
+                        old.applicantId(),
+                        old.applicantName(),
+                        1,
+                        proposal.form(),
+                        proposal.goods(),
+                        proposal.consent());
+        var parent = policy("30", 1, 13, "ACTIVATION", LOCAL, PDD);
+        var preview =
+                new PolicyApplicabilityEvaluator(
+                        List.of(parent, extension), AS_OF, AS_OF, Long.MAX_VALUE);
+        add(preview, old);
+        add(preview, policy("25", 1, 14, "SALES", LOCAL, PDD));
+        add(
+                preview,
+                policy("26", 1, 14, "SALES", LOCAL, PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(first, next))));
+        var segments = preview.result().scopes().get(0).segments();
+        assertThat(segments)
+                .extracting(Segment::continuesPrevious)
+                .containsExactly(false, !switchOtherPolicy, false);
+    }
+
+    @Test
+    void expiredRenewalKeepsItsGapAndOneSecondExtensionUsesTheOriginalRound() {
+        var source = policy("24", 1, 10, "SALES", NATIONAL, PDD);
+        var cutoff = PolicyFormValidation.time(date(10, "23:59:59"));
+        var resumed = cutoff.plusDays(2);
+        var renewal =
+                new PolicyEffectivePeriods.Change(1, true, resumed, resumed, resumed, List.of());
+        var timeline =
+                new PolicyTimelineBuilder(
+                        "RETAIL",
+                        List.of("PDD"),
+                        81,
+                        "12GB",
+                        "256GB",
+                        List.of(8001L),
+                        cutoff.minusDays(2),
+                        resumed.plusDays(1),
+                        resumed.plusDays(2));
+        timeline.includeTimeChange(24, renewal);
+        timeline.include(source, 24, AS_OF.minusDays(1), AS_OF);
+        var track = timeline.tracks().get(0);
+        assertThat(track.policies())
+                .singleElement()
+                .satisfies(
+                        p -> {
+                            assertThat(p.policyId()).isEqualTo("24");
+                            assertThat(p.policyThrough()).isEqualTo(date(10, "23:59:59"));
+                            assertThat(p.effectiveThrough())
+                                    .isEqualTo(PolicyApplicabilityEvaluator.time(resumed));
+                        });
+        assertThat(track.segments()).hasSize(2);
+        assertThat(track.segments().get(0).endAt())
+                .isEqualTo(PolicyApplicabilityEvaluator.time(cutoff.plusSeconds(1)));
+        assertThat(track.segments().get(1).startAt())
+                .isEqualTo(PolicyApplicabilityEvaluator.time(resumed));
+        assertThat(track.segments().get(1).endAt())
+                .isEqualTo(PolicyApplicabilityEvaluator.time(resumed.plusSeconds(1)));
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        for (var second :
+                List.of(
+                        cutoff,
+                        cutoff.plusSeconds(1),
+                        resumed.minusSeconds(1),
+                        resumed,
+                        resumed.plusSeconds(1))) {
+            var point = new PolicyApplicabilityEvaluator("RETAIL", scope, second);
+            point.includeTimeChange(24, renewal);
+            add(point, source);
+            assertThat(point.effectivePolicies(scope))
+                    .hasSize(second.equals(cutoff) || second.equals(resumed) ? 1 : 0);
+        }
+    }
+
+    @Test
+    void billionRenewalCanSelectOriginalEvenIfAPriorDecisionExcludedItsPreviousPeriod() {
+        var scope = new Scope("PDD", null, 81L, "12GB", "256GB");
+        var old =
+                new Decision(
+                        scope,
+                        date(1, "00:00:00"),
+                        date(20, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("24", "25"),
+                        List.of("25"));
+        var selected =
+                new Decision(
+                        scope,
+                        date(11, "00:00:00"),
+                        date(18, "23:59:59"),
+                        Action.STACK_OR_CHOOSE,
+                        List.of(),
+                        List.of("24", "25"),
+                        List.of("24"));
+        var point =
+                new PolicyApplicabilityEvaluator(
+                        "BILLION", scope, PolicyFormValidation.time(selected.from()));
+        point.includeTimeChange(
+                24,
+                new PolicyEffectivePeriods.Change(
+                        1,
+                        false,
+                        PolicyFormValidation.time(selected.from()),
+                        PolicyFormValidation.time(selected.from()).minusSeconds(1),
+                        AS_OF.minusDays(1),
+                        List.of()));
+        point.includeTimeChange(
+                24,
+                new PolicyEffectivePeriods.Change(
+                        2,
+                        true,
+                        PolicyFormValidation.time(selected.from()),
+                        PolicyFormValidation.time(selected.through()),
+                        AS_OF,
+                        List.of(selected)));
+        add(point, policy("24", 1, 20, null, List.of(), PDD));
+        add(
+                point,
+                policy("25", 1, 20, null, List.of(), PDD)
+                        .withConsent(new PolicyConsent(2, List.of(), List.of(old))));
+        assertThat(point.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactly("24");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"RETAIL", "BILLION"})
+    void sameSecondUsesWhichApprovalTheAdjustmentSawInsteadOfComparingIdsAcrossTables(
+            String channel) {
+        var retail = "RETAIL".equals(channel);
+        var scope =
+                retail
+                        ? new Scope("PDD", 8001L, null, null, null)
+                        : new Scope("PDD", null, 81L, "12GB", "256GB");
+        var action = retail ? Action.SELECT_RETAIL_POLICIES : Action.STACK_OR_CHOOSE;
+        var verify = retail ? "SALES" : null;
+        var scenes = retail ? NATIONAL : null;
+        var start = date(11, "00:00:00");
+        var end = date(12, "23:59:59");
+        for (boolean ordinaryAlreadyApproved : List.of(true, false)) {
+            var earlier = ordinaryAlreadyApproved ? List.of("24", "25", "90") : List.of("24", "25");
+            var extensionChoice =
+                    new Decision(scope, start, end, action, List.of(), earlier, List.of("24"));
+            var ordinaryChoice =
+                    new Decision(
+                            scope,
+                            start,
+                            end,
+                            action,
+                            List.of(),
+                            List.of("24", "25", "90"),
+                            List.of("90"));
+            // 故意让两个不同表的 ID 大小与业务顺序相反。
+            var changeId = ordinaryAlreadyApproved ? 1 : 1000;
+            var auditId = ordinaryAlreadyApproved ? 1000 : 1;
+            var point =
+                    new PolicyApplicabilityEvaluator(
+                            channel, scope, PolicyFormValidation.time(start));
+            point.includeTimeChange(
+                    24,
+                    new PolicyEffectivePeriods.Change(
+                            changeId,
+                            true,
+                            PolicyFormValidation.time(start),
+                            PolicyFormValidation.time(end),
+                            AS_OF,
+                            List.of(extensionChoice),
+                            java.util.Set.copyOf(earlier)));
+            add(point, policy("24", 1, 10, verify, scenes, PDD));
+            add(point, policy("25", 1, 15, verify, scenes, PDD));
+            point.include(
+                    policy("90", 1, 15, verify, scenes, PDD)
+                            .withConsent(new PolicyConsent(2, List.of(), List.of(ordinaryChoice))),
+                    auditId,
+                    AS_OF,
+                    AS_OF);
+            assertThat(point.effectivePolicies(scope))
+                    .extracting(Policy::policyId)
+                    .containsExactly(ordinaryAlreadyApproved ? "24" : "90");
+        }
+    }
+
+    @Test
+    void successiveAdjustmentsWithinOneSecondReplayTheirInsertionOrder() {
+        var scope = new Scope("PDD", 8001L, null, null, null);
+        var at = PolicyFormValidation.time(date(10, "12:00:00"));
+        var firstEnd = date(10, "23:59:59");
+        var shorterEnd = date(9, "23:59:59");
+        var end = date(12, "23:59:59");
+        var priorChoice =
+                new Decision(
+                        scope,
+                        date(9, "00:00:00"),
+                        firstEnd,
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("24", "25"),
+                        List.of("25"));
+        var newChoice =
+                new Decision(
+                        scope,
+                        date(10, "00:00:00"),
+                        end,
+                        Action.SELECT_RETAIL_POLICIES,
+                        List.of(),
+                        List.of("24", "25"),
+                        List.of("24"));
+        var point = new PolicyApplicabilityEvaluator("RETAIL", scope, at);
+        point.includeTimeChange(
+                24,
+                new PolicyEffectivePeriods.Change(
+                        1,
+                        true,
+                        PolicyFormValidation.time(priorChoice.from()),
+                        PolicyFormValidation.time(firstEnd),
+                        AS_OF,
+                        List.of(priorChoice)));
+        point.includeTimeChange(
+                24,
+                new PolicyEffectivePeriods.Change(
+                        2,
+                        false,
+                        PolicyFormValidation.time(newChoice.from()),
+                        PolicyFormValidation.time(shorterEnd),
+                        AS_OF,
+                        List.of()));
+        point.includeTimeChange(
+                24,
+                new PolicyEffectivePeriods.Change(
+                        3,
+                        true,
+                        PolicyFormValidation.time(newChoice.from()),
+                        PolicyFormValidation.time(end),
+                        AS_OF,
+                        List.of(newChoice)));
+        add(point, policy("24", 1, 8, "SALES", NATIONAL, PDD));
+        add(point, policy("25", 1, 15, "SALES", NATIONAL, PDD));
+        assertThat(point.effectivePolicies(scope))
+                .extracting(Policy::policyId)
+                .containsExactly("24");
+    }
+
     private static Snapshot selectRetail(Snapshot proposal, Snapshot previous) {
         var evaluator = new PolicyApplicabilityEvaluator(proposal, AS_OF);
         add(evaluator, previous);
@@ -831,7 +1601,7 @@ class PolicyApplicabilityEvaluatorTest {
         return new Card(
                 type + targets[0].goodsId(),
                 type,
-                true,
+                false,
                 List.of(targets),
                 List.of(new SubsidyPlan("plan", "FIXED", "100.00", null, null, null)),
                 List.of(new PlatformAssignment(platform, "plan", quantity)));
@@ -839,16 +1609,30 @@ class PolicyApplicabilityEvaluatorTest {
 
     private static Snapshot policy(
             String id, int from, int through, String verify, List<String> scenes, Card... cards) {
+        return policy(id, date(from, "00:00:00"), date(through, "23:59:59"), verify, scenes, cards);
+    }
+
+    private static Snapshot policy(
+            String id,
+            String from,
+            String through,
+            String verify,
+            List<String> scenes,
+            Card... cards) {
         var form =
                 new PolicyDraftRequest(
                         null,
                         verify == null ? "BILLION" : "RETAIL",
-                        List.of("PDD"),
+                        List.of(cards).stream()
+                                .flatMap(card -> card.platformAssignments().stream())
+                                .map(PlatformAssignment::platformCode)
+                                .distinct()
+                                .toList(),
                         verify,
                         scenes,
                         verify == null ? null : false,
-                        date(from, "00:00:00"),
-                        date(through, "09:00:00"),
+                        from,
+                        through,
                         null,
                         List.of(),
                         new GoodsForm(List.of(cards)));
@@ -870,7 +1654,12 @@ class PolicyApplicabilityEvaluatorTest {
                                                 t.ram(),
                                                 t.rom(),
                                                 "Find X8",
-                                                t.equals(WHITE) ? "白色" : "黑色",
+                                                switch (t.goodsId()) {
+                                                    case "8002" -> "白色";
+                                                    case "8102" -> "初雪白";
+                                                    case "8004", "8103" -> "蓝色";
+                                                    default -> "黑色";
+                                                },
                                                 true))
                         .toList();
         return new Snapshot(

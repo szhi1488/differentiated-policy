@@ -43,6 +43,7 @@ class PolicyWorkflowRouteTest {
     private final PolicyCoverageServiceImpl coverage =
             new PolicyCoverageServiceImpl(
                     reviews,
+                    mock(com.company.policy.mapper.PolicyTimeChangeMapper.class),
                     mock(UserPlatformMapper.class),
                     snapshots,
                     mock(PolicyBatchExtensions.class),
@@ -94,9 +95,13 @@ class PolicyWorkflowRouteTest {
         var confirmed = proposed.withConsent(PolicyConfirmation.confirm(preview, choices));
         var result = coverage.workflowRoute(entry, confirmed, SUBMISSION);
         assertThat(result.requiresProductReview()).isTrue();
-        assertThat(result.triggerSegments()).isEqualTo(2);
+        assertThat(result.triggerSegments()).isOne();
         assertThat(result.stackSegments()).isOne();
         assertThat(result.changes()).hasSize(2);
+        assertThat(result.changes())
+                .filteredOn(change -> change.scope().platformCode().equals("TAOBAO"))
+                .singleElement()
+                .satisfies(change -> assertThat(change.requiresProductReview()).isFalse());
         assertThat(result.summary())
                 .contains(
                         "京东零售",
@@ -110,9 +115,7 @@ class PolicyWorkflowRouteTest {
                         "到手价",
                         "5%",
                         "上限 30 元",
-                        "数量 0 台",
-                        "淘宝零售",
-                        "沿用原单ZC-000096")
+                        "数量 0 台")
                 .doesNotContain("合计");
     }
 
@@ -140,16 +143,7 @@ class PolicyWorkflowRouteTest {
     void missingSnapshotDatesInAdjustmentCandidatesRequireReconfirmation() {
         var row =
                 new PolicyReviewMapper.AdjustmentCandidate(
-                        96L,
-                        42L,
-                        "RETAIL",
-                        SUBMISSION.minusDays(1),
-                        7L,
-                        "[\"JD\"]",
-                        false,
-                        null,
-                        null,
-                        null);
+                        96L, 42L, "RETAIL", SUBMISSION.minusDays(1), 7L, "[\"JD\"]", 3, null, null);
         when(reviews.adjustmentCandidates("company", 7L, SUBMISSION, "2026-11-23"))
                 .thenReturn(List.of(row));
         assertThatThrownBy(() -> coverage.workflowRoute(entry, proposed, SUBMISSION))
@@ -213,7 +207,6 @@ class PolicyWorkflowRouteTest {
                 1,
                 PolicyFormValidation.validate(form, true),
                 List.of(product),
-                DIRECT,
-                null);
+                DIRECT);
     }
 }

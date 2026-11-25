@@ -2,14 +2,18 @@ package com.company.policy.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyReviewRequest;
+import com.company.policy.mapper.PolicyProductCardMapper;
 import com.company.policy.service.PolicyCardCallback;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.service.impl.PolicyProductCardBuilder;
+import com.company.policy.support.policy.PolicySnapshotCodec;
 import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +21,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -24,11 +29,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
+import java.util.stream.StreamSupport;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -132,9 +141,7 @@ class PolicyCardCallbackTest {
     }
 
     private JsonNode card(long member) {
-        return json.valueToTree(
-                builder.build(
-                        TENANT, id, 1, member, "https://erp.example/#/reviews/" + id + "?round=1"));
+        return json.valueToTree(builder.build(TENANT, id, 1, member));
     }
 
     private ObjectNode event(long user, long member, String decision, String reason) {
@@ -176,55 +183,10 @@ class PolicyCardCallbackTest {
     }
 
     private ObjectNode segment() {
-        var product =
-                Map.of(
-                        "goodsId",
-                        "8",
-                        "spuId",
-                        "2",
-                        "modelName",
-                        "Reno",
-                        "colorName",
-                        "星夜黑",
-                        "ram",
-                        "8GB",
-                        "rom",
-                        "128GB");
-        var selection =
-                Map.of(
-                        "cardType",
-                        "NORMAL",
-                        "products",
-                        List.of(product),
-                        "subsidy",
-                        Map.of("subsidyMode", "FIXED", "fixedAmount", "25.00"));
-        var before =
-                Map.of(
-                        "policyId",
-                        "77",
-                        "policyCode",
-                        "ZC-000077",
-                        "submissionVersion",
-                        1,
-                        "selections",
-                        List.of(selection));
-        var after =
-                Map.of(
-                        "policyId",
-                        "88",
-                        "policyCode",
-                        "ZC-000088",
-                        "submissionVersion",
-                        2,
-                        "selections",
-                        List.of(selection));
-        var segment =
-                json.createObjectNode()
-                        .put("perspective", "RETAIL")
-                        .put("kind", "REPLACEMENT")
-                        .put("from", "2026-12-01T00:00:00")
-                        .put("through", "2026-12-04T23:59:59");
-        segment.set("scope", json.valueToTree(Map.of("platformCode", "JD", "goodsId", "8")));
+        var before = policyForCard(77, fixed("25.00"), null);
+        var after = policyForCard(88, fixed("25.00"), null).put("submissionVersion", 2);
+        after.remove("verifyType");
+        var segment = segmentScope().put("kind", "REPLACEMENT");
         segment.set("before", json.valueToTree(List.of(before)));
         segment.set("after", json.valueToTree(List.of(after)));
         segment.set("added", json.valueToTree(List.of(after)));
@@ -233,8 +195,392 @@ class PolicyCardCallbackTest {
         return segment;
     }
 
+    private ObjectNode segmentScope() {
+        var segment =
+                json.createObjectNode()
+                        .put("perspective", "RETAIL")
+                        .put("from", "2026-12-01T00:00:00")
+                        .put("through", "2026-12-04T23:59:59");
+        segment.set("scope", json.valueToTree(Map.of("platformCode", "JD", "goodsId", "8")));
+        return segment;
+    }
+
+    private ObjectNode policyForCard(long policyId, JsonNode subsidy, Integer quantity) {
+        var policy =
+                json.createObjectNode()
+                        .put("policyId", Long.toString(policyId))
+                        .put("policyCode", "ZC-%06d".formatted(policyId))
+                        .put("submissionVersion", 1)
+                        .put("verifyType", "SALES")
+                        .put("proposed", policyId == id);
+        var selection =
+                policy.putArray("selections")
+                        .addObject()
+                        .put("cardType", quantity == null ? "COMMON" : "SPECIFIED");
+        selection
+                .putArray("products")
+                .addObject()
+                .put("goodsId", "8")
+                .put("spuId", "2")
+                .put("modelName", "Reno")
+                .put("colorName", "星夜黑")
+                .put("ram", "8GB")
+                .put("rom", "128GB");
+        if (quantity != null) selection.put("quantity", quantity);
+        selection.set("subsidy", subsidy);
+        return policy;
+    }
+
+    private ObjectNode stackedSegment(
+            List<ObjectNode> before, List<ObjectNode> after, List<ObjectNode> candidates) {
+        var segment = segmentScope().put("matchingRoundGoods", true);
+        segment.put("kind", before.equals(after) ? "UNCHANGED" : "STACK");
+        segment.set("before", json.valueToTree(before));
+        segment.set("after", json.valueToTree(after));
+        segment.set("candidates", json.valueToTree(candidates));
+        segment.set(
+                "added",
+                json.valueToTree(after.stream().filter(p -> !before.contains(p)).toList()));
+        segment.set(
+                "removed",
+                json.valueToTree(before.stream().filter(p -> !after.contains(p)).toList()));
+        segment.set("retained", json.valueToTree(before.stream().filter(after::contains).toList()));
+        return segment;
+    }
+
+    private JsonNode fixed(String amount) {
+        return json.createObjectNode().put("subsidyMode", "FIXED").put("fixedAmount", amount);
+    }
+
+    private JsonNode cardWithSegments(List<ObjectNode> segments) throws Exception {
+        jdbc.update(
+                "UPDATE policy_review_round SET route_json=? WHERE policy_id=?",
+                json.writeValueAsString(Map.of("requiresProductReview", true, "changes", segments)),
+                id);
+        return card(firstMember);
+    }
+
+    private String showSegments(List<ObjectNode> segments) throws Exception {
+        return String.join("\n", cardWithSegments(segments).findValuesAsText("content"));
+    }
+
+    private static JsonNode element(JsonNode elements, String tag) {
+        return StreamSupport.stream(elements.spliterator(), false)
+                .filter(node -> tag.equals(node.path("tag").asText()))
+                .findFirst()
+                .orElseThrow();
+    }
+
     @Test
-    void segmentShowsFrozenTimeProductAndBothPolicyLists() throws Exception {
+    void kuaishouCardShowsTheFrozenPairInTheSamePeriodAsEachPolicysOwnSubsidy() throws Exception {
+        var prior = policyForCard(18, fixed("10.00"), null);
+        var current =
+                policyForCard(19, fixed("20.00"), null)
+                        .put("proposed", true)
+                        .put("verifyType", "ACTIVATION");
+        var selected = List.of(prior, current);
+        for (var policy : selected) {
+            policy.putArray("sceneTypes").add("NATIONAL_SUB");
+            ((ObjectNode) policy.at("/selections/0")).put("wholeConfigurationGoodsCount", 1);
+            ((ObjectNode) policy.at("/selections/0/subsidy")).put("maxSubsidyAmount", "100.00");
+            ((ObjectNode) policy.at("/selections/0/products/0"))
+                    .put("modelName", "Reno17 Pro")
+                    .put("ram", "12GB")
+                    .put("rom", "256GB");
+        }
+        var change = stackedSegment(List.of(prior), selected, selected);
+        ((ObjectNode) change.path("scope")).put("platformCode", "KUAISHOU");
+        change.put("from", "2026-12-12T00:00:00").put("through", "2026-12-13T00:00:00");
+        var mapper = mock(PolicyProductCardMapper.class);
+        when(mapper.content(TENANT, 19, 1, firstMember))
+                .thenReturn(
+                        new PolicyProductCardMapper.Content(
+                                "ACTIVE",
+                                null,
+                                null,
+                                null,
+                                1,
+                                2,
+                                true,
+                                json.writeValueAsString(
+                                        Map.of(
+                                                "requiresProductReview",
+                                                true,
+                                                "changes",
+                                                List.of(change))),
+                                "{}"));
+        var cards = new PolicyProductCardBuilder(mapper, json, new PolicySnapshotCodec());
+        JsonNode rendered = json.valueToTree(cards.build(TENANT, 19, 1, firstMember));
+        assertThat(rendered.path("schema").asText()).isEqualTo("2.0");
+        assertThat(rendered.at("/header/title/content").asText()).contains("政策叠加初审");
+        assertThat(rendered.at("/header/subtitle/content").asText()).contains("ZC-000019", "第 1 轮");
+        var elements = rendered.at("/body/elements");
+        var group = element(elements, "column_set");
+        assertThat(group.at("/columns/0/background_style").asText()).isEqualTo("blue-50");
+        var visible = group.findValuesAsText("content");
+        assertThat(visible.get(0)).isEqualTo("拟叠加执行 · ZC-000018 ＋ ZC-000019");
+        assertThat(String.join("\n", visible))
+                .contains(
+                        "Reno17 Pro 12GB+256GB 整组配置",
+                        "快手零售",
+                        "2026-12-12 00:00:00",
+                        "2026-12-13 00:00:00");
+        assertThat(String.join("\n", elements.findValuesAsText("content")))
+                .contains(
+                        "ZC-000018（原政策）\n国补 · 核销类型：销售维度 · 固定金额 10 元/台，上限 100 元",
+                        "ZC-000019（本次申请）\n国补 · 核销类型：激活维度 · 固定金额 20 元/台，上限 100 元");
+        var form = element(elements, "form");
+        assertThat(form.path("name").asText()).isEqualTo("rejection");
+        var formElements = form.path("elements");
+        var input = element(formElements, "input");
+        assertThat(input.path("name").asText()).isEqualTo("reason");
+        assertThat(input.path("required").isBoolean()).isTrue();
+        assertThat(input.path("required").asBoolean()).isFalse();
+        assertThat(input.path("max_length").asInt()).isEqualTo(512);
+        assertThat(input.at("/label/content").asText()).contains("仅拒绝时必填");
+        var actions = element(formElements, "column_set");
+        assertThat(actions.path("flex_mode").asText()).isEqualTo("bisect");
+        var buttons = actions.path("columns");
+        assertThat(buttons.size()).isEqualTo(2);
+        for (int i = 0; i < buttons.size(); i++) {
+            var button = element(buttons.get(i).path("elements"), "button");
+            String name = i == 0 ? "approve" : "reject";
+            assertThat(button.path("name").asText()).isEqualTo(name);
+            assertThat(button.path("type").asText())
+                    .isEqualTo(i == 0 ? "primary_filled" : "danger");
+            assertThat(button.path("form_action_type").asText()).isEqualTo("submit");
+            assertThat(button.at("/behaviors/0/type").asText()).isEqualTo("callback");
+            assertThat(button.at("/behaviors/0/value/decision").asText())
+                    .isEqualTo(i == 0 ? "APPROVE" : "REJECT");
+        }
+        assertThat(rendered.findValuesAsText("type")).doesNotContain("open_url");
+        assertThat(elements.get(elements.size() - 1)).isEqualTo(form);
+        assertThat(rendered.findValuesAsText("default_url")).isEmpty();
+        assertThat(rendered.findValues("value"))
+                .allSatisfy(
+                        value -> {
+                            assertThat(value.path("policyId").asText()).isEqualTo("19");
+                            assertThat(value.path("round").asInt()).isOne();
+                            assertThat(value.path("memberId").asText())
+                                    .isEqualTo(Long.toString(firstMember));
+                            assertThat(value.path("node").asText()).isEqualTo("PRODUCT_REVIEW");
+                            assertThat(value.path("recordVersion").asInt()).isEqualTo(2);
+                        })
+                .extracting(value -> value.path("decision").asText())
+                .containsExactlyInAnyOrder("APPROVE", "REJECT");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void eachSelectedPolicyKeepsItsOwnSubsidyAndQuantity(boolean threePolicies) throws Exception {
+        var a = policyForCard(71, fixed("31.25"), null);
+        var b = policyForCard(72, fixed("42.75"), 8);
+        var ratio =
+                json.createObjectNode()
+                        .put("subsidyMode", "RATIO")
+                        .put("priceBase", "HAND_PRICE")
+                        .put("ratio", "5.50")
+                        .put("maxSubsidyAmount", "49.25");
+        var current = policyForCard(id, ratio, 0).put("verifyType", "ACTIVATION");
+        var omitted = policyForCard(73, fixed("99.87"), null);
+        a.putArray("sceneTypes").add("NATIONAL_SUB");
+        b.putArray("sceneTypes").add("SELF_SUB");
+        current.putArray("sceneTypes").add("LOCAL_SUB");
+        omitted.putArray("sceneTypes").add("LOCAL_SUB");
+        var before = threePolicies ? List.of(a, b) : List.of(a);
+        var selected = threePolicies ? List.of(a, b, current) : List.of(a, current);
+        var candidates =
+                threePolicies ? List.of(a, b, current, omitted) : List.of(a, current, omitted);
+        String body = showSegments(List.of(stackedSegment(before, selected, candidates)));
+        String adopted = threePolicies ? "ZC-000071 ＋ ZC-000072" : "ZC-000071";
+        assertThat(body)
+                .contains("拟叠加执行 · " + adopted + " ＋ " + current.path("policyCode").asText())
+                .contains("手机配置", "京东", "零售", "2026-12-01 00:00:00", "2026-12-04 23:59:59", "星夜黑")
+                .containsOnlyOnce("ZC-000071（原政策）\n国补 · 核销类型：销售维度 · 固定金额 31.25 元/台")
+                .containsOnlyOnce(
+                        current.path("policyCode").asText()
+                                + "（本次申请）\n地补 · 核销类型：激活维度 · 比例补贴 到手价 × 5.5%，上限 49.25 元，数量 0 台")
+                .doesNotContain("ZC-000073", "99.87");
+        if (threePolicies) {
+            assertThat(body)
+                    .containsOnlyOnce("ZC-000072（原政策）\n自补 · 核销类型：销售维度 · 固定金额 42.75 元/台，数量 8 台");
+        } else {
+            assertThat(body).doesNotContain("ZC-000072", "42.75");
+        }
+    }
+
+    @Test
+    void continuingAnExistingStackMarksTheUnselectedApplicationAndKeepsBothApprovedSubsidies()
+            throws Exception {
+        var a = policyForCard(71, fixed("31.25"), null);
+        var b = policyForCard(72, fixed("42.75"), null);
+        var current = policyForCard(id, fixed("99.87"), null);
+        var selected = List.of(a, b);
+        String body =
+                showSegments(List.of(stackedSegment(selected, selected, List.of(a, b, current))));
+        assertThat(body)
+                .contains("继续叠加执行 · ZC-000071 ＋ ZC-000072")
+                .contains("本次申请未在本段采用", "ZC-000071（原政策）", "ZC-000072（原政策）", "31.25", "42.75")
+                .doesNotContain("99.87");
+    }
+
+    @Test
+    void accompanyingExtensionShowsItsOwnIdentityAndUnfilledQuantity() throws Exception {
+        var a = policyForCard(71, fixed("31.25"), null);
+        var extension = policyForCard(81, fixed("21.50"), null);
+        extension.put("proposed", true).put("policyId", "extension:" + id + ":81");
+        ((ObjectNode) extension.at("/selections/0")).put("cardType", "SPECIFIED");
+        var selected = List.of(a, extension);
+        String body = showSegments(List.of(stackedSegment(List.of(a), selected, selected)));
+        assertThat(body)
+                .contains("ZC-000081（本轮随单延期）\n核销类型：销售维度 · 固定金额 21.5 元/台，数量未填写", "本次申请未在本段采用")
+                .doesNotContain("数量 0 台");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"连续", "空档", "换单", "其他原执行单退出"})
+    void accompanyingExtensionRendersTheSelectedOriginalPoliciesForTheirContinuousPeriod(
+            String scenario) throws Exception {
+        String oldEnd = "2027-01-10T00:00:00";
+        String newEnd = "2027-01-16T00:00:00+08:00";
+        var original = policyForCard(27, ratio("10", "POLICY_PRICE"), null);
+        original.put("submissionVersion", 2).put("auditLogId", "127");
+        var application = policyForCard(30, ratio("12", "HAND_PRICE"), null);
+        application
+                .put("proposed", true)
+                .put("submissionVersion", 4)
+                .put("verifyType", "ACTIVATION");
+        for (var policy : List.of(original, application)) {
+            policy.putArray("sceneTypes").add("NATIONAL_SUB");
+            ((ObjectNode) policy.at("/selections/0")).put("wholeConfigurationGoodsCount", 1);
+            ((ObjectNode) policy.at("/selections/0/products/0"))
+                    .put("modelName", "Reno17 Pro")
+                    .put("ram", "12GB")
+                    .put("rom", "256GB");
+        }
+        var extension =
+                original.deepCopy()
+                        .put("policyId", "extension:30:27")
+                        .put("policyCode", "ZC-000027（延期）")
+                        .put("submissionVersion", 1)
+                        .put("proposed", true)
+                        .putNull("auditLogId");
+        var firstPair = List.of(original, application);
+        var other = policyForCard(32, fixed("20"), null);
+        boolean otherExited = scenario.equals("其他原执行单退出");
+        var firstPeriod =
+                stackedSegment(
+                                otherExited ? List.of(original, other) : List.of(original),
+                                firstPair,
+                                otherExited ? List.of(original, application, other) : firstPair)
+                        .put("from", "2027-01-01T00:00:00")
+                        .put("through", oldEnd);
+        var nextPolicy =
+                scenario.equals("换单")
+                        ? application
+                                .deepCopy()
+                                .put("policyId", "31")
+                                .put("policyCode", "ZC-000031")
+                                .put("proposed", false)
+                        : application;
+        var secondPair = List.of(nextPolicy, extension);
+        var secondPeriod =
+                stackedSegment(
+                                scenario.equals("换单") ? List.of(nextPolicy) : List.of(),
+                                secondPair,
+                                otherExited ? List.of(nextPolicy, extension, other) : secondPair)
+                        .put(
+                                "from",
+                                scenario.equals("空档")
+                                        ? "2027-01-10T00:00:02"
+                                        : "2027-01-10T00:00:01")
+                        .put("through", "2027-01-13T00:00:00");
+        for (var period : List.of(firstPeriod, secondPeriod))
+            ((ObjectNode) period.path("scope")).put("platformCode", "KUAISHOU");
+        var target =
+                Map.of("policyId", "27", "auditLogId", "127", "previousEnd", oldEnd + "+08:00");
+        var adjustments =
+                List.of(
+                        Map.of(
+                                "target",
+                                target,
+                                "policyCode",
+                                "ZC-000027",
+                                "endTime",
+                                newEnd,
+                                "extension",
+                                true,
+                                "accompanying",
+                                true));
+        var route =
+                Map.of(
+                        "changes",
+                        List.of(firstPeriod, secondPeriod),
+                        "adjustments",
+                        adjustments,
+                        "requiresProductReview",
+                        true);
+        var snapshot =
+                Map.of(
+                        "submissionVersion",
+                        4,
+                        "consent",
+                        Map.of(
+                                "endAdjustments",
+                                List.of(
+                                        Map.of(
+                                                "target", target, "endTime", newEnd, "reason",
+                                                "676"))));
+        var mapper = mock(PolicyProductCardMapper.class);
+        when(mapper.content(TENANT, 30, 4, firstMember))
+                .thenReturn(
+                        new PolicyProductCardMapper.Content(
+                                "ACTIVE",
+                                null,
+                                null,
+                                null,
+                                4,
+                                8,
+                                true,
+                                json.writeValueAsString(route),
+                                json.writeValueAsString(snapshot)));
+        var cards = new PolicyProductCardBuilder(mapper, json, new PolicySnapshotCodec());
+        JsonNode card = json.valueToTree(cards.build(TENANT, 30, 4, firstMember));
+        var content = card.at("/body/elements").findValuesAsText("content");
+        String body = String.join("\n", content);
+        assertThat(body)
+                .containsOnlyOnce("随单截止调整")
+                .containsOnlyOnce(
+                        "ZC-000027 拟将截止从 2027-01-10 00:00:00 延长至 2027-01-16 00:00:00（北京时间）\n原因：676");
+        var periods = content.stream().filter(text -> text.contains("快手零售 · ")).toList();
+        if (scenario.equals("连续")) {
+            assertThat(periods).containsExactly("快手零售 · 2027-01-01 00:00:00 至 2027-01-13 00:00:00");
+            assertThat(body)
+                    .containsOnlyOnce("拟叠加执行 · ZC-000027 ＋ ZC-000030")
+                    .containsOnlyOnce("ZC-000027（原政策）\n国补 · 核销类型：销售维度 · 比例补贴 政策价 × 10%")
+                    .containsOnlyOnce("ZC-000030（本次申请）\n国补 · 核销类型：激活维度 · 比例补贴 到手价 × 12%")
+                    .doesNotContain("（延期）", "本轮随单延期");
+        } else {
+            assertThat(periods)
+                    .containsExactly(
+                            "快手零售 · 2027-01-01 00:00:00 至 2027-01-10 00:00:00",
+                            "快手零售 · "
+                                    + secondPeriod.path("from").asText().replace('T', ' ')
+                                    + " 至 2027-01-13 00:00:00");
+            if (scenario.equals("换单")) assertThat(body).contains("ZC-000031");
+        }
+    }
+
+    private JsonNode ratio(String value, String base) {
+        return json.createObjectNode()
+                .put("subsidyMode", "RATIO")
+                .put("priceBase", base)
+                .put("ratio", value);
+    }
+
+    @Test
+    void previouslyFrozenReplacementCardShowsOriginalTimeProductAndBothPolicyLists()
+            throws Exception {
         var route =
                 Map.of(
                         "requiresProductReview",
@@ -254,34 +600,96 @@ class PolicyCardCallbackTest {
                         "星夜黑",
                         "12-01",
                         "12-04",
-                        "原采用：ZC-000077",
-                        "拟采用：ZC-000088",
-                        "25 元/台");
+                        "退出本段：ZC-000077",
+                        "ZC-000088",
+                        "核销类型：未记录 · 固定金额 25 元/台")
+                .contains("拟执行 · ZC-000088")
+                .doesNotContain("拟叠加执行", "继续叠加执行", "政策叠加初审", "整单选择的商品完全相同");
     }
 
     @Test
-    void largeRoundKeepsBothSummariesAndErpLinkWithinEncodedMessageAndElementLimits()
+    void twoTimeWindowsShowSeparateSelectedCombinationsEvenWithTheSameCandidates()
             throws Exception {
+        var a = policyForCard(71, fixed("31.25"), null);
+        var b = policyForCard(72, fixed("42.75"), null);
+        var current = policyForCard(id, fixed("21.50"), null);
+        var all = List.of(a, b, current);
+        var firstPeriod = stackedSegment(List.of(a), List.of(a, b), all);
+        var secondPeriod =
+                stackedSegment(List.of(a), List.of(a, current), all)
+                        .put("from", "2026-12-05T00:00:00")
+                        .put("through", "2026-12-06T23:59:59");
+        var elements = cardWithSegments(List.of(firstPeriod, secondPeriod)).at("/body/elements");
+        var periods =
+                StreamSupport.stream(elements.spliterator(), false)
+                        .filter(node -> "column_set".equals(node.path("tag").asText()))
+                        .map(node -> node.findValuesAsText("content"))
+                        .filter(texts -> !texts.isEmpty() && texts.get(0).startsWith("拟叠加执行"))
+                        .toList();
+        assertThat(periods).hasSize(2);
+        assertThat(periods.get(0).get(0)).isEqualTo("拟叠加执行 · ZC-000071 ＋ ZC-000072");
+        assertThat(periods.get(1).get(0))
+                .isEqualTo("拟叠加执行 · ZC-000071 ＋ " + current.path("policyCode").asText());
+        String body = String.join("\n", elements.findValuesAsText("content"));
+        int secondHeading = body.indexOf(periods.get(1).get(0));
+        assertThat(body.substring(0, secondHeading))
+                .contains("2026-12-01", "本次申请未在本段采用")
+                .doesNotContain(current.path("policyCode").asText(), "21.5");
+        assertThat(body.substring(secondHeading))
+                .contains("2026-12-05")
+                .doesNotContain("ZC-000072", "42.75");
+    }
+
+    @Test
+    void previouslyFrozenMixedRoundCardShowsOnlySegmentsWithMatchingConfigurations()
+            throws Exception {
+        var match = segment().put("kind", "STACK").put("matchingConfigurations", true);
+        match.withArray("after").add(match.at("/before/0").deepCopy());
+        match.withArray("retained").add(match.at("/before/0").deepCopy());
+        match.withArray("removed").removeAll();
+        var partial =
+                match.deepCopy()
+                        .put("from", "2026-12-05T00:00:00")
+                        .put("through", "2026-12-08T23:59:59")
+                        .put("matchingConfigurations", false);
+        jdbc.update(
+                "UPDATE policy_review_round SET route_json=? WHERE policy_id=?",
+                json.writeValueAsString(
+                        Map.of("requiresProductReview", true, "changes", List.of(partial, match))),
+                id);
+
+        assertThat(card(firstMember).toString())
+                .contains("这些政策整单所选的机型配置完全相同", "12-01", "12-04", "ZC-000077", "ZC-000088")
+                .doesNotContain("12-05", "12-08", "整单选择的商品完全相同");
+    }
+
+    @Test
+    void largeRoundKeepsBothSummariesWithinEncodedMessageAndElementLimits() throws Exception {
         var segments = json.createArrayNode();
         var adjustments = json.createArrayNode();
         var reasons = json.createArrayNode();
-        var normal = segment();
+        var prior = policyForCard(77, fixed("25.50"), null);
+        var current = policyForCard(id, fixed("40.75"), null);
+        var selected = List.of(prior, current);
+        var normal = stackedSegment(List.of(prior), selected, selected);
         var longSegment = normal.deepCopy();
         var longName = "商品·" + "🟩\"\\\n\u0002".repeat(100);
-        ((ObjectNode) longSegment.at("/before/0/selections/0/products/0"))
-                .put("modelName", longName);
-        ((ObjectNode) longSegment.at("/after/0/selections/0/products/0"))
-                .put("modelName", longName);
-        for (String key : List.of("before", "after")) {
-            var list = longSegment.withArray(key);
-            for (int i = 0; i < 180; i++) {
-                ObjectNode item = list.get(0).deepCopy();
-                item.put("policyCode", "ZC-" + (900000 + i));
-                list.add(item);
+        for (var name : List.of("before", "after", "candidates", "added", "retained")) {
+            for (var policy : longSegment.withArray(name)) {
+                ((ObjectNode) policy.at("/selections/0/products/0")).put("modelName", longName);
             }
         }
+        for (int i = 0; i < 180; i++) {
+            ObjectNode item = longSegment.at("/after/0").deepCopy();
+            item.put("policyId", Integer.toString(900000 + i))
+                    .put("policyCode", "ZC-" + (900000 + i));
+            for (var key : List.of("after", "candidates", "added"))
+                longSegment.withArray(key).add(item);
+        }
         for (int i = 0; i < 205; i++) {
-            segments.add(i < 3 ? longSegment : normal);
+            var day = LocalDate.of(2026, 12, 1).plusDays(i * 2L);
+            var item = (i < 3 ? longSegment : normal).deepCopy();
+            segments.add(item.put("from", day + "T00:00:00").put("through", day + "T23:59:59"));
             var target =
                     Map.of(
                             "policyId",
@@ -349,16 +757,25 @@ class PolicyCardCallbackTest {
                         output.toString());
         assertThat(json.writeValueAsBytes(request).length).isLessThanOrEqualTo(30_000);
         assertThat(output.findValues("tag").size()).isLessThan(200);
+        var combination =
+                element(output.at("/body/elements"), "column_set")
+                        .findValuesAsText("content")
+                        .get(0);
+        var omitted = Pattern.compile("（另有 (\\d+) 张未展开）$").matcher(combination);
+        assertThat(omitted.find()).isTrue();
+        long visibleNames = Pattern.compile("ZC-\\d+").matcher(combination).results().count();
+        assertThat(visibleNames + Integer.parseInt(omitted.group(1))).isEqualTo(182);
         assertThat(output.toString())
                 .contains(
                         "2026-12-01",
-                        "原采用：ZC-000077",
-                        "拟采用：ZC-000088",
+                        "ZC-000077",
+                        "25.5",
+                        "张拟采用政策",
                         "原因：商品",
-                        "其余 202 段",
+                        "其余 202 组",
                         "其余 202 项调整",
-                        "…（详见本轮详情）",
-                        "https://erp.example/#/reviews/" + id + "?round=1");
+                        "…（已省略）")
+                .doesNotContain("本轮详情", "open_url", "default_url");
     }
 
     @Test
@@ -391,6 +808,26 @@ class PolicyCardCallbackTest {
         assertThat(card(secondMember).toString())
                 .contains("同组他人已处理")
                 .doesNotContain("form_action_type", "callback");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "不作为退回意见保存"})
+    void approvingWithEitherEmptyOrPopulatedReasonNeverWritesARejectionReason(String input)
+            throws Exception {
+        postCallback(event(first, firstMember, "APPROVE", input))
+                .andExpect(jsonPath("$.toast.content").value("初审已通过"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_decision WHERE policy_id=? AND version=1 AND group_code='PRODUCT' AND decision='APPROVE' AND reason IS NULL",
+                                Integer.class,
+                                id))
+                .isEqualTo(1);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT stage FROM policy_review_round WHERE policy_id=? AND version=1",
+                                String.class,
+                                id))
+                .isEqualTo("PURCHASE_REVIEW");
     }
 
     @Test
@@ -602,7 +1039,7 @@ class PolicyCardCallbackTest {
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND event_key='PRODUCT_DECIDED' AND action_type='GROUP_MESSAGE'",
                                 Integer.class,
                                 id))
-                .isOne();
+                .isZero();
     }
 
     private int count(String table) {

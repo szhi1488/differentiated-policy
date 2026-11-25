@@ -123,7 +123,8 @@ CREATE TABLE `policy_apply` (
     AND (`is_estimated` IS NULL OR `is_estimated` IN (0, 1))
     AND (`channel_type` = 'RETAIL' OR (`write_off_type` IS NULL AND `scene_types` IS NULL AND `is_estimated` IS NULL))
   ),
-  CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`),
+  CONSTRAINT `ck_apply_time` CHECK (`start_time` IS NULL OR `end_time` IS NULL OR `start_time` < `end_time`
+    OR (`status` = 'APPROVED' AND TIMESTAMPDIFF(SECOND, `end_time`, `start_time`) <= 1)),
   CONSTRAINT `ck_apply_status_version` CHECK (
     (`status` = 'DRAFT' AND `current_version` = 0)
     OR (`status` IN ('PENDING', 'APPROVED', 'REJECTED') AND `current_version` > 0)
@@ -161,6 +162,47 @@ CREATE TABLE `policy_audit_log` (
     OR (`audit_status` IN ('APPROVED', 'REJECTED') AND `auditor_id` IS NOT NULL
       AND `auditor_name` IS NOT NULL AND `audit_time` IS NOT NULL)
   )
+);
+
+CREATE TABLE `policy_time_change` (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  policy_id BIGINT NOT NULL,
+  tenant_key VARCHAR(64) NOT NULL,
+  policy_version INT NOT NULL,
+  audit_log_id BIGINT NOT NULL,
+  after_record_version INT NOT NULL,
+  direction VARCHAR(8) NOT NULL,
+  previous_end DATETIME NOT NULL,
+  requested_end DATETIME NOT NULL,
+  actual_end DATETIME NOT NULL,
+  effective_at DATETIME NOT NULL,
+  changed_at DATETIME NOT NULL,
+  reason VARCHAR(512) NOT NULL,
+  actor_id BIGINT NOT NULL,
+  actor_name VARCHAR(64) NOT NULL,
+  attachment_json TEXT NOT NULL,
+  consent_json TEXT NOT NULL,
+  request_key VARCHAR(36) DEFAULT NULL,
+  request_hash VARCHAR(64) DEFAULT NULL,
+  source_policy_id BIGINT DEFAULT NULL,
+  source_version INT DEFAULT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_time_change_version (policy_id,after_record_version),
+  UNIQUE KEY uk_time_change_request (tenant_key,actor_id,request_key,policy_id),
+  UNIQUE KEY uk_time_change_source (source_policy_id,source_version,policy_id),
+  KEY idx_time_change_period (tenant_key,changed_at,id),
+  KEY idx_time_change_policy (policy_id,changed_at,id),
+  CONSTRAINT fk_time_change_policy FOREIGN KEY (policy_id,tenant_key) REFERENCES policy_apply(id,tenant_key),
+  CONSTRAINT fk_time_change_round FOREIGN KEY (policy_id,policy_version) REFERENCES policy_audit_log(policy_id,version),
+  CONSTRAINT fk_time_change_audit FOREIGN KEY (audit_log_id) REFERENCES policy_audit_log(id),
+  CONSTRAINT fk_time_change_source FOREIGN KEY (source_policy_id,source_version) REFERENCES policy_audit_log(policy_id,version),
+  CONSTRAINT fk_time_change_source_tenant FOREIGN KEY (source_policy_id,tenant_key) REFERENCES policy_apply(id,tenant_key),
+  CONSTRAINT fk_time_change_actor FOREIGN KEY (actor_id,tenant_key) REFERENCES user_info(id,tenant_key),
+  CONSTRAINT ck_time_change_direction CHECK ((direction='EXTEND' AND requested_end>previous_end AND actual_end=requested_end)
+    OR (direction='SHORTEN' AND requested_end<previous_end AND actual_end BETWEEN requested_end AND previous_end)),
+  CONSTRAINT ck_time_change_source CHECK ((request_key IS NOT NULL AND request_hash IS NOT NULL AND source_policy_id IS NULL AND source_version IS NULL)
+    OR (request_key IS NULL AND request_hash IS NULL AND source_policy_id IS NOT NULL AND source_version IS NOT NULL)),
+  CONSTRAINT ck_time_change_reason CHECK (CHAR_LENGTH(TRIM(reason))>0)
 );
 
 CREATE TABLE `policy_goods_detail` (

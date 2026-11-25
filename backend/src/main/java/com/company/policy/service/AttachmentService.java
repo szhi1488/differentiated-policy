@@ -36,6 +36,10 @@ public interface AttachmentService {
     Download downloadReviewRound(
             long policyId, int version, String attachmentId, CurrentUserResponse user);
 
+    /** 核对原单、获批轮次及指定调整的文件引用。 */
+    Download downloadTimeChange(
+            long policyId, int version, long changeId, String fileId, CurrentUserResponse user);
+
     /** 删除本人上传且未被政策表单或历史快照引用的附件。 */
     void delete(String id, CurrentUserResponse user);
 

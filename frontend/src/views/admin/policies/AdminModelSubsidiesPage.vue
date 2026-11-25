@@ -34,7 +34,6 @@ const {
   result,
   historyStatus,
   historyError,
-  showIndependent,
   search,
   resetFilters,
   locateCurrentTime,
@@ -57,10 +56,14 @@ const visibleChannels = computed(() => {
 })
 const detailPanel = ref(null)
 const inspectedPolicy = ref(null)
-const policyRows = computed(() =>
-  (result.value?.rows ?? []).filter(
-    (row) => showIndependent.value || row.plan.cardType !== 'SPECIFIED',
-  ),
+const policyRows = computed(() => result.value?.rows ?? [])
+const mixedChannels = computed(
+  () =>
+    new Set(
+      policyRows.value
+        .filter((row) => row.parts.some((part) => part.mixed))
+        .map((row) => row.segment.channel),
+    ),
 )
 const rowsByChannel = computed(() =>
   Object.fromEntries(
@@ -96,89 +99,69 @@ const axisRange = computed(() => {
   }
   return [from, through]
 })
-const { cursorAt, zoom, setCursor, setZoom } = useSubsidyTimelineNavigation(axisRange, () => {
-  const { selection, asOf } = result.value
-  const begin = selection.params.dateFrom + 'T00:00:00'
-  const end = selection.params.dateTo + 'T23:59:59'
-  const at = [selection.requestedAt, asOf, end].sort()[0]
-  if (begin <= asOf) {
-    return at < begin ? begin : at
-  }
-  // 纯未来查询先定位首个可见计划，日期范围开头可能早于所有政策。
-  let first
-  for (const row of policyRows.value) {
-    const part = row.parts.find((item) => item.status && item.endAt > begin && item.startAt <= end)
-    if (!part) {
-      continue
+const { cursorAt, zoom, setCursor, setZoom } = useSubsidyTimelineNavigation(
+  axisRange,
+  () => {
+    const { selection, asOf } = result.value
+    const begin = selection.params.dateFrom + 'T00:00:00'
+    const end = selection.params.dateTo + 'T23:59:59'
+    const at = [selection.requestedAt, asOf, end].sort()[0]
+    if (begin <= asOf) {
+      return at < begin ? begin : at
     }
-    const start = part.startAt < begin ? begin : part.startAt
-    if (!first || start < first) {
-      first = start
-    }
-  }
-  return first ?? begin
-})
-const visibleTracks = computed(() => new Set(policyRows.value.map((row) => row.segment.trackId)))
-// 整组拆开和重新合并时，明细继续跟随已选的平台和商品。
-function relatedScope(a, b) {
-  if (a.trackId === b.trackId) {
-    return true
-  }
-  if (b.channel !== a.channel || b.platformCode !== a.platformCode) {
-    return false
-  }
-  if (b.channel === 'BILLION') {
-    return true
-  }
-  return a.goods.some((item) => b.goods.some((other) => other.id === item.id))
-}
-const scopeSegments = computed(() => {
-  const scope = inspectedPolicy.value?.segment
-  return (result.value?.segments ?? []).filter((segment) =>
-    scope ? relatedScope(scope, segment) : visibleTracks.value.has(segment.trackId),
-  )
-})
-const selected = computed(() => {
-  const active = scopeSegments.value.filter((segment) =>
-    timelineContainsAt(segment, cursorAt.value),
-  )
-  const inspected = inspectedPolicy.value
-  if (inspected) {
-    const exact = active.find((s) => s.trackId === inspected.segment.trackId)
-    if (exact) {
-      return exact
-    }
-    if (active.length > 1 && active[0].channel === 'BILLION') {
-      // 百亿各颜色共用配置审核名单。跨段优先跟随刚才查看的商品。
-      const declared = active.find((s) =>
-        inspected.segment.goods.some((g) => s.goods.some((item) => item.id === g.id)),
+    // 纯未来查询先定位首个可见计划，日期范围开头可能早于所有政策。
+    let first
+    for (const row of policyRows.value) {
+      const part = row.parts.find(
+        (item) => item.status && item.endAt > begin && item.startAt <= end,
       )
-      if (declared) {
-        return declared
+      if (!part) {
+        continue
+      }
+      const start = part.startAt < begin ? begin : part.startAt
+      if (!first || start < first) {
+        first = start
       }
     }
-    const adopted = active.find((s) =>
-      s.policies.some((p) => p.auditLogId === inspected.plan.auditLogId),
-    )
-    if (adopted) {
-      return adopted
+    return first ?? begin
+  },
+  () => result.value?.selection.params,
+)
+// 移动指针时跟随用户点选的平台和申报商品。百亿的采用名单始终属于整组配置。
+function relatedScope(a, b) {
+  return (
+    a.channel === b.channel &&
+    a.platformCode === b.platformCode &&
+    (a.channel === 'BILLION' ||
+      a.trackId === b.trackId ||
+      a.goods.some((item) => b.goods.some((other) => other.id === item.id)))
+  )
+}
+const selected = computed(() => {
+  const inspected = inspectedPolicy.value
+  const at = cursorAt.value
+  const row =
+    inspected ?? policyRows.value.find((r) => r.parts.some((p) => timelineContainsAt(p, at)))
+  const part = row?.parts.find((p) => timelineContainsAt(p, at))
+  if (part?.scopes?.length) {
+    const scopes = part.scopes.map(({ scope }) => scope)
+    const first = scopes[0]
+    const byGoods = first.channel === 'RETAIL' && scopes.length > 1
+    return {
+      ...first,
+      goods: row.segment.goods,
+      startAt: part.startAt,
+      endAt: part.endAt,
+      open: part.open,
+      byGoods: byGoods ? scopes : null,
     }
   }
-  return active.find((segment) => segment.policies.length) ?? active[0]
-})
-const selectedPolicyKey = computed(() => {
-  const row = inspectedPolicy.value
-  const segment = selected.value
-  if (!row || !segment || row.segment.trackId === segment.trackId) {
-    return row?.key ?? ''
-  }
-  const plans = [...segment.policies, ...segment.excluded]
-  return (
-    plans.find(
-      (p) => p.auditLogId === row.plan.auditLogId && p.selectionIndex === row.plan.selectionIndex,
-    )?.key ?? ''
+  const active = (result.value?.segments ?? []).filter(
+    (s) => timelineContainsAt(s, at) && (!inspected || relatedScope(inspected.segment, s)),
   )
+  return active.find((s) => s.policies.length) ?? active[0]
 })
+const selectedPolicyKey = computed(() => inspectedPolicy.value?.key ?? '')
 const upcoming = computed(() => {
   if (!result.value) {
     return []
@@ -189,10 +172,7 @@ const upcoming = computed(() => {
       (s) => s.planned && s.startAt <= dateTo + 'T23:59:59' && s.endAt > dateFrom + 'T00:00:00',
     )
     .sort((a, b) => a.startAt.localeCompare(b.startAt))
-  const scope =
-    inspectedPolicy.value?.segment ??
-    selected.value ??
-    periods.find((s) => visibleTracks.value.has(s.trackId))
+  const scope = inspectedPolicy.value?.segment ?? selected.value ?? periods[0]
   if (!scope) {
     return []
   }
@@ -213,8 +193,8 @@ const upcoming = computed(() => {
   })
 })
 watch(policyRows, (rows) => {
-  if (!rows.includes(inspectedPolicy.value)) {
-    inspectedPolicy.value = null
+  if (inspectedPolicy.value) {
+    inspectedPolicy.value = rows.find((row) => row.key === inspectedPolicy.value.key) ?? null
   }
 })
 async function selectPolicy(row, at) {
@@ -229,7 +209,6 @@ async function selectPolicy(row, at) {
   }
 }
 function reset() {
-  showIndependent.value = false
   resetFilters()
   search()
 }
@@ -313,15 +292,6 @@ function reset() {
             <AppIcon name="search" :size="15" />
             查询
           </el-button>
-          <el-checkbox v-model="showIndependent" class="model-subsidy-independent">
-            <AppIcon
-              v-if="showIndependent"
-              name="check"
-              :size="12"
-              class="model-subsidy-independent-check"
-            />
-            展开独立商品
-          </el-checkbox>
         </div>
       </el-form>
     </section>
@@ -356,7 +326,7 @@ function reset() {
       <el-button @click="catalogError ? loadCatalog() : retryHistory()">重试</el-button>
     </div>
     <div
-      v-else-if="catalogStatus === 'loading' || historyStatus === 'loading'"
+      v-else-if="catalogStatus === 'loading' || (historyStatus === 'loading' && !result)"
       class="model-subsidy-surface model-subsidy-status"
       role="status"
     >
@@ -394,6 +364,10 @@ function reset() {
                 <i class="model-subsidy-fill-key used" aria-hidden="true"></i>
                 采用
               </span>
+              <span v-if="mixedChannels.has(channel.code)">
+                <i class="model-subsidy-fill-key mixed" aria-hidden="true"></i>
+                部分采用
+              </span>
               <span>
                 <i class="model-subsidy-fill-key" aria-hidden="true"></i>
                 未采用
@@ -413,15 +387,7 @@ function reset() {
             @cursor-change="setCursor"
             @zoom-change="setZoom"
           />
-          <el-empty
-            v-else
-            :image-size="64"
-            :description="
-              result.rows.some((row) => row.segment.channel === channel.code)
-                ? '该渠道仅有独立商品，请勾选「展开独立商品」查看'
-                : '所选条件下暂无已通过政策'
-            "
-          />
+          <el-empty v-else :image-size="64" description="所选条件下暂无已通过政策" />
         </section>
       </div>
 
@@ -434,7 +400,6 @@ function reset() {
         :includes-future="result.selection.params.dateTo + 'T23:59:59' > result.asOf"
         :at="cursorAt"
         :scope-label="inspectedPolicy?.segment.label"
-        :configuration="result.selection.label"
       />
     </div>
   </section>

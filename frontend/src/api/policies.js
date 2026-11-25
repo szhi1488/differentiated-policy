@@ -1,5 +1,5 @@
 import { request } from './request'
-import { policyApiTime } from '../utils/policy-adapter'
+import { notifySubsidyUpdate } from './subsidy-timeline'
 
 const path = '/api/policies'
 const itemPath = (id) => `${path}/${encodeURIComponent(id)}`
@@ -27,29 +27,18 @@ export function deletePolicyDraft(id, recordVersion, signal) {
   return request(`${itemPath(id)}/draft?${params}`, { method: 'DELETE', signal })
 }
 
-export function createPolicyTimeAdjustment(source, endTime, evidence, key, signal) {
-  return write(
-    `${itemPath(source.id)}/time-adjustment-draft`,
-    'POST',
-    {
-      recordVersion: source.recordVersion,
-      endTime: policyApiTime(endTime),
-      expectedSourceEnd: policyApiTime(source.endTime),
-      ...evidence,
-    },
-    { 'Idempotency-Key': key },
-    signal,
-  )
+export function listPolicyTimeAdjustmentOptions(signal) {
+  return request(path + '/time-adjustments/options', { signal })
 }
 
-export function savePolicyAdjustmentDate(id, recordVersion, endTime, evidence, signal) {
-  return write(
-    `${itemPath(id)}/time-adjustment-date`,
-    'PUT',
-    { recordVersion, endTime: policyApiTime(endTime), ...evidence },
-    {},
-    signal,
-  )
+export function previewPolicyTimeAdjustments(endAdjustments, signal) {
+  return write(path + '/time-adjustments/preview', 'POST', { endAdjustments }, {}, signal)
+}
+
+export async function applyPolicyTimeAdjustments(body, key) {
+  const result = await write(path + '/time-adjustments', 'POST', body, { 'Idempotency-Key': key })
+  notifySubsidyUpdate()
+  return result
 }
 
 export function previewPolicySubmission(id, recordVersion, signal) {

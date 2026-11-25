@@ -1,11 +1,11 @@
 import { retailDisplayTracks } from './retail-timeline-tracks'
-import { billionDisplayHistory } from './billion-timeline-history'
-import { PRICE_BASE_LABELS, SCENE_LABELS, VERIFY_LABELS } from '../constants/policy'
+import { billionDisplaySegments } from './billion-timeline-history'
+import { policyTimelineRows } from './policy-timeline-rows'
+import { SCENE_LABELS, VERIFY_LABELS } from '../constants/policy'
 import {
   appendTimelinePart,
-  timelineGoodsLabel,
-  timelineDecimal,
-  timelinePlanText,
+  timelineGoodsScope,
+  timelinePartStatus,
   timelineTimeFromValue,
   timelineAxisValue,
   timelineTimeValue,
@@ -20,8 +20,28 @@ function beijingTime(value) {
 }
 const nextSecond = (at) => timelineTimeFromValue(timelineTimeValue(at) + 1000)
 
-function trackHistory(track, trackId, asOf) {
-  const rows = []
+// 同色商品可能出现在不同轨道，同一次查询统一标注商品 ID 供核对。
+function duplicateProductColors(tracks) {
+  const firstIds = new Map()
+  const duplicates = new Set()
+  for (const track of tracks) {
+    for (const policy of track.policies) {
+      for (const selection of policy.selections) {
+        for (const { goodsId: id, colorName, goodsName } of selection.products) {
+          const color = colorName || goodsName
+          if (firstIds.has(color) && firstIds.get(color) !== id) {
+            duplicates.add(color)
+          } else {
+            firstIds.set(color, id)
+          }
+        }
+      }
+    }
+  }
+  return duplicates
+}
+
+function trackHistory(track, trackId, asOf, duplicateColors, configurationGoodsCount) {
   const rounds = new Map()
   const products = new Map()
   for (const policy of track.policies) {
@@ -29,8 +49,9 @@ function trackHistory(track, trackId, asOf) {
     const usePeriods = []
     const plans = policy.selections.map((selection, index) => {
       const goods = selection.products.map(({ goodsId: id, colorName, goodsName }) => {
-        const product = { id, color: colorName || goodsName || '' }
-        if (!products.has(id) || product.color) {
+        const color = colorName || goodsName || ''
+        const product = { id, color, label: duplicateColors.has(color) ? color + ' #' + id : color }
+        if (!products.has(id) || color) {
           products.set(id, product)
         }
         return product
@@ -43,6 +64,7 @@ function trackHistory(track, trackId, asOf) {
         policyCode: policy.policyCode,
         policyFrom: beijingTime(policy.policyFrom),
         policyThrough: beijingTime(policy.policyThrough),
+        effectiveThrough: beijingTime(policy.effectiveThrough),
         approvedAt: beijingTime(policy.approvedAt),
         estimated: policy.estimated,
         scenes: policy.sceneTypes?.map((code) => SCENE_LABELS[code] ?? code) ?? [],
@@ -50,6 +72,7 @@ function trackHistory(track, trackId, asOf) {
         goods,
         usePeriods,
         cardType: selection.cardType,
+        wholeConfigurationGoodsCount: selection.wholeConfigurationGoodsCount ?? null,
         ...(selection.cardType === 'SPECIFIED' ? { quantity: selection.quantity } : {}),
       }
     })
@@ -62,8 +85,6 @@ function trackHistory(track, trackId, asOf) {
     channel: track.perspective,
     platformCode: track.platformCode,
     goods,
-    fullConfiguration: track.fullConfiguration,
-    label: goods.length && !track.fullConfiguration ? timelineGoodsLabel(goods) : '整组配置',
   }
   function readSegment(segment, planned) {
     const startAt = beijingTime(segment.startAt)
@@ -91,6 +112,7 @@ function trackHistory(track, trackId, asOf) {
             : '跨组叠加'
     return {
       ...scope,
+      ...timelineGoodsScope(goods, [...policies, ...excluded], configurationGoodsCount),
       startAt,
       endAt,
       open: segment.endAt === null,
@@ -104,40 +126,20 @@ function trackHistory(track, trackId, asOf) {
     ...track.segments.map((segment) => readSegment(segment, false)),
     ...track.plannedSegments.map((segment) => readSegment(segment, true)),
   ]
+  const declarations = []
   for (const { matchesQuery, plans, parts, usePeriods } of rounds.values()) {
     usePeriods.push(...parts.filter((part) => part.used && !part.status))
-    if (!matchesQuery) {
-      continue
-    }
     for (const plan of plans) {
-      const specified = plan.cardType === 'SPECIFIED'
-      const label = specified ? '独立商品 · ' + timelineGoodsLabel(plan.goods) : scope.label
-      const caption =
-        plan.subsidyMode === 'FIXED'
-          ? timelinePlanText(plan)
-          : (PRICE_BASE_LABELS[plan.priceBase] ?? '基数未填写') +
-            ' × ' +
-            timelineDecimal(plan.ratio) +
-            '%'
-      const originalEnd = nextSecond(plan.policyThrough)
-      rows.push({
-        key: plan.key,
-        plan,
-        parts,
-        caption,
-        segment: { ...scope, label },
-        startAt: parts[0]?.startAt < plan.policyFrom ? parts[0].startAt : plan.policyFrom,
-        endAt: parts.at(-1)?.endAt > originalEnd ? parts.at(-1).endAt : originalEnd,
-      })
+      declarations.push({ scope, plan, matchesQuery })
     }
   }
-  return { rows, segments, scope }
+  return { declarations, segments }
 }
 
-/** 名单、范围和区间均取自后端。原单日期只用于绘图范围，不填补未知时段。 */
+/** 名单和区间取自后端，用政策生效范围确定绘图边界。 */
 export function readTimelineHistory(response) {
   const asOf = beijingTime(response.asOf)
-  const rows = []
+  const declarations = []
   const segments = []
   if (!Number.isInteger(response.configurationGoodsCount) || response.configurationGoodsCount < 0) {
     throw new Error('补贴历史缺少有效的配置商品总数。')
@@ -150,18 +152,26 @@ export function readTimelineHistory(response) {
   ) {
     throw new Error('补贴历史缺少审核时段或后续安排。')
   }
+  const duplicateColors = duplicateProductColors(response.tracks)
   for (const [index, track] of retailDisplayTracks(response).entries()) {
     if (track.perspective === 'BILLION' && track.goodsIds.length) {
       throw new Error('百亿补贴的审核范围必须是整组配置。')
     }
-    const source = trackHistory(track, index, asOf)
-    const history =
+    const source = trackHistory(
+      track,
+      index,
+      asOf,
+      duplicateColors,
+      response.configurationGoodsCount,
+    )
+    declarations.push(...source.declarations)
+    const scopeSegments =
       track.perspective === 'BILLION'
-        ? billionDisplayHistory(source, response.configurationGoodsCount)
-        : source
-    rows.push(...history.rows)
-    segments.push(...history.segments)
+        ? billionDisplaySegments(source, response.configurationGoodsCount)
+        : source.segments
+    segments.push(...scopeSegments)
   }
+  const rows = policyTimelineRows(declarations, segments, response.configurationGoodsCount)
   return { asOf, rows, segments }
 }
 
@@ -193,9 +203,28 @@ export function policyTimelineSeries(rows, clipRect, currentAt) {
       }
       const fixed = row.plan.subsidyMode === 'FIXED'
       const ink = fixed ? '#275da7' : '#925416'
-      const fill = part.used ? (fixed ? '#346dc0' : '#a55d19') : fixed ? '#eef4fd' : '#fff6ec'
-      const stroke = part.used ? fill : fixed ? '#91b3e2' : '#dfa86c'
-      const status = part.status ?? (part.used ? '采用' : '未采用')
+      const solid = fixed ? '#346dc0' : '#a55d19'
+      const light = fixed ? '#eef4fd' : '#fff6ec'
+      // 部分商品采用时保留同一条色块，底部深色条区分于整组采用或整组未采用。
+      const fill = part.mixed
+        ? {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: light },
+              { offset: 0.82, color: light },
+              { offset: 0.82, color: solid },
+              { offset: 1, color: solid },
+            ],
+          }
+        : part.used
+          ? solid
+          : light
+      const stroke = part.used ? solid : fixed ? '#91b3e2' : '#dfa86c'
+      const status = timelinePartStatus(part)
       const label = part.used && shape.width >= 130 ? row.caption + ' · ' + status : status
       const estimated = row.plan.estimated === true
       const now = api.coord([timelineAxisValue(currentAt), api.value(0)])[0]
@@ -220,7 +249,7 @@ export function policyTimelineSeries(rows, clipRect, currentAt) {
               x: shape.x + shape.width / 2,
               y: center,
               text: shape.width >= (part.used ? 25 : 36) ? label : '',
-              fill: part.used ? '#fff' : ink,
+              fill: part.used && !part.mixed ? '#fff' : ink,
               font: '12px Microsoft YaHei',
               align: 'center',
               verticalAlign: 'middle',
@@ -228,6 +257,21 @@ export function policyTimelineSeries(rows, clipRect, currentAt) {
               overflow: 'truncate',
             },
           },
+          ...(api.value(2) - api.value(1) === 1000 && right - left < 8
+            ? [
+                {
+                  // 单秒交界缩小后仍能点中，点击时按该段的真实起止定位。
+                  type: 'circle',
+                  z2: 8,
+                  shape: { cx: shape.x, cy: center - 16, r: 5 },
+                  style: {
+                    fill: part.used && !part.mixed ? solid : light,
+                    stroke: ink,
+                    lineWidth: 2,
+                  },
+                },
+              ]
+            : []),
           ...(estimated
             ? [
                 {
@@ -266,7 +310,7 @@ export function policyTimelineSeries(rows, clipRect, currentAt) {
                   type: 'text',
                   silent: true,
                   style: {
-                    text: '当前适用',
+                    text: part.mixed ? '当前部分适用' : '当前适用',
                     x: Math.max(
                       params.coordSys.x + 22,
                       Math.min(now, params.coordSys.x + params.coordSys.width - 22),

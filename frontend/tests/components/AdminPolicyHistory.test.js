@@ -14,6 +14,100 @@ afterEach(() => {
 })
 const button = (root, label) => root.findAll('button').find((node) => node.text() === label)
 
+it('查看政策时改期流水独占中间页签，切换申请重新显示当前申请', async () => {
+  const detail = currentDetail()
+  const initialEnd = detail.snapshot.form.endTime
+  const newEnd = '2027-01-16T00:00:00+08:00'
+  detail.policy.status = 'APPROVED'
+  detail.audit = { ...detail.audit, auditStatus: 'APPROVED' }
+  detail.timeHistory = {
+    initialEnd,
+    currentEnd: newEnd,
+    changes: [
+      {
+        id: '17',
+        direction: 'EXTEND',
+        previousEnd: initialEnd,
+        requestedEnd: newEnd,
+        actualEnd: newEnd,
+        reason: '平台活动延续',
+        actorName: '胡源',
+        changedAt: '2026-11-25T13:35:07+08:00',
+        effectiveAt: '2026-12-16T00:00:01+08:00',
+        sourcePolicyCode: 'ZC-000030',
+        attachmentInfo: [{ id: 'proof', originalName: '档期证明.pdf' }],
+      },
+    ],
+  }
+  detail.snapshot.consent = {
+    endAdjustments: [
+      { target: { policyId: '28', previousEnd: initialEnd }, endTime: newEnd, reason: '随单申请' },
+    ],
+  }
+  const other = currentDetail()
+  Object.assign(other.policy, { id: '6', policyCode: 'ZC-000006' })
+  Object.assign(other.snapshot, { id: '6', policyCode: 'ZC-000006' })
+  const fetch = vi.fn(async (path) => {
+    if (path === '/api/admin/policies/5') {
+      return Response.json(detail)
+    }
+    if (path === '/api/admin/policies/6') {
+      return Response.json(other)
+    }
+    if (path.startsWith('/api/policy-reviews/')) {
+      const id = path.includes('/6?') ? '6' : '5'
+      return Response.json({ ...reviewRound(), id })
+    }
+    return Response.json({
+      items: [detail, other].map(({ policy }) => ({ ...policy, platforms: ['JD'] })),
+      total: 2,
+      counts: {},
+    })
+  })
+  vi.stubGlobal('fetch', fetch)
+  wrapper = mount(AdminPoliciesPage, {
+    attachTo: document.body,
+    global: { stubs: { teleport: true, ElSelect: true } },
+  })
+  await flushPromises()
+  await wrapper.get('[aria-label="查看政策 ZC-000005"]').trigger('click')
+  await flushPromises()
+  const tabs = () => wrapper.get('[aria-label="政策详情内容"]').findAll('[role=tab]')
+  expect(tabs().map((tab) => tab.text())).toEqual(['当前申请', '时间调整记录', '审核记录'])
+  expect(tabs()[0].attributes('aria-selected')).toBe('true')
+  expect(wrapper.text()).toContain('当前截止2027-01-16 00:00:00')
+  expect(wrapper.text()).toContain('首次获批截止2026-12-16 00:00:00')
+  expect(wrapper.text()).toContain('随单申请')
+  expect(wrapper.text()).not.toContain('平台活动延续')
+
+  await tabs()[1].trigger('click')
+  await flushPromises()
+  const pane = wrapper.get('[role=tabpanel][aria-labelledby=tab-timeHistory]')
+  expect(tabs()[1].attributes('aria-selected')).toBe('true')
+  expect(pane.text()).toContain('延期')
+  expect(pane.text()).toContain('2026-12-16 00:00:00 → 2027-01-16 00:00:00')
+  expect(pane.text()).toContain('平台活动延续')
+  expect(pane.text()).toContain('胡源')
+  expect(pane.text()).toContain('随 ZC-000030 获批')
+  expect(pane.getComponent({ name: 'AttachmentDownload' }).props('url')).toBe(
+    '/api/policy-reviews/5/time-changes/17/attachments/proof/content?submissionVersion=2',
+  )
+  expect(wrapper.text()).not.toContain('随单申请')
+  expect(fetch.mock.calls.some(([path]) => path.includes('audit-logs'))).toBe(false)
+  await tabs()[0].trigger('click')
+  expect(wrapper.text()).toContain('随单申请')
+  expect(wrapper.text()).not.toContain('平台活动延续')
+  await tabs()[1].trigger('click')
+  await wrapper.get('[role=dialog] .el-dialog__headerbtn').trigger('click')
+  await flushPromises()
+  await wrapper.get('[aria-label="查看政策 ZC-000006"]').trigger('click')
+  await flushPromises()
+  expect(tabs()[0].attributes('aria-selected')).toBe('true')
+  await tabs()[1].trigger('click')
+  expect(wrapper.text()).toContain('暂无时间调整记录')
+  expect(wrapper.text()).not.toContain('平台活动延续')
+})
+
 it('审核窗口可查看原轮次快照及附件，历史隐藏写入与覆盖入口，返回当前申请继续审核', async () => {
   const detail = currentDetail()
   let latestAudit = auditLogs[0]

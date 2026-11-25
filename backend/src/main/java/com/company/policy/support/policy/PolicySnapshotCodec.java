@@ -80,7 +80,8 @@ public final class PolicySnapshotCodec {
                         storeForm(snapshot.form()),
                         map(snapshot.goods(), PolicySnapshotCodec::storeGoods),
                         snapshot.consent(),
-                        snapshot.sourcePolicyCode());
+                        snapshot.sourcePolicyCode(),
+                        snapshot.wholeConfigurationSelection());
         try {
             return json.writeValueAsString(stored);
         } catch (JsonProcessingException error) {
@@ -96,8 +97,16 @@ public final class PolicySnapshotCodec {
             var matched = new ArrayList<EndAdjustment>();
             for (var item : json.readTree(value)) {
                 var target = item.path("target");
-                if (targetId.toString().equals(target.path("policyId").textValue())
-                        && targetAuditId.toString().equals(target.path("auditLogId").textValue()))
+                var policy =
+                        target.hasNonNull("executionPolicyId")
+                                ? target.get("executionPolicyId")
+                                : target.path("policyId");
+                var audit =
+                        target.hasNonNull("executionAuditLogId")
+                                ? target.get("executionAuditLogId")
+                                : target.path("auditLogId");
+                if (targetId.toString().equals(policy.textValue())
+                        && targetAuditId.toString().equals(audit.textValue()))
                     matched.add(json.treeToValue(item, EndAdjustment.class));
             }
             return matched;
@@ -124,7 +133,8 @@ public final class PolicySnapshotCodec {
                     readForm(stored.form()),
                     map(stored.goods(), PolicySnapshotCodec::readGoods),
                     stored.consent(),
-                    stored.sourcePolicyCode());
+                    stored.sourcePolicyCode(),
+                    stored.wholeConfigurationSelection());
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法读取政策提交快照。", error);
         }

@@ -100,16 +100,18 @@ const basicFields = computed(() => {
     ...(policy.value.reviewStage
       ? [['当前阶段', REVIEW_STAGE_LABELS[policy.value.reviewStage]]]
       : []),
-    ...(props.detail.snapshot.sourcePolicyCode
-      ? [['延期原单', props.detail.snapshot.sourcePolicyCode]]
-      : []),
     ['渠道', CHANNEL_LABELS[perspective]],
     ['整单平台', platformNames(selectedPlatforms)],
     ['核销类型', VERIFY_LABELS[verifyType] ?? '—'],
     ['涉及场景', policySceneLabel(form.value)],
     ['预估政策', typeof estimated === 'boolean' ? (estimated ? '是' : '否') : '—'],
     ['开始时间', time(startTime)],
-    ['到期时间', time(endTime)],
+    ...(props.detail.timeHistory
+      ? [
+          ['首次获批截止', time(props.detail.timeHistory.initialEnd)],
+          ['当前截止', time(props.detail.timeHistory.currentEnd)],
+        ]
+      : [['到期时间', time(endTime)]]),
   ]
 })
 </script>
@@ -129,8 +131,6 @@ const basicFields = computed(() => {
     <section class="admin-policy-detail-section">
       <PolicyEndAdjustments
         :changes="detail.snapshot.consent?.endAdjustments"
-        :time-adjustment="form.goodsForm.timeAdjustment"
-        :approved-end="detail.approvedEnd"
         :policy-id="policy.id"
         :log-id="audit.id"
         admin

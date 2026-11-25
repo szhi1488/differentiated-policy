@@ -7,7 +7,7 @@ export function useLatestQuery() {
   let version = 0,
     controller,
     disposed = false
-  async function run(loader) {
+  async function run(loader, { keepData = false } = {}) {
     if (disposed) {
       return
     }
@@ -15,15 +15,19 @@ export function useLatestQuery() {
     controller?.abort()
     controller = new AbortController()
     loading.value = true
-    error.value = null
-    data.value = null
+    if (!keepData) {
+      error.value = null
+      data.value = null
+    }
     try {
       const result = await loader(controller.signal)
       if (!disposed && current === version) {
         data.value = result
+        error.value = null
       }
     } catch (cause) {
       if (!disposed && current === version && cause.kind !== 'cancelled') {
+        data.value = null
         error.value = cause
       }
     } finally {

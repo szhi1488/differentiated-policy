@@ -47,6 +47,7 @@ class PolicyDeliveryWorkerTest {
                         "policy_review_delivery",
                         "policy_review_member",
                         "policy_review_round",
+                        "policy_time_change",
                         "policy_audit_log",
                         "policy_apply",
                         "user_info")) jdbc.update("DELETE FROM " + table);
@@ -227,12 +228,13 @@ class PolicyDeliveryWorkerTest {
         drain();
         assertThat(value("delivery_status", "UPDATE_CARD", 2)).isEqualTo("RETRY");
         assertThat(value("receipt_id", "UPDATE_CARD", 3)).isEqualTo("card-3");
-        assertThat(calls.stream().filter(d -> d.action().equals("GROUP_MESSAGE"))).hasSize(1);
+        assertThat(calls.stream().filter(d -> d.action().equals("GROUP_MESSAGE"))).isEmpty();
+        assertThat(calls.stream().filter(d -> d.action().equals("SEND_CARD"))).hasSize(2);
         assertThat(calls.stream().filter(d -> d.action().equals("CREATE_TASK"))).hasSize(2);
         due();
         drain();
         assertThat(value("receipt_id", "UPDATE_CARD", 2)).isEqualTo("card-2");
-        assertThat(calls).hasSize(6);
+        assertThat(calls).hasSize(7);
         assertThat(
                         jdbc.queryForList(
                                 "SELECT task_guid FROM policy_review_member WHERE group_code='PURCHASE'",
@@ -327,7 +329,7 @@ class PolicyDeliveryWorkerTest {
     }
 
     @Test
-    void expiredLeaseIsReclaimedAndGroupFailureIsIndependentOfTwoPersonalTasks() {
+    void expiredLeaseIsReclaimedAndPrivateCardsRetryIndependentlyOfPersonalTasks() {
         jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
         tx.executeWithoutResult(
                 s -> events.submitted("company", 11, 1, false, "直接采购", LocalDateTime.now()));
@@ -349,14 +351,14 @@ class PolicyDeliveryWorkerTest {
                 .when(sender)
                 .send(any());
         drain();
-        assertThat(value("delivery_status", "GROUP_MESSAGE", 0)).isEqualTo("RETRY");
+        assertThat(value("delivery_status", "SEND_CARD", 5)).isEqualTo("RETRY");
         assertThat(value("receipt_id", "CREATE_TASK", 4)).isEqualTo("recovered-4");
         assertThat(value("delivery_status", "CREATE_TASK", 5)).isEqualTo("RETRY");
         due();
         drain();
-        assertThat(value("receipt_id", "GROUP_MESSAGE", 0)).isEqualTo("recovered-0");
+        assertThat(value("receipt_id", "SEND_CARD", 5)).isEqualTo("recovered-5");
         assertThat(value("receipt_id", "CREATE_TASK", 5)).isEqualTo("recovered-5");
-        assertThat(calls.stream().filter(d -> d.memberId() == 4)).hasSize(1);
+        assertThat(calls.stream().filter(d -> d.memberId() == 4)).hasSize(2);
     }
 
     @Test
@@ -481,6 +483,30 @@ class PolicyDeliveryWorkerTest {
                     .doesNotContain("different-card", "other-recipient");
         }
         assertThat(calls).hasSize(2);
+    }
+
+    @Test
+    void queuedOldPurchaseHandoffBecomesPrivateForItsOriginalActiveAssignments() {
+        jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
+        workflow.register(
+                "company",
+                11,
+                1,
+                "SUBMITTED",
+                "GROUP_MESSAGE",
+                0,
+                "{\"stage\":\"PURCHASE_REVIEW\"}",
+                LocalDateTime.now());
+        add("SUBMITTED", "CREATE_TASK", 4);
+        add("SUBMITTED", "CREATE_TASK", 5);
+        jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=5");
+        drain();
+        assertThat(value("delivery_status", "GROUP_MESSAGE", 0)).isEqualTo("CANCELLED");
+        assertThat(value("delivery_status", "SEND_CARD", 5)).isEqualTo("CANCELLED");
+        assertThat(calls)
+                .extracting(Delivery::action)
+                .containsExactlyInAnyOrder("SEND_CARD", "CREATE_TASK");
+        assertThat(calls).allMatch(d -> "open-4".equals(d.openId()));
     }
 
     private void registerSubmitted() {

@@ -34,7 +34,6 @@ class LocalConfigLoadingTest {
                     Map.entry("FEISHU_TENANT_KEY", "feishu.tenant-key"),
                     Map.entry("FEISHU_ALLOWED_ORIGINS", "feishu.allowed-origins"),
                     Map.entry("FEISHU_POLICY_CHAT_ID", "feishu.policy-chat-id"),
-                    Map.entry("FEISHU_POLICY_ERP_URL", "feishu.policy-erp-url"),
                     Map.entry("FEISHU_POLICY_CALLBACK_MODE", "feishu.policy-callback-mode"),
                     Map.entry("FEISHU_CALLBACK_ENCRYPT_KEY", "feishu.callback-encrypt-key"),
                     Map.entry(
@@ -160,7 +159,6 @@ class LocalConfigLoadingTest {
         settings.put("FEISHU_TENANT_KEY", "local-config-test-tenant");
         settings.put("FEISHU_ALLOWED_ORIGINS", "https://app.example.test");
         settings.put("FEISHU_POLICY_CHAT_ID", "oc_local_test_policy_group");
-        settings.put("FEISHU_POLICY_ERP_URL", "https://erp.example.test");
         settings.put("FEISHU_POLICY_CALLBACK_MODE", "long_connection");
         settings.put("FEISHU_CALLBACK_ENCRYPT_KEY", "test-only-callback-encryption");
         settings.put("FEISHU_CALLBACK_VERIFICATION_TOKEN", "test-only-callback-token");

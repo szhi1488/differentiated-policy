@@ -94,7 +94,7 @@ public interface PolicyReviewMapper {
     @Select(
             "SELECT "
                     + COLUMNS
-                    + ", p.start_time, p.extension_source_id "
+                    + ", p.start_time "
                     + FROM
                     + PRODUCT_SIGNER
                     + SUBMITTED
@@ -124,35 +124,6 @@ public interface PolicyReviewMapper {
         """)
     List<PolicyAuditLog> coverageSnapshots(String tenantKey, List<Long> auditIds);
 
-    // 调整适用于整张旧单，查询独立于发起调整的新单商品、平台及自身有效期。
-    @Select(
-            """
-            <script>
-            SELECT a.policy_id AS request_id, a.audit_time, JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') AS changes,
-              <choose><when test="targetId != null">target_audit.id</when><otherwise>NULL</otherwise></choose> AS target_audit_id
-            FROM policy_audit_log a JOIN policy_apply p ON p.id=a.policy_id AND p.tenant_key=a.tenant_key AND p.current_version=a.version
-            <if test="targetId != null">
-                JOIN policy_apply target ON target.id=#{targetId} AND target.tenant_key=p.tenant_key
-                  AND target.is_deleted=0 AND target.status='APPROVED'
-                JOIN policy_audit_log target_audit ON target_audit.policy_id=target.id AND target_audit.tenant_key=target.tenant_key
-                  AND target_audit.version=target.current_version AND target_audit.audit_status='APPROVED'
-                  <if test="targetAuditId != null">AND target_audit.id=#{targetAuditId}</if>
-            </if>
-            WHERE p.tenant_key=#{tenant} AND p.is_deleted=0 AND p.status='APPROVED' AND a.audit_status='APPROVED'
-              AND a.audit_time &lt;= #{asOf} AND JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments') IS NOT NULL
-              <if test="targetId != null">
-                AND JSON_CONTAINS(JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments'),
-                    CONCAT('{"target":{"policyId":"', target.id, '","auditLogId":"', target_audit.id, '"}}'))
-              </if>
-            ORDER BY a.audit_time,a.id
-            </script>
-            """)
-    List<ApprovedChanges> approvedChanges(
-            String tenant, LocalDateTime asOf, Long targetId, Long targetAuditId);
-
-    record ApprovedChanges(
-            long requestId, LocalDateTime auditTime, String changes, Long targetAuditId) {}
-
     // 负责一个实际使用的平台即可发起整单调整。旧单的分工、日期和渠道独立于本次表单。
     String ADJUSTABLE =
             """
@@ -172,17 +143,14 @@ public interface PolicyReviewMapper {
             """
             SELECT p.id AS policy_id, a.id AS audit_id, p.channel_type AS perspective, a.audit_time,
                    p.applicant_id, p.platforms,
-                   EXISTS(SELECT 1 FROM policy_apply child WHERE child.tenant_key=p.tenant_key
-                     AND child.extension_source_id=p.id AND child.is_deleted=0) AS has_extension,
-                   JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')) AS start_time,
-                   JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')) AS end_time,
-                   NULLIF(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.sourcePolicyCode')), 'null') AS source_policy_code
+                   p.record_version, p.end_time,
+                   JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')) AS start_time
             """
                     + ADJUSTABLE
                     + """
                        AND a.audit_time <= #{asOf}
                        AND (p.applicant_id=#{applicantId}
-                         OR LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) >= #{today})
+                         OR p.end_time >= #{today})
                      ORDER BY p.id DESC
                      """)
     List<AdjustmentCandidate> adjustmentCandidates(
@@ -195,10 +163,9 @@ public interface PolicyReviewMapper {
             LocalDateTime auditTime,
             long applicantId,
             String platforms,
-            boolean hasExtension,
-            String startTime,
-            String endTime,
-            String sourcePolicyCode) {}
+            int recordVersion,
+            LocalDateTime endTime,
+            String startTime) {}
 
     @Select(
             """
@@ -239,7 +206,8 @@ public interface PolicyReviewMapper {
           AND p.id != #{draftId} AND p.status = 'APPROVED' AND a.audit_status = 'APPROVED'
           AND a.audit_time &lt;= #{asOf}
           AND ((LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) &lt;= #{lastDate}
-          AND LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate})
+          AND (LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) &gt;= #{firstDate}
+               OR LEFT(p.end_time, 10) &gt;= #{firstDate}))
           <if test="workflow">
               OR ((p.start_time IS NULL OR LEFT(p.start_time, 10) &lt;= #{lastDate})
                   AND (p.end_time IS NULL OR LEFT(p.end_time, 10) &gt;= #{firstDate}))
@@ -289,7 +257,7 @@ public interface PolicyReviewMapper {
         <script>
         SELECT a.id,
             LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.startTime')), 10) AS first_date,
-            LEFT(JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime')), 10) AS last_date
+            LEFT(COALESCE(p.end_time, JSON_UNQUOTE(JSON_EXTRACT(a.snapshot_data, '$.form.endTime'))), 10) AS last_date
         FROM policy_apply p
         JOIN policy_audit_log a ON a.policy_id = p.id AND a.version = p.current_version AND a.tenant_key = p.tenant_key
         WHERE p.tenant_key = #{tenant} AND p.is_deleted = 0 AND p.status = 'APPROVED'

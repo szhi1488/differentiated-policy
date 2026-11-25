@@ -24,6 +24,7 @@ public record PolicySubsidyTimeline(
             int submissionVersion,
             String policyFrom,
             String policyThrough,
+            @Schema(description = "计入截至查询时已获批的历次延期和提前结束后的整单截止秒，含该秒") String effectiveThrough,
             String approvedAt,
             String verifyType,
             List<String> sceneTypes,

@@ -40,40 +40,16 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
         var current = productReview ? product : purchase;
         if (purchase.isEmpty() || current.isEmpty())
             throw new IllegalStateException("本轮缺少已冻结的审核人。");
-        var buyers = purchase.stream().map(Member::userId).toList();
         var stage = productReview ? "PRODUCT_REVIEW" : "PURCHASE_REVIEW";
-        if (!productReview)
-            workflow.register(
-                    tenant,
-                    id,
-                    version,
-                    "SUBMITTED",
-                    "GROUP_MESSAGE",
-                    0,
-                    encode(
-                            Map.of(
-                                    "stage",
-                                    stage,
-                                    "summary",
-                                    summary,
-                                    "instruction",
-                                    "请采购办理终审。",
-                                    "actingUserIds",
-                                    buyers,
-                                    "informedUserIds",
-                                    List.of(),
-                                    "purchaseReviewerUserIds",
-                                    buyers)),
-                    at);
         for (var member : current) {
-            workflow.register(
+            invite(
                     tenant,
                     id,
                     version,
                     "SUBMITTED",
-                    productReview ? "SEND_CARD" : "CREATE_TASK",
                     member.id(),
-                    encode(Map.of("stage", stage, "userId", member.userId(), "summary", summary)),
+                    stage,
+                    Map.of("stage", stage, "userId", member.userId(), "summary", summary),
                     at);
         }
     }
@@ -171,16 +147,13 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
         payload.put("reason", reason);
         payload.put("actorId", actorId);
         payload.put("applicantId", applicant);
-        payload.put("actingUserIds", next.stream().map(Member::userId).toList());
-        payload.put("informedUserIds", stage.equals("APPROVED") ? List.of(applicant) : List.of());
-        workflow.register(tenant, id, version, event, "GROUP_MESSAGE", 0, encode(payload), at);
-        var task = new LinkedHashMap<String, Object>();
-        task.put("stage", stage);
-        task.put("reason", reason);
+        if (!transferred && !rejected) {
+            payload.put("informedUserIds", List.of(applicant));
+            workflow.register(tenant, id, version, event, "GROUP_MESSAGE", 0, encode(payload), at);
+        }
         for (var assignee : next) {
-            task.put("userId", assignee.userId());
-            workflow.register(
-                    tenant, id, version, event, "CREATE_TASK", assignee.id(), encode(task), at);
+            payload.put("userId", assignee.userId());
+            invite(tenant, id, version, event, assignee.id(), stage, payload, at);
         }
     }
 
@@ -199,41 +172,35 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
             LocalDateTime at) {
         var event = "REASSIGNED_" + recordVersion;
         if (workflow.eventRegistered(tenant, id, version, event) != 0) return;
-        if (!"PRODUCT_REVIEW".equals(currentStage))
-            workflow.register(
-                    tenant,
-                    id,
-                    version,
-                    event,
-                    "GROUP_MESSAGE",
-                    0,
-                    encode(
-                            Map.of(
-                                    "stage",
-                                    currentStage,
-                                    "targetStage",
-                                    targetStage,
-                                    "actorId",
-                                    actorId,
-                                    "addedUserIds",
-                                    added.stream().map(Assignee::userId).toList(),
-                                    "removedUserIds",
-                                    removed.stream().map(Assignee::userId).toList(),
-                                    "reason",
-                                    reason)),
-                    at);
         if (!targetStage.equals(currentStage)) return;
         for (var member : added)
-            workflow.register(
+            invite(
                     tenant,
                     id,
                     version,
                     event,
-                    "PRODUCT_REVIEW".equals(targetStage) ? "SEND_CARD" : "CREATE_TASK",
                     member.memberId(),
-                    encode(Map.of("stage", targetStage, "userId", member.userId())),
+                    targetStage,
+                    Map.of("stage", targetStage, "userId", member.userId(), "reason", reason),
                     at);
-        for (var member : removed)
+        for (var member : removed) {
+            if ("PURCHASE_REVIEW".equals(targetStage))
+                workflow.register(
+                        tenant,
+                        id,
+                        version,
+                        event,
+                        "SEND_CARD",
+                        member.memberId(),
+                        encode(
+                                Map.of(
+                                        "stage",
+                                        targetStage,
+                                        "outcome",
+                                        "REMOVED",
+                                        "reason",
+                                        reason)),
+                        at);
             close(
                     tenant,
                     id,
@@ -254,6 +221,22 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
                                     "reason",
                                     "已改派")),
                     at);
+        }
+    }
+
+    private void invite(
+            String tenant,
+            long id,
+            int version,
+            String event,
+            long member,
+            String stage,
+            Map<String, ?> payload,
+            LocalDateTime at) {
+        String body = encode(payload);
+        workflow.register(tenant, id, version, event, "SEND_CARD", member, body, at);
+        if (!"PRODUCT_REVIEW".equals(stage))
+            workflow.register(tenant, id, version, event, "CREATE_TASK", member, body, at);
     }
 
     private void close(

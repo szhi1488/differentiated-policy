@@ -57,6 +57,24 @@ public class PolicyAttachmentController {
                 attachments.downloadAdminHistory(id, logId, attachmentId, user));
     }
 
+    @GetMapping(
+            "/api/policy-reviews/{id}/time-changes/{changeId}/attachments/{attachmentId}/content")
+    @Operation(summary = "下载原政策指定调整记录的证明文件")
+    public ResponseEntity<Resource> timeChange(
+            @PathVariable long id,
+            @PathVariable long changeId,
+            @PathVariable String attachmentId,
+            @RequestParam int submissionVersion,
+            HttpServletRequest request) {
+        return AttachmentController.content(
+                attachments.downloadTimeChange(
+                        id,
+                        submissionVersion,
+                        changeId,
+                        attachmentId,
+                        sessions.requireLogin(request).user()));
+    }
+
     @GetMapping("/api/policy-reviews/{id}/attachments/{attachmentId}/content")
     @Operation(summary = "下载审核详情中指定轮次的附件", description = "submissionVersion 为提交轮次，文件须被本轮快照引用。")
     public ResponseEntity<Resource> reviewRound(

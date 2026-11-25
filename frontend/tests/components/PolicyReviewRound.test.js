@@ -50,6 +50,51 @@ it('逐段呈现原拟名单、商品、核销和补贴，并将表单与调整�
   ])
 })
 
+it('本轮依据按原单显示连续叠加时段，另列随单延期的原截止、新截止和原因', async () => {
+  const round = reviewRound()
+  const change = round.changes[0]
+  const [source, current] = change.after
+  const oldEnd = '2027-01-10T00:00:00+08:00'
+  const mainEnd = '2027-01-13T00:00:00+08:00'
+  const newEnd = '2027-01-16T00:00:00+08:00'
+  change.from = '2027-01-01T00:00:00+08:00'
+  change.through = mainEnd
+  change.candidates = [source, current]
+  const consent = round.snapshot.consent
+  consent.endAdjustments = [
+    {
+      target: { policyId: source.policyId, previousEnd: oldEnd },
+      endTime: newEnd,
+      reason: '活动延长',
+    },
+  ]
+  consent.decisions = [
+    { scope: change.scope, from: change.from, through: oldEnd, selectedPolicyIds: ['4', '5'] },
+    {
+      scope: change.scope,
+      from: '2027-01-10T00:00:01+08:00',
+      through: mainEnd,
+      selectedPolicyIds: ['extension:5:4', '5'],
+    },
+  ]
+  await open(() => Response.json(round))
+  const periods = wrapper.findAll('.review-changes article')
+  expect(periods).toHaveLength(1)
+  expect(periods[0].findAll('time').map((item) => item.text())).toEqual([
+    '2027-01-01 00:00:00',
+    '2027-01-13 00:00:00',
+  ])
+  const selected = periods[0].findAll('.review-change-sides section')[1]
+  expect(selected.findAll('.change-policy > strong').map((item) => item.text())).toEqual([
+    'ZC-000004（第 3 轮）',
+    'ZC-000005（第 2 轮）',
+  ])
+  const adjustment = wrapper.get('.policy-end-changes article')
+  expect(adjustment.text()).toContain('ZC-000004')
+  expect(adjustment.text()).toContain('原截止 2027-01-10 00:00:00 → 延长至 2027-01-16 00:00:00')
+  expect(adjustment.text()).toContain('活动延长')
+})
+
 it('多候选沿用原政策时显示未选政策的商品与补贴，换单时复用原执行明细', async () => {
   const round = reviewRound()
   const change = round.changes[0]

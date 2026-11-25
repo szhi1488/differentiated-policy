@@ -2,7 +2,11 @@ import { computed, ref, watch } from 'vue'
 import { timelineTimeFromValue, timelineTimeValue } from '../utils/subsidy-timeline'
 
 /** 两张时间轴共用时间指针和缩放状态，回写相同缩放值时不重复更新。 */
-export function useSubsidyTimelineNavigation(range, initialTime = () => range.value[1]) {
+export function useSubsidyTimelineNavigation(
+  range,
+  initialTime = () => range.value[1],
+  query = () => null,
+) {
   const cursorAt = ref('')
   const zoom = ref({ start: 0, end: 100 })
   const hasRange = computed(() => range.value[0] <= range.value[1])
@@ -51,8 +55,12 @@ export function useSubsidyTimelineNavigation(range, initialTime = () => range.va
     setCursor(initialTime())
   }
   watch(
-    range,
-    () => {
+    [range, query],
+    ([, currentQuery], [, previousQuery]) => {
+      if (currentQuery && currentQuery === previousQuery && hasRange.value && cursorAt.value) {
+        setCursor(cursorAt.value)
+        return
+      }
       resetZoom()
       cursorAt.value = hasRange.value ? initialTime() : ''
     },

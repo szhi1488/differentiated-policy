@@ -15,16 +15,18 @@ public interface FeishuWorkflowClient {
             String chatId,
             String summary,
             List<String> mentionOpenIds,
-            String detailUrl,
             String idempotencyKey,
             Runnable beforePost);
 
-    String createTask(
-            String openId,
+    String sendGroupWithDetail(
+            String chatId,
             String summary,
-            String detailUrl,
+            List<String> mentionOpenIds,
+            String detailsUrl,
             String idempotencyKey,
             Runnable beforePost);
+
+    String createTask(String openId, String summary, String idempotencyKey, Runnable beforePost);
 
     String closeTask(String guid, String outcome, Instant completedAt);
 

@@ -1,13 +1,9 @@
 import { request, RequestError } from './request'
 import { readPolicyReviewRound } from './policy-reviews'
+import { notifySubsidyUpdate } from './subsidy-timeline'
 
 const base = '/api/admin/policies'
 const policyPath = (id) => `${base}/${encodeURIComponent(id)}`
-
-// 随单延期在原单终审时直接获批，生成的子单只有批准快照。
-export function isApprovedBatchExtension(audit, snapshot) {
-  return audit.auditStatus === 'APPROVED' && Boolean(snapshot?.consent?.batchPolicyKey)
-}
 
 export function listAdminPolicies(filters, signal) {
   const params = new URLSearchParams()
@@ -32,8 +28,8 @@ export async function readAdminPolicy(id, signal, linkedVersion) {
       return { linkedRound: round }
     }
   }
-  const { policy, snapshot, audit } = await request(policyPath(id), { signal })
-  const detail = { policy, snapshot, audit }
+  const { policy, snapshot, audit, timeHistory } = await request(policyPath(id), { signal })
+  const detail = { policy, snapshot, audit, timeHistory }
   if (
     detail.policy.id !== id ||
     detail.snapshot.id !== id ||
@@ -81,11 +77,15 @@ export async function readAdminPolicyAuditLog(id, logId, signal) {
   return detail
 }
 
-export function reviewAdminPolicy(id, body, signal) {
-  return request(`${policyPath(id)}/review`, {
+export async function reviewAdminPolicy(id, body, signal) {
+  const result = await request(`${policyPath(id)}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   })
+  if (body.decision === 'APPROVE') {
+    notifySubsidyUpdate()
+  }
+  return result
 }

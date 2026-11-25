@@ -80,7 +80,7 @@ class PolicyReviewReassignmentTest {
                         count(
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE recipient_key=?",
                                 retainedId))
-                .isOne();
+                .isEqualTo(2);
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT task_guid FROM policy_review_member WHERE id=?",
@@ -96,16 +96,21 @@ class PolicyReviewReassignmentTest {
                         count(
                                 "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND event_key='REASSIGNED_3'",
                                 id))
-                .isEqualTo(3);
-        String payload =
-                jdbc.queryForObject(
-                        "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND event_key='REASSIGNED_3' AND recipient_key=0",
-                        String.class,
-                        id);
-        assertThat(json.readTree(payload).path("removedUserIds").get(0).asLong())
-                .isEqualTo(first.id());
-        assertThat(json.readTree(payload).path("addedUserIds").get(0).asLong())
-                .isEqualTo(next.id());
+                .isEqualTo(4);
+        assertThat(
+                        jdbc.queryForList(
+                                """
+                    SELECT m.user_id FROM policy_review_delivery d JOIN policy_review_member m ON m.id=d.recipient_key
+                    WHERE d.policy_id=? AND d.event_key='REASSIGNED_3' AND d.action_type='SEND_CARD'
+                    """,
+                                Long.class,
+                                id))
+                .containsExactlyInAnyOrder(first.id(), next.id());
+        assertThat(
+                        count(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND recipient_key=0",
+                                id))
+                .isZero();
         var audit =
                 jdbc.queryForMap(
                         "SELECT operator_id,reason,before_members,after_members FROM policy_review_reassignment WHERE policy_id=?",
@@ -250,7 +255,7 @@ class PolicyReviewReassignmentTest {
                             count(
                                     "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND event_key='REASSIGNED_3'",
                                     id))
-                    .isEqualTo(3 * audit);
+                    .isEqualTo(4 * audit);
         } finally {
             pool.shutdownNow();
         }

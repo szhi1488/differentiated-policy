@@ -13,7 +13,8 @@ public record PolicySnapshotData(
         Form form,
         List<Goods> goods,
         @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent,
-        @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode,
+        @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean wholeConfigurationSelection) {
     public record Form(
             Integer recordVersion,
             String perspective,

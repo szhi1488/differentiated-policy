@@ -5,9 +5,12 @@ import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.Submission;
 import com.company.policy.dto.PolicyListQuery;
+import com.company.policy.dto.PolicyTimeAdjustmentRequest;
 import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyApplyService;
+import com.company.policy.service.PolicyTimeAdjustments;
+import com.company.policy.vo.PolicyApplicability.AdjustmentOption;
 import com.company.policy.vo.PolicyResponse;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
@@ -55,10 +58,45 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 public class PolicyApplyController {
     private final PolicyApplyService policies;
     private final LoginSessionService sessions;
+    private final PolicyTimeAdjustments timeAdjustments;
 
-    public PolicyApplyController(PolicyApplyService policies, LoginSessionService sessions) {
+    public PolicyApplyController(
+            PolicyApplyService policies,
+            LoginSessionService sessions,
+            PolicyTimeAdjustments timeAdjustments) {
         this.policies = policies;
         this.sessions = sessions;
+        this.timeAdjustments = timeAdjustments;
+    }
+
+    @GetMapping("/time-adjustments/options")
+    @Operation(summary = "查询可独立提前结束或延期的已通过政策")
+    public List<AdjustmentOption> timeAdjustmentOptions(HttpServletRequest request) {
+        return timeAdjustments.options(sessions.requireLogin(request).user());
+    }
+
+    @PostMapping(path = "/time-adjustments/preview", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "核对本批时间调整并预览延期交叉时段", description = "逐单提交原审核轮次、实际截止、新截止和原因，证明文件选传。")
+    public PolicyTimeAdjustments.Preview previewTimeAdjustments(
+            @RequestBody PolicyTimeAdjustmentRequest body, HttpServletRequest request) {
+        return timeAdjustments.preview(
+                sessions.requireLogin(request).user(), body.endAdjustments());
+    }
+
+    @PostMapping(path = "/time-adjustments", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "直接通过并执行一批时间调整",
+            description = "UUID 请求标识用于幂等重试。携带预览凭证和各段选择，整批成功后每张目标返回一条已通过的调整记录。")
+    public List<PolicyResponse> applyTimeAdjustments(
+            @RequestBody PolicyTimeAdjustmentRequest body,
+            @RequestHeader("Idempotency-Key") String requestKey,
+            HttpServletRequest request) {
+        return timeAdjustments.apply(
+                sessions.requireLogin(request).user(),
+                body.endAdjustments(),
+                body.confirmationToken(),
+                body.decisions(),
+                requestKey);
     }
 
     @GetMapping("/platforms")
@@ -98,25 +136,6 @@ public class PolicyApplyController {
             @RequestHeader(value = "Idempotency-Key", required = false) String requestKey,
             HttpServletRequest request) {
         return policies.create(sessions.requireLogin(request).user(), body, requestKey);
-    }
-
-    @PostMapping(path = "/{id}/time-adjustment-draft", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "对本人已通过政策创建时间调整申请", description = "新截止早于原截止为提前结束，晚于原截止为延期。原因必填，证明文件选传。")
-    public PolicyResponse adjustTime(
-            @PathVariable long id,
-            @RequestBody PolicyDraftRequest.TimeAdjustment body,
-            @RequestHeader(value = "Idempotency-Key", required = false) String requestKey,
-            HttpServletRequest request) {
-        return policies.adjustTime(sessions.requireLogin(request).user(), id, body, requestKey);
-    }
-
-    @PutMapping(path = "/{id}/time-adjustment-date", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "修改本人时间调整草稿的截止、原因和证明文件", description = "限草稿或已驳回状态，须携带当前记录版本。")
-    public PolicyResponse saveTimeAdjustment(
-            @PathVariable long id,
-            @RequestBody PolicyDraftRequest.TimeAdjustment body,
-            HttpServletRequest request) {
-        return policies.saveTimeAdjustment(sessions.requireLogin(request).user(), id, body);
     }
 
     @PutMapping(path = "/{id}/draft", consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -80,6 +80,7 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
     private final PolicyApplyMapper policies;
     private final ObjectMapper json;
     private final PolicySnapshotCodec snapshots;
+    private final PolicyTimeHistory history;
     private final com.company.policy.support.policy.PolicyBatchExtensions extensions;
 
     PolicyReviewServiceImpl(
@@ -96,7 +97,9 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
             com.company.policy.support.policy.PolicyBatchExtensions extensions,
-            ExecutionNotices executionNotices) {
+            ExecutionNotices executionNotices,
+            PolicyTimeHistory history) {
+        this.history = history;
         this.executionNotices = executionNotices;
         this.coverage = coverage;
         this.access = access;
@@ -193,7 +196,11 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
                 snapshot,
                 auditSummary(log),
                 "APPROVED".equals(entry.getStatus())
-                        ? coverage.approvedEnd(entry.getTenantKey(), id, log.getId(), now())
+                        ? history.read(
+                                entry.getTenantKey(),
+                                id,
+                                log.getVersion(),
+                                snapshot.form().endTime())
                         : null);
     }
 
@@ -241,7 +248,10 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
             }
         }
         var result = updatePolicy(entry, admin, status, remark, time, null);
-        if (approve) extensions.approve(entry, snapshot, admin, log.getCreatedAt(), time);
+        if (approve)
+            extensions
+                    .approve(entry, snapshot, admin, time)
+                    .forEach(executionNotices::timeAdjusted);
         decide(
                 entry,
                 admin,
@@ -447,20 +457,6 @@ class PolicyReviewServiceImpl implements PolicyReviewService {
         } catch (ApiException changed) {
             if (!"POLICY_ADJUSTMENT_CHANGED".equals(changed.getCode())) throw changed;
             var saved = snapshot.consent();
-            if (snapshot.form().goodsForm().timeAdjustment() != null
-                    || entry.getExtensionSourceId() != null) {
-                result =
-                        new PolicyApplicability(
-                                "SNAPSHOT_DATES",
-                                formatTime(at),
-                                formatTime(at),
-                                snapshot.form().endTime(),
-                                PolicyApplicability.Status.NEEDS_CONFIRMATION,
-                                false,
-                                List.of(),
-                                List.of());
-                return new OverridePreview(result, saved, true, "REJECT_FOR_RESUBMISSION");
-            }
             var withoutCuts =
                     new PolicyConsent(
                             saved.ruleVersion(), saved.comparedRounds(), saved.decisions());

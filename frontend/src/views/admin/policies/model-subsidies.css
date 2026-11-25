@@ -94,6 +94,9 @@
 .model-subsidy-fill-key.used {
   background: #566a84;
 }
+.model-subsidy-fill-key.mixed {
+  background: linear-gradient(to bottom, #f4f6f9 65%, #566a84 65%);
+}
 .model-subsidy-source.inspected {
   box-shadow: inset 3px 0 #6585b5;
 }
@@ -105,32 +108,9 @@
 .model-subsidy-source-periods summary {
   cursor: pointer;
 }
-.model-subsidy-query-actions .el-checkbox {
-  margin: 0;
-  height: 32px;
-}
-.model-subsidy-query-actions .el-checkbox__label {
-  font-size: 12px;
-}
-/* 仅此查询页以 SVG 代替组件的 CSS 勾选符号，保留原生复选框交互。 */
-.model-subsidy-independent {
-  position: relative;
-}
-.model-subsidy-independent .el-checkbox__inner::after {
-  display: none;
-}
-.model-subsidy-independent .model-subsidy-independent-check {
-  position: absolute;
-  z-index: 2;
-  left: 1px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #fff;
-  pointer-events: none;
-}
 .model-subsidy-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 29%);
+  grid-template-columns: minmax(0, 1fr) minmax(332px, 29%);
   grid-template-areas: 'charts detail';
   align-items: start;
   gap: 16px;
@@ -213,25 +193,10 @@
 }
 .model-subsidy-detail-card {
   grid-area: detail;
+  min-width: 0;
   padding: 17px;
   scroll-margin-top: 72px;
 }
-.model-subsidy-detail-summary {
-  margin: 14px 0;
-  padding: 13px 14px;
-  border-radius: 6px;
-  background: #f0f5fe;
-  color: #365578;
-}
-.model-subsidy-detail-summary > span {
-  font-size: 12px;
-}
-.model-subsidy-detail-summary h3 {
-  margin: 6px 0;
-  color: #264e84;
-  font-size: 19px;
-}
-.model-subsidy-detail-summary p,
 .model-subsidy-source p {
   margin: 4px 0 0;
   font-size: 12px;
@@ -247,7 +212,7 @@
 }
 .model-subsidy-detail-card dl > div {
   display: grid;
-  grid-template-columns: 4.3em minmax(0, 1fr);
+  grid-template-columns: 6em minmax(0, 1fr);
   gap: 7px;
 }
 .model-subsidy-detail-card dt {
@@ -310,10 +275,18 @@
 }
 .model-subsidy-source header {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 4px 8px;
-  font-size: 13px;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.model-subsidy-source header small {
+  font-size: 11px;
+}
+.model-subsidy-source header .ratio,
+.model-subsidy-source header .fixed {
+  margin-inline-start: auto;
 }
 @media (max-width: 1100px) {
   .model-subsidy-workspace {

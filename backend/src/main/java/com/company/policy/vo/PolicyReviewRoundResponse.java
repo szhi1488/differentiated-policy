@@ -23,7 +23,8 @@ public record PolicyReviewRoundResponse(
         PolicyResponse.Snapshot snapshot,
         ChangeSummary changeSummary,
         List<Change> changes,
-        List<Adjustment> adjustments) {
+        List<Adjustment> adjustments,
+        PolicyResponse.TimeHistory timeHistory) {
 
     public record Member(
             String assignmentId,

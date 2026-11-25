@@ -24,14 +24,20 @@ import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
 import com.company.policy.dto.PolicyDraftRequest.Target;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.dto.PolicyReviewSettingsUpdate;
+import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
+import com.company.policy.mapper.PolicyDeliveryAudienceMapper;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -80,37 +86,43 @@ class PolicyReviewSubmissionIntegrationTest {
     @Autowired LoginSessionService sessions;
     @Autowired MockMvc mvc;
     @Autowired PolicyDeliveryWorker deliveries;
+    @Autowired PolicyDeliveryAudienceMapper deliveryAudience;
     @Autowired PolicyCardCallback callbacks;
     @Autowired ExecutionNotices execution;
+    @Autowired PolicyTimeAdjustments directAdjustments;
     @Autowired com.company.policy.mapper.ExecutionNoticeMapper notices;
     @Autowired FeishuProperties feishu;
     @MockitoBean FeishuWorkflowClient remote;
 
     @ParameterizedTest
     @CsvSource({
-        "APPROVE, https://erp.example.test/",
-        "REJECT, https://erp.example.test/",
-        "APPROVE, http://localhost:5173/erp/",
-        "REJECT, http://localhost:5173/erp/"
+        "APPROVE, HTTP",
+        "REJECT, HTTP",
+        "APPROVE, LONG_CONNECTION",
+        "REJECT, LONG_CONNECTION"
     })
-    void deliveredDecisionUpdatesBothCardsAndMentionsExactlyTheNextTaskRecipients(
-            String decision, String erpRoot) throws Exception {
+    void decisionsPrivatelyNotifyNextAssigneesAndOnlyFinalApprovalPublishesTheFrozenForm(
+            String decision, FeishuProperties.PolicyCallbackMode callbackMode) throws Exception {
+        String productSigner =
+                callbackMode == FeishuProperties.PolicyCallbackMode.HTTP ? "Becca" : "初审小林";
+        jdbc.update("UPDATE user_info SET name=? WHERE id=2", productSigner);
+        jdbc.update("UPDATE user_info SET name='运营小周' WHERE id=3");
         configure();
         var original = draft();
         long source = Long.parseLong(original.id());
         submit(source, direct(original)).andExpect(status().isOk());
         procurement.review(BUYER, source, new PolicyReviewRequest(2, 1, "APPROVE", null));
-        when(remote.sendGroup(anyString(), anyString(), anyList(), anyString(), anyString(), any()))
-                .thenAnswer(
-                        call -> {
-                            call.getArgument(5, Runnable.class).run();
-                            return "om_" + call.getArgument(4);
-                        });
-        when(remote.createTask(anyString(), anyString(), anyString(), anyString(), any()))
+        when(remote.sendGroup(anyString(), anyString(), anyList(), anyString(), any()))
                 .thenAnswer(
                         call -> {
                             call.getArgument(4, Runnable.class).run();
-                            return "task_" + call.getArgument(3);
+                            return "om_" + call.getArgument(3);
+                        });
+        when(remote.createTask(anyString(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(3, Runnable.class).run();
+                            return "task_" + call.getArgument(2);
                         });
         when(remote.sendCard(anyString(), any(), anyString(), any()))
                 .thenAnswer(
@@ -120,26 +132,46 @@ class PolicyReviewSubmissionIntegrationTest {
                         });
         when(remote.updateCard(anyString(), any())).thenAnswer(call -> call.getArgument(0));
         var originalMode = feishu.getPolicyCallbackMode();
-        if (erpRoot.startsWith("http://"))
-            feishu.setPolicyCallbackMode(FeishuProperties.PolicyCallbackMode.LONG_CONNECTION);
+        feishu.setPolicyCallbackMode(callbackMode);
         feishu.setPolicyChatId("oc_local_test");
-        feishu.setPolicyErpUrl(erpRoot);
         try {
             drainDeliveries();
+            var directAnnouncement = ArgumentCaptor.forClass(String.class);
+            verify(remote)
+                    .sendGroup(
+                            eq("oc_local_test"),
+                            directAnnouncement.capture(),
+                            anyList(),
+                            anyString(),
+                            any());
+            assertThat(directAnnouncement.getValue())
+                    .contains("终审人：")
+                    .doesNotContain("运营初审人", "【叠加政策】");
             clearInvocations(remote);
             var change = draft();
             long id = Long.parseLong(change.id());
             submit(id, stack(id, change.recordVersion())).andExpect(status().isOk());
             drainDeliveries();
-            String productUrl = erpRoot + "#/reviews/" + id + "?round=1";
+
             var sentCard = ArgumentCaptor.forClass(JsonNode.class);
             verify(remote).sendCard(eq("open-2"), sentCard.capture(), anyString(), any());
-            assertThat(sentCard.getValue().findValuesAsText("default_url"))
-                    .containsExactly(productUrl);
+            var combinations =
+                    sentCard.getValue().findValuesAsText("content").stream()
+                            .filter(text -> text.startsWith("拟叠加执行 · "))
+                            .map(text -> text.substring("拟叠加执行 · ".length()).split(" ＋ "))
+                            .toList();
+            assertThat(combinations).hasSize(1);
+            assertThat(combinations.get(0))
+                    .containsExactlyInAnyOrder(original.policyCode(), change.policyCode());
+            assertThat(String.join("\n", sentCard.getValue().findValuesAsText("content")))
+                    .containsOnlyOnce("整组配置")
+                    .contains(
+                            "12GB+256GB", original.policyCode(), change.policyCode(), "固定金额", "20")
+                    .doesNotContain("核销类型");
+            assertThat(sentCard.getValue().findValuesAsText("default_url")).isEmpty();
             verify(remote).sendCard(eq("open-3"), any(), anyString(), any());
             verify(remote, never())
-                    .sendGroup(
-                            anyString(), anyString(), anyList(), anyString(), anyString(), any());
+                    .sendGroup(anyString(), anyString(), anyList(), anyString(), any());
 
             var actionValue =
                     sentCard.getValue().findValues("value").stream()
@@ -169,27 +201,29 @@ class PolicyReviewSubmissionIntegrationTest {
                     .isEqualTo("info");
             drainDeliveries();
             boolean approved = "APPROVE".equals(decision);
-            String url =
-                    erpRoot
-                            + (approved ? "#/admin/policies" : "#/apply")
-                            + "?policyId="
-                            + id
-                            + "&round=1";
+
             var receivers = approved ? List.of("open-4", "open-5") : List.of("open-1");
-            verify(remote)
-                    .sendGroup(
-                            eq("oc_local_test"),
-                            argThat(
-                                    summary ->
-                                            summary.contains("同名")
-                                                    && summary.contains(
-                                                            approved ? "初审通过" : "初审退回")),
-                            eq(receivers),
-                            eq(url),
-                            anyString(),
-                            any());
-            for (var receiver : receivers)
-                verify(remote).createTask(eq(receiver), anyString(), eq(url), anyString(), any());
+            verify(remote, never())
+                    .sendGroup(anyString(), anyString(), anyList(), anyString(), any());
+            for (var receiver : receivers) {
+                var notice = ArgumentCaptor.forClass(JsonNode.class);
+                verify(remote).sendCard(eq(receiver), notice.capture(), anyString(), any());
+                String title = approved ? "待你采购终审" : "产品运营初审退回";
+                assertThat(notice.getValue().at("/header/title/content").asText())
+                        .isEqualTo(title + " · " + change.policyCode() + " · 第 1 轮");
+                String expectedBody =
+                        approved
+                                ? "请打开飞书工作台里的「差异化政策管理系统」，进入「政策管理」→「差异化政策」，找到 "
+                                        + change.policyCode()
+                                        + "，点击「审核」，及时完成终审。\n"
+                                        + productSigner
+                                        + " 已完成产品运营初审。"
+                                : "办理人：" + productSigner + "\n退回原因：请重核";
+                assertThat(notice.getValue().at("/body/elements/0/text/content").asText())
+                        .isEqualTo(expectedBody);
+                assertTextOnlyNotice(notice.getValue());
+                verify(remote).createTask(eq(receiver), anyString(), anyString(), any());
+            }
             verify(remote).updateCard(eq("om_open-2"), any());
             verify(remote)
                     .updateCard(
@@ -198,7 +232,7 @@ class PolicyReviewSubmissionIntegrationTest {
                                     card ->
                                             card.toString().contains("同组他人已处理")
                                                     && card.findValuesAsText("default_url")
-                                                            .equals(List.of(productUrl))));
+                                                            .isEmpty()));
             assertThat(
                             jdbc.queryForObject(
                                     "SELECT COUNT(*) FROM policy_review_delivery WHERE policy_id=? AND (delivery_status<>'SENT' OR receipt_id IS NULL)",
@@ -230,12 +264,79 @@ class PolicyReviewSubmissionIntegrationTest {
                                         String.class,
                                         id))
                         .isEqualTo("FINISHED");
+                drainDeliveries();
+                var announcement = ArgumentCaptor.forClass(String.class);
+                verify(remote)
+                        .sendGroup(
+                                eq("oc_local_test"),
+                                announcement.capture(),
+                                eq(List.of("open-1")),
+                                anyString(),
+                                any());
+                assertThat(announcement.getValue())
+                        .contains(
+                                "采购终审通过",
+                                "运营初审人：" + productSigner,
+                                "【基础信息】",
+                                "百亿渠道",
+                                "拼多多",
+                                "【政策时间与详情】",
+                                "2099-05-01 00:00:00",
+                                "【商品及补贴信息】",
+                                "12GB+256GB 整组配置",
+                                "固定补贴 20.00 元")
+                        .doesNotContain(
+                                "核销类型", "是否为预估政策", "运营小周", "逐段采用名单", "确认时段", "【其他信息】", "附件及链接");
+                String[] sections = announcement.getValue().split("【叠加政策】", -1);
+                assertThat(sections).hasSize(2);
+                assertThat(sections[0]).contains("【商品及补贴信息】", "固定补贴 20.00 元");
+                assertThat(sections[1])
+                        .contains(
+                                original.policyCode(),
+                                change.policyCode(),
+                                "拼多多百亿",
+                                "2099-05-01 00:00:00",
+                                "2099-05-10 23:59:59",
+                                "12GB+256GB 整组配置")
+                        .containsOnlyOnce("固定金额 20 元/台")
+                        .doesNotContain("本次申请未在本段采用");
             }
         } finally {
             feishu.setPolicyCallbackMode(originalMode);
             feishu.setPolicyChatId("");
-            feishu.setPolicyErpUrl("");
         }
+    }
+
+    @Test
+    void directPurchaseAndFinalRejectionAreDeliveredPrivatelyWithNoBusinessGroupConfigured()
+            throws Exception {
+        configure();
+        var form = draft();
+        long id = Long.parseLong(form.id());
+        when(remote.sendCard(anyString(), any(), anyString(), any()))
+                .thenAnswer(call -> "om_" + call.getArgument(2));
+        when(remote.createTask(anyString(), anyString(), anyString(), any()))
+                .thenAnswer(call -> "task_" + call.getArgument(2));
+        when(remote.closeTask(anyString(), anyString(), any()))
+                .thenAnswer(call -> call.getArgument(0));
+        submit(id, direct(form)).andExpect(status().isOk());
+        drainDeliveries();
+        verify(remote).sendCard(eq("open-4"), any(), anyString(), any());
+        verify(remote).sendCard(eq("open-5"), any(), anyString(), any());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "REJECT", null));
+        drainDeliveries();
+        var card = ArgumentCaptor.forClass(JsonNode.class);
+        verify(remote).sendCard(eq("open-1"), card.capture(), anyString(), any());
+        assertThat(card.getValue().toString()).contains("采购终审退回", "审核人未填写驳回原因", "办理人：同名");
+        assertTextOnlyNotice(card.getValue());
+        verify(remote, times(2)).closeTask(startsWith("task_"), anyString(), any());
+        verify(remote, never()).sendGroup(anyString(), anyString(), anyList(), anyString(), any());
+    }
+
+    private static void assertTextOnlyNotice(JsonNode card) {
+        assertThat(card.findValuesAsText("tag")).doesNotContain("button", "input", "form");
+        assertThat(card.findValuesAsText("type")).doesNotContain("open_url", "callback");
+        assertThat(card.findValuesAsText("default_url")).isEmpty();
     }
 
     private void drainDeliveries() {
@@ -265,17 +366,9 @@ class PolicyReviewSubmissionIntegrationTest {
         mvc.perform(lookup.session(session(OWNER))).andExpect(status().isForbidden());
         mvc.perform(lookup.session(session(BUYER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
-                .andExpect(
-                        jsonPath("$[0].deliveryKey")
-                                .value(
-                                        PolicyFeishuSender.idempotencyKey(
-                                                "company",
-                                                id,
-                                                1,
-                                                "SUBMITTED",
-                                                "GROUP_MESSAGE",
-                                                0)));
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].action").value("SEND_CARD"))
+                .andExpect(jsonPath("$[0].recipient").value("同名"));
         var body =
                 new PolicyDeliveryRecovery.Resolution(
                         "CONFIRM_RECEIPT", "UNKNOWN", 3, 0, "task_verified", "比对原收件人和投递编号");
@@ -434,6 +527,7 @@ class PolicyReviewSubmissionIntegrationTest {
                         "policy_review_member",
                         "policy_review_round",
                         "policy_goods_detail",
+                        "policy_time_change",
                         "policy_audit_log",
                         "policy_apply",
                         "policy_review_setting_member",
@@ -483,17 +577,17 @@ class PolicyReviewSubmissionIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
         assertThat(actions(first, 1))
-                .containsExactly("CREATE_TASK", "CREATE_TASK", "GROUP_MESSAGE");
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
         assertThat(members(first, 1)).containsExactly(4L, 5L);
-        var firstGroup =
-                json.readTree(
-                        jdbc.queryForObject(
-                                "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='GROUP_MESSAGE'",
-                                String.class,
-                                first));
-        assertThat(firstGroup.get("actingUserIds").toString()).isEqualTo("[4,5]");
-        assertThat(firstGroup.get("instruction").asText()).isEqualTo("请采购办理终审。");
-        assertThat(firstGroup.get("informedUserIds").size()).isZero();
+        assertThat(
+                        jdbc.queryForList(
+                                """
+                SELECT m.user_id FROM policy_review_delivery d JOIN policy_review_member m ON d.recipient_key=m.id
+                WHERE d.policy_id=? AND d.action_type='SEND_CARD' ORDER BY m.user_id
+                """,
+                                Long.class,
+                                first))
+                .containsExactly(4L, 5L);
         procurement.review(BUYER, first, new PolicyReviewRequest(2, 1, "APPROVE", null));
         transactions.executeWithoutResult(
                 tx ->
@@ -506,7 +600,8 @@ class PolicyReviewSubmissionIntegrationTest {
                         "CREATE_TASK",
                         "CREATE_TASK",
                         "GROUP_MESSAGE",
-                        "GROUP_MESSAGE");
+                        "SEND_CARD",
+                        "SEND_CARD");
         var extra = draft();
         long id = Long.parseLong(extra.id());
         submit(id, stack(id, extra.recordVersion()))
@@ -685,8 +780,7 @@ class PolicyReviewSubmissionIntegrationTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void selectingOneOfTwoPoliciesRequiresProductReviewEvenWhenKeepingTheOriginal(
-            boolean keepOriginal) throws Exception {
+    void selectingOneOfTwoPoliciesGoesDirectlyToProcurement(boolean keepOriginal) throws Exception {
         configure();
         var original = draft();
         long originalId = Long.parseLong(original.id());
@@ -709,11 +803,13 @@ class PolicyReviewSubmissionIntegrationTest {
                                 List.of(choice),
                                 List.of()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewStage").value("PRODUCT_REVIEW"));
-        assertThat(members(id, 1)).containsExactly(2L, 3L, 4L, 5L);
-        round(user(2, "APPLICANT"), id, 1)
-                .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(true))
-                .andExpect(jsonPath("$.changeSummary.triggerSegments").value(1))
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
+        assertThat(members(id, 1)).containsExactly(4L, 5L);
+        assertThat(actions(id, 1))
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
+        round(BUYER, id, 1)
+                .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(false))
+                .andExpect(jsonPath("$.changeSummary.triggerSegments").value(0))
                 .andExpect(
                         jsonPath("$.changes[0].kind")
                                 .value(keepOriginal ? "UNCHANGED" : "REPLACEMENT"))
@@ -724,7 +820,189 @@ class PolicyReviewSubmissionIntegrationTest {
                         jsonPath("$.changes[0].candidates[*].policyId")
                                 .value(containsInAnyOrder(original.id(), extra.id())))
                 .andExpect(jsonPath("$.allowedActions").value(contains("APPROVE", "REJECT")));
-        round(BUYER, id, 1).andExpect(jsonPath("$.allowedActions").isEmpty());
+    }
+
+    @Test
+    void approvedDirectResubmissionOmitsThePreviousRoundsProductSigner() throws Exception {
+        configure();
+        var original = draft();
+        long baseId = Long.parseLong(original.id());
+        submit(baseId, direct(original)).andExpect(status().isOk());
+        procurement.review(BUYER, baseId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+
+        var extra = draft();
+        long id = Long.parseLong(extra.id());
+        submit(id, stack(id, 1)).andExpect(status().isOk());
+        procurement.productReview(
+                user(2, "APPLICANT"), id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var rejected =
+                procurement.review(BUYER, id, new PolicyReviewRequest(3, 1, "REJECT", "调整采用名单"));
+
+        var preview = policies.preview(OWNER, id, rejected.recordVersion());
+        var scope = preview.applicability().scopes().get(0);
+        var choice =
+                new Choice(
+                        scope.scope(),
+                        scope.segments().get(0).through(),
+                        "CHOOSE_ONE",
+                        extra.id(),
+                        null);
+        var direct =
+                policies.submit(
+                        OWNER,
+                        id,
+                        new Submission(
+                                rejected.recordVersion(),
+                                preview.confirmationToken(),
+                                List.of(choice),
+                                List.of()));
+        assertThat(direct.reviewStage()).isEqualTo("PURCHASE_REVIEW");
+        procurement.review(
+                BUYER, id, new PolicyReviewRequest(direct.recordVersion(), 2, "APPROVE", null));
+
+        var approved = deliveryAudience.approvedRound("company", id, 2);
+        assertThat(approved).isNotNull();
+        assertThat(approved.productReviewer()).isNull();
+    }
+
+    @Test
+    void stackingJustTheSharedConfigurationRequiresConfirmationAndOpensOnlyPurchase()
+            throws Exception {
+        configure();
+        jdbc.update("DELETE FROM policy_review_setting_member WHERE group_code='PRODUCT'");
+        var common = new Target("1", "12GB", "256GB", "1");
+        var onlyOriginal = new Target("1", "12GB", "512GB", "2");
+        var onlyNew = new Target("1", "16GB", "512GB", "3");
+        for (var target : List.of(onlyOriginal, onlyNew)) {
+            jdbc.update(
+                    """
+                    INSERT INTO goods(id,brand_id,series_id,spu_id,goods_name,ram,rom,color_id,status)
+                    VALUES (?,1,1,1,'Reno 白色',?,?,1,1)
+                    """,
+                    target.goodsId(),
+                    target.ram(),
+                    target.rom());
+        }
+        var original = policies.create(OWNER, form("2099-05", common, onlyOriginal), null);
+        long originalId = Long.parseLong(original.id());
+        submit(originalId, direct(original)).andExpect(status().isOk());
+        procurement.review(BUYER, originalId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var partial = policies.create(OWNER, form("2099-05", onlyNew, common), null);
+        long id = Long.parseLong(partial.id());
+        submit(id, direct(partial))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_CONFIRMATION_REQUIRED"));
+        var confirmed = stack(id, 1);
+        assertThat(confirmed.decisions()).hasSize(1);
+        submit(id, confirmed)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
+        assertThat(members(id, 1)).containsExactly(4L, 5L);
+        assertThat(actions(id, 1))
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
+        round(BUYER, id, 1)
+                .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(false))
+                .andExpect(jsonPath("$.changeSummary.triggerSegments").value(0))
+                .andExpect(
+                        jsonPath("$.snapshot.consent.decisions[0].selectedPolicyIds")
+                                .value(containsInAnyOrder(original.id(), partial.id())));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void fourSuccessiveStackedPoliciesCompareEverySelectedGoodsId(boolean identicalFourth)
+            throws Exception {
+        configure();
+        var originalGood = new Target("1", "12GB", "256GB", "1");
+        var extraSku = addSecondSkuWithSameSpecificationsAndColor();
+        var adoptedIds = new ArrayList<String>();
+        for (int count = 1; count <= 4; count++) {
+            var request =
+                    count == 4 && !identicalFourth
+                            ? specifiedGoods("2099-05-01", "2099-05-10", originalGood, extraSku)
+                            : specifiedGoods("2099-05-01", "2099-05-10", originalGood);
+            var proposal = policies.create(OWNER, request, null);
+            long id = Long.parseLong(proposal.id());
+            adoptedIds.add(proposal.id());
+            boolean needsReview = count > 1 && (count != 4 || identicalFourth);
+            submit(id, count == 1 ? direct(proposal) : stack(id, 1))
+                    .andExpect(status().isOk())
+                    .andExpect(
+                            jsonPath("$.reviewStage")
+                                    .value(needsReview ? "PRODUCT_REVIEW" : "PURCHASE_REVIEW"));
+            if (count > 1) {
+                round(BUYER, id, 1)
+                        .andExpect(
+                                jsonPath("$.changes[0].after[*].policyId")
+                                        .value(
+                                                containsInAnyOrder(
+                                                        adoptedIds.toArray(String[]::new))))
+                        .andExpect(
+                                jsonPath("$.changeSummary.requiresProductReview")
+                                        .value(needsReview));
+            }
+            if (needsReview) {
+                assertThat(actions(id, 1)).containsExactly("SEND_CARD", "SEND_CARD");
+                assertThat(members(id, 1)).containsExactly(2L, 3L, 4L, 5L);
+            } else {
+                assertThat(actions(id, 1))
+                        .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
+                assertThat(members(id, 1)).containsExactly(4L, 5L);
+            }
+            if (count < 4) {
+                if (needsReview)
+                    procurement.productReview(
+                            user(2, "APPLICANT"),
+                            id,
+                            new PolicyReviewRequest(2, 1, "APPROVE", null));
+                procurement.review(
+                        BUYER,
+                        id,
+                        new PolicyReviewRequest(needsReview ? 3 : 2, 1, "APPROVE", null));
+            }
+        }
+    }
+
+    @Test
+    void anIdenticalStackInOnePeriodAndDifferentGoodsInAnotherGoDirectlyToProcurement()
+            throws Exception {
+        configure();
+        var x = new Target("1", "12GB", "256GB", "1");
+        var y = addSecondSkuWithSameSpecificationsAndColor();
+        var early = policies.create(OWNER, specifiedGoods("2099-05-01", "2099-05-05", x), null);
+        var later = policies.create(OWNER, specifiedGoods("2099-05-06", "2099-05-10", y), null);
+        for (var source : List.of(early, later)) {
+            long id = Long.parseLong(source.id());
+            submit(id, direct(source)).andExpect(status().isOk());
+            procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        }
+        var next = policies.create(OWNER, specifiedGoods("2099-05-01", "2099-05-10", x), null);
+        long id = Long.parseLong(next.id());
+        var selected = stack(id, 1);
+        assertThat(selected.decisions()).hasSize(2);
+        submit(id, selected)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
+        round(BUYER, id, 1)
+                .andExpect(jsonPath("$.changeSummary.triggerSegments").value(0))
+                .andExpect(
+                        jsonPath("$.changes[0].after[*].policyId")
+                                .value(containsInAnyOrder(early.id(), next.id())))
+                .andExpect(
+                        jsonPath("$.changes[1].after[*].policyId")
+                                .value(containsInAnyOrder(later.id(), next.id())));
+        assertThat(members(id, 1)).containsExactly(4L, 5L);
+        assertThat(actions(id, 1))
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
+    }
+
+    private Target addSecondSkuWithSameSpecificationsAndColor() {
+        jdbc.update(
+                """
+                INSERT INTO goods(id,brand_id,series_id,spu_id,goods_name,ram,rom,color_id,status,sku_id)
+                VALUES (2,1,1,1,'Reno 白色另一 SKU','12GB','256GB',1,1,'10002')
+                """);
+        return new Target("1", "12GB", "256GB", "2");
     }
 
     private Submission stack(long id, int recordVersion) throws Exception {
@@ -795,9 +1073,9 @@ class PolicyReviewSubmissionIntegrationTest {
                         """,
                                 String.class,
                                 id))
-                .containsExactly("CREATE_TASK", "CLOSE_TASK");
+                .containsExactly("SEND_CARD", "CREATE_TASK", "CLOSE_TASK");
         assertThat(members(id, 2)).containsExactly(5L);
-        assertThat(actions(id, 2)).containsExactly("CREATE_TASK", "GROUP_MESSAGE");
+        assertThat(actions(id, 2)).containsExactly("CREATE_TASK", "SEND_CARD");
     }
 
     private String revisionStatus(long id) {
@@ -844,12 +1122,13 @@ class PolicyReviewSubmissionIntegrationTest {
                                 Integer.class,
                                 id))
                 .isOne();
-        assertThat(actions(id, 1)).containsExactly("CREATE_TASK", "CREATE_TASK", "GROUP_MESSAGE");
+        assertThat(actions(id, 1))
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
         assertThat(actions(id, 2)).isEmpty();
     }
 
     @Test
-    void competingBuyersApproveOneBatchAndItsTwoReadOnlyExtensionChildren() throws Exception {
+    void competingBuyersApplyEachAccompanyingChangeExactlyOnce() throws Exception {
         configure();
         var purchasePath = "/api/admin/policies/{id}/review";
         var approve = new PolicyReviewRequest(2, 1, "APPROVE", null);
@@ -879,28 +1158,13 @@ class PolicyReviewSubmissionIntegrationTest {
         assertThat(preview.applicability().scopes()).isEmpty();
         submit(id, new Submission(1, preview.confirmationToken(), List.of(), changes))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewStage").value("PRODUCT_REVIEW"));
-        round(user(2, "APPLICANT"), id, 1)
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
+        round(BUYER, id, 1)
                 .andExpect(jsonPath("$.changeSummary.triggerSegments").value(0))
-                .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(true))
+                .andExpect(jsonPath("$.changeSummary.requiresProductReview").value(false))
                 .andExpect(jsonPath("$.adjustments[*].accompanying").value(contains(true, true)));
-        round(BUYER, id, 1).andExpect(jsonPath("$.allowedActions").isEmpty());
-        var original = options.get(0).target();
-        var originalRow = notices.approved("company", Long.parseLong(original.policyId()));
-        var deadline =
-                com.company.policy.support.policy.PolicyFormValidation.time(original.previousEnd());
-        var ending =
-                json.createObjectNode()
-                        .put("kind", "END")
-                        .put("policy", originalRow.id())
-                        .put("version", originalRow.version())
-                        .put("end", deadline.toString());
-        assertThat(execution.message("company", ending, deadline.plusSeconds(1)).text())
-                .contains("延期仍待审核");
-        assertThat(procurement.productReview(user(2, "APPLICANT"), id, approve).reviewStage())
-                .isEqualTo("PURCHASE_REVIEW");
-
-        var purchaseApproval = new PolicyReviewRequest(3, 1, "APPROVE", null);
+        round(BUYER, id, 1)
+                .andExpect(jsonPath("$.allowedActions").value(contains("APPROVE", "REJECT")));
         var start = new CountDownLatch(1);
         var pool = Executors.newFixedThreadPool(2);
         try {
@@ -917,7 +1181,7 @@ class PolicyReviewSubmissionIntegrationTest {
                                                                         buyer,
                                                                         purchasePath,
                                                                         id,
-                                                                        purchaseApproval)
+                                                                        approve)
                                                                 .andReturn()
                                                                 .getResponse()
                                                                 .getStatus();
@@ -949,42 +1213,25 @@ class PolicyReviewSubmissionIntegrationTest {
                                 String.class,
                                 id))
                 .containsExactly("APPROVE");
-        assertThat(execution.message("company", ending, deadline.plusSeconds(1)).text())
-                .contains("延期已批", "00:00:00");
-        // 隔离样例把延期批准时刻推迟至原截止后十分钟，按真实时刻展示中间空档。
-        var extended = notices.extension("company", originalRow.id());
-        jdbc.update(
-                "UPDATE policy_audit_log SET audit_time=? WHERE policy_id=? AND version=1",
-                deadline.plusMinutes(10),
-                extended.id());
-        assertThat(execution.message("company", ending, deadline.plusMinutes(10)).text())
-                .contains("00:09:59", "空档");
         assertThat(
                         jdbc.queryForObject(
-                                "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key LIKE 'P/%/EXTENDED/%'",
-                                Integer.class))
+                                "SELECT COUNT(*) FROM policy_time_change WHERE source_policy_id=?",
+                                Integer.class,
+                                id))
                 .isEqualTo(2);
-        for (var option : options) {
-            var childId =
-                    jdbc.queryForObject(
-                            """
-                    SELECT p.id FROM policy_apply p JOIN policy_audit_log a ON a.policy_id=p.id AND a.version=1
-                    WHERE p.extension_source_id=? AND p.status='APPROVED' AND a.workflow_version=0
-                    """,
-                            Long.class,
-                            Long.valueOf(option.target().policyId()));
-            assertThat(actions(childId, 1)).isEmpty();
-            assertThat(
-                            jdbc.queryForObject(
-                                    "SELECT COUNT(*) FROM policy_review_round WHERE policy_id=?",
-                                    Integer.class,
-                                    childId))
-                    .isZero();
-            round(OWNER, childId, 1)
-                    .andExpect(jsonPath("$.status").value("APPROVED"))
-                    .andExpect(jsonPath("$.reviewStage").isEmpty())
-                    .andExpect(jsonPath("$.allowedActions").isEmpty())
-                    .andExpect(jsonPath("$.snapshot.sourcePolicyCode").value(option.policyCode()));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class))
+                .isEqualTo(3);
+        for (var change : changes) {
+            long originalId = Long.parseLong(change.target().policyId());
+            var timeHistory = policies.detail(OWNER, originalId).timeHistory();
+            assertThat(timeHistory.currentEnd()).isEqualTo(change.endTime());
+            assertThat(timeHistory.changes())
+                    .singleElement()
+                    .satisfies(
+                            row -> {
+                                assertThat(row.sourcePolicyCode()).isEqualTo(parent.policyCode());
+                                assertThat(row.reason()).isEqualTo(change.reason());
+                            });
         }
     }
 
@@ -1072,7 +1319,9 @@ class PolicyReviewSubmissionIntegrationTest {
         transactions.executeWithoutResult(
                 tx -> {
                     policies.submit(OWNER, id, direct(draft));
-                    assertThat(actions(id, 1)).hasSize(3);
+                    assertThat(actions(id, 1))
+                            .containsExactly(
+                                    "CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
                     tx.setRollbackOnly();
                 });
         assertThat(actions(id, 1)).isEmpty();
@@ -1108,9 +1357,191 @@ class PolicyReviewSubmissionIntegrationTest {
         assertThat(actions(id, 1)).isEmpty();
     }
 
+    @ParameterizedTest
+    @CsvSource({"2099-05-09T12:34:56+08:00, 政策截止已提前", "2099-05-20T12:34:56+08:00, 政策已延期"})
+    void directlyAdjustedPolicyAnnouncesOriginalPolicyReasonAndReadOnlyDetailsLink(
+            String end, String title) throws Exception {
+        configure();
+        var source = draft();
+        long sourceId = Long.parseLong(source.id());
+        submit(sourceId, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, sourceId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        jdbc.update("DELETE FROM policy_review_delivery");
+        var change =
+                new EndAdjustment(directAdjustments.options(OWNER).get(0).target(), end, "平台活动改期");
+        var changes = List.of(change);
+        var preview = directAdjustments.preview(OWNER, changes);
+        String key = java.util.UUID.randomUUID().toString();
+        var adjustment =
+                directAdjustments
+                        .apply(OWNER, changes, preview.confirmationToken(), List.of(), key)
+                        .get(0);
+        directAdjustments.apply(OWNER, changes, preview.confirmationToken(), List.of(), key);
+
+        feishu.setPolicyChatId("oc_testing");
+        feishu.setPolicyErpUrl("https://policy.example.test/");
+        when(remote.sendGroupWithDetail(
+                        anyString(), anyString(), anyList(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(5, Runnable.class).run();
+                            return "om_time_adjustment";
+                        });
+        try {
+            drainDeliveries();
+            var text = ArgumentCaptor.forClass(String.class);
+            verify(remote)
+                    .sendGroupWithDetail(
+                            eq("oc_testing"),
+                            text.capture(),
+                            eq(List.of("open-1")),
+                            eq("https://policy.example.test/#/reviews/" + sourceId + "?round=1"),
+                            anyString(),
+                            any());
+            verifyNoMoreInteractions(remote);
+            assertThat(text.getValue())
+                    .contains(
+                            title + " · " + source.policyCode(),
+                            adjustment.policyCode(),
+                            "操作人：",
+                            "平台活动改期",
+                            "12:34:56",
+                            "【基础信息】",
+                            "【政策时间与详情】",
+                            "【商品及补贴信息】",
+                            "拼多多",
+                            "固定补贴")
+                    .doesNotContain("采购终审通过", "终审人：");
+            mvc.perform(
+                            get("/api/policy-reviews/{id}", adjustment.id())
+                                    .param("submissionVersion", "1")
+                                    .session(session(OWNER)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("APPROVED"))
+                    .andExpect(jsonPath("$.allowedActions").isEmpty())
+                    .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("平台活动改期"));
+            mvc.perform(
+                            get("/api/policy-reviews/{id}", adjustment.id())
+                                    .param("submissionVersion", "1")
+                                    .session(session(user(6, "APPLICANT"))))
+                    .andExpect(status().isNotFound());
+        } finally {
+            feishu.setPolicyChatId("");
+            feishu.setPolicyErpUrl("");
+        }
+    }
+
     @Test
-    void scheduleUsesApprovedWindowsAndLatestOwnersWithoutReplayingExpiredHistory()
+    void successiveChangesKeepEachFrozenNoticeAndRescheduleRemindersOnOriginalPolicy()
             throws Exception {
+        configure();
+        var source = draft();
+        long original = Long.parseLong(source.id());
+        submit(original, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, original, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            execution.initialize(LocalDateTime.parse("2099-05-01T00:00:00"));
+            var first = changeDeadline(source, "2099-05-09T11:00:00+08:00", "首次缩短");
+            var second = changeDeadline(first, "2099-05-07T11:00:00+08:00", "继续缩短");
+            var last = changeDeadline(second, "2099-05-12T10:00:00+08:00", "恢复活动");
+            var at = LocalDateTime.parse("2099-05-07T11:00:01");
+            var changed = new ArrayList<String>();
+            for (var payload : noticeBodies()) {
+                var body = json.readTree(payload);
+                if (body.has("changeId")) {
+                    assertThat(body.path("policy").asLong()).isEqualTo(original);
+                    var message = execution.message("company", body, at);
+                    assertThat(message.users()).containsExactly(1L);
+                    changed.add(message.text());
+                }
+            }
+            assertThat(List.of(first.id(), second.id(), last.id()))
+                    .containsExactly(source.id(), source.id(), source.id());
+            assertThat(changed).hasSize(3);
+            assertThat(changed)
+                    .anySatisfy(
+                            text ->
+                                    assertThat(text)
+                                            .contains(
+                                                    "政策截止已提前 · " + source.policyCode(),
+                                                    "原因：首次缩短",
+                                                    "2099-05-09 11:00:00"));
+            assertThat(changed)
+                    .anySatisfy(
+                            text ->
+                                    assertThat(text)
+                                            .contains(
+                                                    "政策截止已提前 · " + source.policyCode(),
+                                                    "原因：继续缩短",
+                                                    "调整前政策时段（北京时间）：2099-05-01 00:00:00 至 2099-05-09 11:00:00",
+                                                    "2099-05-07 11:00:00"));
+            assertThat(changed)
+                    .anySatisfy(
+                            text ->
+                                    assertThat(text)
+                                            .contains(
+                                                    "政策已延期 · " + source.policyCode(),
+                                                    "原因：恢复活动",
+                                                    "2099-05-12 10:00:00")
+                                            .doesNotContain("调整前政策时段"));
+            var reminderAt = LocalDateTime.parse("2099-05-11T17:00:00");
+            var reminder = execution.message("company", reminder(original, reminderAt), reminderAt);
+            assertThat(reminder.text()).contains(source.policyCode(), "2099-05-12 10:00:00");
+            assertThat(reminder.users()).containsExactly(1L);
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    @Test
+    void extendingBackToTheOriginalDeadlineReactivatesCancelledReminderDates() throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        submit(id, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            execution.initialize(LocalDateTime.parse("2099-05-01T00:00:00"));
+            var initialEnd = directAdjustments.options(OWNER).get(0).target().previousEnd();
+            var eve =
+                    com.company.policy.support.policy.PolicyFormValidation.time(initialEnd)
+                            .toLocalDate()
+                            .minusDays(1)
+                            .atTime(17, 0);
+            changeDeadline(source, "2099-05-06T11:00:00+08:00", "场次提前");
+            assertThat(reminderStatus(id, eve)).isEqualTo("CANCELLED");
+            changeDeadline(source, initialEnd, "按原日期办理");
+            assertThat(reminderStatus(id, eve)).isEqualTo("PENDING");
+            assertThat(execution.message("company", reminder(id, eve), eve).users())
+                    .containsExactly(1L);
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    private PolicyResponse changeDeadline(PolicyResponse source, String end, String reason) {
+        var option =
+                directAdjustments.options(OWNER).stream()
+                        .filter(p -> p.target().policyId().equals(source.id()))
+                        .findFirst()
+                        .orElseThrow();
+        var changes = List.of(new EndAdjustment(option.target(), end, reason));
+        var preview = directAdjustments.preview(OWNER, changes);
+        String key = java.util.UUID.randomUUID().toString();
+        var result =
+                directAdjustments.apply(
+                        OWNER, changes, preview.confirmationToken(), List.of(), key);
+        assertThat(
+                        directAdjustments.apply(
+                                OWNER, changes, preview.confirmationToken(), List.of(), key))
+                .isEqualTo(result);
+        return result.get(0);
+    }
+
+    @Test
+    void scheduleKeepsGroupStartAndEndWithoutReplayingExpiredHistory() throws Exception {
         configure();
         var source = draft();
         long id = Long.parseLong(source.id());
@@ -1126,28 +1557,14 @@ class PolicyReviewSubmissionIntegrationTest {
             execution.initialize(end.plusSeconds(1));
             assertThat(noticeBodies()).isEmpty();
             execution.initialize(end.minusDays(1));
-            assertThat(noticeBodies()).hasSize(2);
+            var finish = noticeBody("END");
             execution.initialize(start.minusDays(1));
             execution.initialize(start.minusDays(1));
-            assertThat(noticeBodies()).hasSize(3);
+            assertThat(noticeBodies()).noneMatch(raw -> raw.contains("\"NEAR\""));
             var begin = noticeBody("START");
             assertThatThrownBy(() -> execution.message("company", begin, start.minusSeconds(1)))
                     .isInstanceOf(PolicyFeishuSender.Failure.class);
             assertThat(execution.message("company", begin, start).text()).contains("实际采用", "拼多多");
-            var near = noticeBody("NEAR");
-            assertThatThrownBy(
-                            () ->
-                                    execution.message(
-                                            "company", near, end.minusDays(3).minusSeconds(1)))
-                    .isInstanceOf(PolicyFeishuSender.Failure.class);
-            jdbc.update("UPDATE user_platform_assignment SET user_id=6");
-            assertThat(execution.message("company", near, end.minusDays(3)).users())
-                    .containsExactly(1L, 6L);
-            assertThat(execution.message("company", near, end).text())
-                    .contains("2099-05-10 23:59:59");
-            assertThatThrownBy(() -> execution.message("company", near, end.plusSeconds(1)))
-                    .isInstanceOf(PolicyFeishuSender.Failure.class);
-            var finish = noticeBody("END");
             assertThatThrownBy(() -> execution.message("company", finish, end))
                     .isInstanceOf(PolicyFeishuSender.Failure.class);
             assertThat(execution.message("company", finish, end.plusSeconds(1)).text())
@@ -1169,7 +1586,9 @@ class PolicyReviewSubmissionIntegrationTest {
         try {
             var start = LocalDateTime.parse("2099-05-01T00:00:00");
             execution.initialize(start);
-            var originalNear = noticeBody("NEAR");
+            var newDeadlineEve = LocalDateTime.parse("2099-05-08T17:00:00");
+            var droppedDay = newDeadlineEve.plusDays(1);
+            var priorReminder = reminder(id, droppedDay);
             var parent = policies.create(OWNER, form("2099-07"), null);
             long parentId = Long.parseLong(parent.id());
             var option =
@@ -1185,17 +1604,23 @@ class PolicyReviewSubmissionIntegrationTest {
                             new Submission(
                                     1, preview.confirmationToken(), List.of(), List.of(change)))
                     .andExpect(status().isOk());
-            procurement.productReview(
-                    user(2, "APPLICANT"), parentId, new PolicyReviewRequest(2, 1, "APPROVE", null));
-            assertThat(noticeBodies()).hasSize(2);
-            procurement.review(BUYER, parentId, new PolicyReviewRequest(3, 1, "APPROVE", null));
+            assertThat(execution.message("company", priorReminder, droppedDay).users())
+                    .containsExactly(1L);
+            procurement.review(BUYER, parentId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+            assertThat(reminderStatus(id, droppedDay)).isEqualTo("CANCELLED");
+            assertThatThrownBy(() -> execution.message("company", priorReminder, droppedDay))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            var retainedReminder = reminder(id, newDeadlineEve);
+            assertThat(execution.message("company", retainedReminder, newDeadlineEve).text())
+                    .contains("2099-05-09 15:45:17");
             assertThat(
-                            jdbc.queryForObject(
-                                    "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key IS NOT NULL AND delivery_status='CANCELLED'",
-                                    Integer.class))
-                    .isEqualTo(2);
-            assertThatThrownBy(() -> execution.message("company", originalNear, start.plusDays(7)))
-                    .hasMessageContaining("截止已变更");
+                            execution
+                                    .message(
+                                            "company",
+                                            reminder(id, newDeadlineEve.minusDays(1)),
+                                            newDeadlineEve.minusDays(1))
+                                    .users())
+                    .containsExactly(1L);
             assertThat(
                             execution
                                     .message("company", noticeBody("SHORTENED"), start.plusDays(6))
@@ -1215,6 +1640,364 @@ class PolicyReviewSubmissionIntegrationTest {
         } finally {
             feishu.setPolicyChatId("");
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PENDING", "SENT", "UNKNOWN"})
+    void preciseDeadlineRetainsPriorGroupDeliveryAndItsOutcome(String status) throws Exception {
+        configure();
+        var start = LocalDateTime.parse("2099-05-10T08:40:05");
+        var end = LocalDateTime.parse("2099-05-10T12:15:37");
+        var dayEnd = end.toLocalDate().atTime(23, 59, 59);
+        var form = json.valueToTree(form());
+        ((com.fasterxml.jackson.databind.node.ObjectNode) form)
+                .put("startTime", start + "+08:00")
+                .put("endTime", end + "+08:00");
+        var source = policies.create(OWNER, json.treeToValue(form, PolicyDraftRequest.class), null);
+        long policy = Long.parseLong(source.id());
+        submit(policy, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, policy, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        feishu.setPolicyChatId("trial-chat");
+        try {
+            execution.initialize(start.minusSeconds(1));
+            var begin = noticeBody("START");
+            assertThatThrownBy(() -> execution.message("company", begin, start.minusSeconds(1)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            assertThat(execution.message("company", begin, start).text()).contains("08:40:05");
+            assertThatThrownBy(() -> execution.message("company", begin, end.plusSeconds(1)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            var endRow =
+                    jdbc.queryForObject(
+                            "SELECT id FROM policy_review_delivery WHERE notice_key LIKE 'P/%/END/%'",
+                            Long.class);
+            var dueSql = "SELECT next_attempt_at FROM policy_review_delivery WHERE id=?";
+            assertThat(jdbc.queryForObject(dueSql, LocalDateTime.class, endRow))
+                    .isEqualTo(end.plusSeconds(1));
+
+            var old =
+                    ((com.fasterxml.jackson.databind.node.ObjectNode) noticeBody("END"))
+                            .put("end", dayEnd.toString());
+            var previousKey =
+                    jdbc.queryForObject(
+                                    "SELECT event_key FROM policy_review_delivery WHERE id=?",
+                                    String.class,
+                                    endRow)
+                            .replace(end.toString(), dayEnd.toString());
+            var receipt = status.equals("SENT") ? "om_existing" : null;
+            jdbc.update(
+                    "UPDATE policy_review_delivery SET event_key=?,payload_json=?,delivery_status=?,receipt_id=?,next_attempt_at=? WHERE id=?",
+                    previousKey,
+                    old.toString(),
+                    status,
+                    receipt,
+                    dayEnd.plusSeconds(1),
+                    endRow);
+            // 同日恢复时准确截止已经过去，只能恢复原待发事件；重复恢复不得给已送达/待核对项另建投递。
+            execution.initialize(end.plusHours(1));
+            execution.initialize(start.minusSeconds(1));
+            assertThat(
+                            jdbc.queryForList(
+                                    "SELECT event_key FROM policy_review_delivery WHERE notice_key LIKE 'P/%/END/%'",
+                                    String.class))
+                    .containsExactly(previousKey);
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT delivery_status FROM policy_review_delivery WHERE id=?",
+                                    String.class,
+                                    endRow))
+                    .isEqualTo(status);
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT receipt_id FROM policy_review_delivery WHERE id=?",
+                                    String.class,
+                                    endRow))
+                    .isEqualTo(receipt);
+            assertThat(jdbc.queryForObject(dueSql, LocalDateTime.class, endRow))
+                    .isEqualTo(
+                            status.equals("PENDING") ? end.plusSeconds(1) : dayEnd.plusSeconds(1));
+            assertThatThrownBy(() -> execution.message("company", old, end))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class);
+            assertThat(execution.message("company", old, end.plusSeconds(1)).text())
+                    .contains("12:15:37")
+                    .doesNotContain("23:59:59");
+        } finally {
+            feishu.setPolicyChatId("");
+        }
+    }
+
+    @Test
+    void dueRemindersReachOnlyTheOriginalApplicantAtFiveOnTheTwoPrecedingDays() throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        submit(id, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        drainDeliveries();
+        clearInvocations(remote);
+        jdbc.update("UPDATE user_platform_assignment SET user_id=6");
+        var twoDays = LocalDateTime.parse("2099-05-08T17:00:00");
+        var eve = twoDays.plusDays(1);
+        execution.initialize(twoDays.minusDays(1));
+        execution.initialize(twoDays.minusSeconds(1));
+        assertThat(noticeBodies()).hasSize(2);
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT next_attempt_at FROM policy_review_delivery WHERE notice_key IS NOT NULL ORDER BY next_attempt_at",
+                                LocalDateTime.class))
+                .containsExactly(twoDays, eve);
+        var early = reminder(id, twoDays);
+        assertThatThrownBy(() -> execution.message("company", early, twoDays.minusSeconds(1)))
+                .isInstanceOf(PolicyFeishuSender.Failure.class);
+        assertThat(
+                        execution
+                                .message("company", early, twoDays.toLocalDate().atTime(23, 59, 59))
+                                .users())
+                .containsExactly(1L);
+        assertThatThrownBy(
+                        () -> execution.message("company", early, eve.toLocalDate().atStartOfDay()))
+                .isInstanceOf(PolicyFeishuSender.Failure.class);
+        when(remote.sendCard(eq("open-1"), any(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(3, Runnable.class).run();
+                            return "om_" + call.getArgument(2);
+                        });
+        var before = twoDays.minusSeconds(1);
+        try (var clock = mockStatic(LocalDateTime.class, CALLS_REAL_METHODS)) {
+            var shanghai = ZoneId.of("Asia/Shanghai");
+            clock.when(() -> LocalDateTime.now(shanghai)).thenReturn(before);
+            assertThat(deliveries.processOne()).isFalse();
+            for (var due : List.of(twoDays, eve)) {
+                clock.when(() -> LocalDateTime.now(shanghai)).thenReturn(due);
+                execution.initialize(due);
+                execution.initialize(due);
+                assertThat(deliveries.processOne()).isTrue();
+                assertThat(deliveries.processOne()).isFalse();
+                assertThat(reminderStatus(id, due)).isEqualTo("SENT");
+                assertThat(reminder(id, due).path("requestRecipient").asText()).isEqualTo("open-1");
+            }
+            var deadlineDay = eve.plusDays(1);
+            clock.when(() -> LocalDateTime.now(shanghai)).thenReturn(deadlineDay);
+            execution.initialize(deadlineDay);
+            assertThat(deliveries.processOne()).isFalse();
+            assertThat(noticeBodies()).hasSize(2);
+        }
+        var cards = ArgumentCaptor.forClass(JsonNode.class);
+        var keys = ArgumentCaptor.forClass(String.class);
+        verify(remote, times(2)).sendCard(eq("open-1"), cards.capture(), keys.capture(), any());
+        assertThat(keys.getAllValues()).doesNotHaveDuplicates();
+        assertThat(cards.getAllValues())
+                .allSatisfy(
+                        card -> {
+                            assertThat(card.toString())
+                                    .contains("政策临期提醒", source.policyCode(), "2099-05-10");
+                            assertTextOnlyNotice(card);
+                        });
+        verifyNoMoreInteractions(remote);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DISABLED,FAILED", "WITHDRAWN,CANCELLED", "MISSED_DAY,CANCELLED"})
+    void expiredOrUndeliverableRemindersNeverReachTheSuccessor(String scenario, String status)
+            throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        submit(id, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        drainDeliveries();
+        clearInvocations(remote);
+        var due = LocalDateTime.parse("2099-05-08T17:00:00");
+        execution.initialize(due);
+        jdbc.update("UPDATE user_platform_assignment SET user_id=6");
+        if ("DISABLED".equals(scenario))
+            jdbc.update("UPDATE user_info SET is_deleted=1 WHERE id=1");
+        if ("WITHDRAWN".equals(scenario))
+            jdbc.update("UPDATE policy_apply SET is_deleted=1 WHERE id=?", id);
+        var sendAt =
+                "MISSED_DAY".equals(scenario) ? due.toLocalDate().plusDays(1).atStartOfDay() : due;
+        try (var clock = mockStatic(LocalDateTime.class, CALLS_REAL_METHODS)) {
+            clock.when(() -> LocalDateTime.now(ZoneId.of("Asia/Shanghai"))).thenReturn(sendAt);
+            assertThat(deliveries.processOne()).isTrue();
+            assertThat(deliveries.processOne()).isFalse();
+            assertThat(reminderStatus(id, due)).isEqualTo(status);
+            verifyNoInteractions(remote);
+        }
+    }
+
+    @Test
+    void firstScanAfterFiveSendsOnlyTodaysReminderAndItsPrivateReceiptCanBeReconciled()
+            throws Exception {
+        configure();
+        var source = draft();
+        long id = Long.parseLong(source.id());
+        submit(id, direct(source)).andExpect(status().isOk());
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        drainDeliveries();
+        clearInvocations(remote);
+        var late = LocalDateTime.parse("2099-05-09T18:20:43");
+        execution.initialize(late);
+        execution.initialize(late);
+        assertThat(noticeBodies()).hasSize(1);
+        var key = reminderKey(id, late);
+        when(remote.sendCard(eq("open-1"), any(), anyString(), any()))
+                .thenAnswer(
+                        call -> {
+                            call.getArgument(3, Runnable.class).run();
+                            throw new PolicyFeishuSender.Failure(
+                                    PolicyFeishuSender.Kind.UNKNOWN, "请求后失去响应");
+                        });
+        try (var clock = mockStatic(LocalDateTime.class, CALLS_REAL_METHODS)) {
+            var shanghai = ZoneId.of("Asia/Shanghai");
+            clock.when(() -> LocalDateTime.now(shanghai)).thenReturn(late);
+            assertThat(deliveries.processOne()).isTrue();
+            var endOfWindow = late.plusHours(1);
+            clock.when(() -> LocalDateTime.now(shanghai)).thenReturn(endOfWindow);
+            drainDeliveries();
+        }
+        assertThat(reminderStatus(id, late)).isEqualTo("UNKNOWN");
+        var list = get("/api/admin/policy-review-deliveries/notices").session(session(BUYER));
+        mvc.perform(list)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].action").value("SEND_CARD"))
+                .andExpect(jsonPath("$[0].canResolve").value(true));
+        long row =
+                jdbc.queryForObject(
+                        "SELECT id FROM policy_review_delivery WHERE notice_key=?",
+                        Long.class,
+                        key);
+        var confirm =
+                new PolicyDeliveryRecovery.Resolution(
+                        "CONFIRM_RECEIPT", "UNKNOWN", 1, 0, "om_real_notice", "核对原申请人的机器人私聊");
+        postAs(BUYER, "/api/admin/policy-review-deliveries/{id}/resolve", row, confirm)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.receiptId").value("om_real_notice"))
+                .andExpect(jsonPath("$.status").value("SENT"));
+        var sentKey = ArgumentCaptor.forClass(String.class);
+        verify(remote).sendCard(eq("open-1"), any(), sentKey.capture(), any());
+        verify(remote)
+                .verifyReceipt(
+                        "SEND_CARD", "om_real_notice", "open-1", sentKey.getValue(), 0, 0, 0);
+        verifyNoMoreInteractions(remote);
+    }
+
+    @Test
+    void initializingRemovesUnsentLegacyGroupWarningsAndKeepsExternalReceipts() {
+        for (String status : List.of("PENDING", "RETRY", "CANCELLED", "UNKNOWN", "SENT"))
+            registerLegacyNear(status);
+        var heldKey = registerLegacyNear("PENDING", "late");
+        jdbc.update(
+                """
+                UPDATE policy_review_delivery SET payload_json=?,next_attempt_at=? WHERE notice_key=?
+                """,
+                json.createObjectNode()
+                        .put("kind", "NEAR")
+                        .put("lateReceipt", "om_late")
+                        .toString(),
+                LocalDateTime.parse("2099-05-09T17:00:00"),
+                heldKey);
+        execution.initialize(LocalDateTime.parse("2099-05-09T17:00:00"));
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT delivery_status FROM policy_review_delivery ORDER BY id",
+                                String.class))
+                .containsExactly("UNKNOWN", "SENT", "PENDING");
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT payload_json FROM policy_review_delivery WHERE notice_key=?",
+                                String.class,
+                                heldKey))
+                .contains("om_late");
+        drainDeliveries();
+        assertThat(
+                        jdbc.queryForObject(
+                                """
+                    SELECT COUNT(*) FROM policy_review_delivery WHERE delivery_status='UNKNOWN'
+                      AND next_attempt_at IS NULL AND payload_json LIKE '%oc_prior%'
+                    """,
+                                Integer.class))
+                .isOne();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT receipt_id FROM policy_review_delivery WHERE delivery_status='SENT'",
+                                String.class))
+                .isEqualTo("om_prior");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
+    void concurrentWorkerCannotSendALegacyWarningBeingRemovedByInitialization() throws Exception {
+        registerLegacyNear("PENDING");
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            transactions.executeWithoutResult(
+                    transaction -> {
+                        execution.initialize(LocalDateTime.parse("2099-05-09T17:00:00"));
+                        assertThat(noticeBodies()).isEmpty();
+                        // 初始化事务持有删除行的锁，另一连接同时按正常队列入口领取。
+                        var attempt = executor.submit(deliveries::processOne);
+                        try {
+                            assertThat(attempt.get(5, TimeUnit.SECONDS)).isFalse();
+                        } catch (Exception failure) {
+                            throw new AssertionError("清理旧提醒时，投递线程未能跳过已锁定的记录", failure);
+                        }
+                    });
+            assertThat(deliveries.processOne()).isFalse();
+            assertThat(noticeBodies()).isEmpty();
+            verifyNoInteractions(remote);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private void registerLegacyNear(String status) {
+        registerLegacyNear(status, status);
+    }
+
+    private String registerLegacyNear(String status, String scope) {
+        var body =
+                json.createObjectNode()
+                        .put("kind", "NEAR")
+                        .put("policy", 13)
+                        .put("version", 1)
+                        .put("end", "2099-05-10T23:59:59")
+                        .put("chat", "oc_prior");
+        if ("UNKNOWN".equals(status) || "SENT".equals(status))
+            body.put("requestRecipient", "oc_prior").put("requestFingerprint", "d".repeat(64));
+        var key = "P/13/1/" + scope + "/NEAR/2099-05-10T23:59:59";
+        jdbc.update(
+                """
+                    INSERT INTO policy_review_delivery
+                    (tenant_key,event_key,action_type,recipient_key,payload_json,delivery_status,
+                        next_attempt_at,receipt_id,attempts)
+                    VALUES ('company',?,'GROUP_MESSAGE',0,?,?,?,?,?)
+                    """,
+                key,
+                body.toString(),
+                status,
+                LocalDateTime.parse("2020-01-01T00:00:00"),
+                "SENT".equals(status) ? "om_prior" : null,
+                List.of("PENDING", "CANCELLED").contains(status) ? 0 : 1);
+        return key;
+    }
+
+    private static String reminderKey(long policyId, LocalDateTime at) {
+        return "P/" + policyId + "/EXPIRY_REMINDER/" + at.toLocalDate();
+    }
+
+    private JsonNode reminder(long policyId, LocalDateTime at) throws Exception {
+        return json.readTree(
+                jdbc.queryForObject(
+                        "SELECT payload_json FROM policy_review_delivery WHERE notice_key=?",
+                        String.class,
+                        reminderKey(policyId, at)));
+    }
+
+    private String reminderStatus(long policyId, LocalDateTime at) {
+        return jdbc.queryForObject(
+                "SELECT delivery_status FROM policy_review_delivery WHERE notice_key=?",
+                String.class,
+                reminderKey(policyId, at));
     }
 
     private List<String> noticeBodies() {
@@ -1287,12 +2070,11 @@ class PolicyReviewSubmissionIntegrationTest {
                             eq("trial-chat"),
                             org.mockito.ArgumentMatchers.contains("平台分工变更"),
                             eq(List.of("open-6")),
-                            isNull(),
                             anyString(),
                             any()))
                     .thenAnswer(
                             call -> {
-                                ((Runnable) call.getArgument(5)).run();
+                                ((Runnable) call.getArgument(4)).run();
                                 return "om_handover";
                             });
             drainDeliveries();
@@ -1309,7 +2091,7 @@ class PolicyReviewSubmissionIntegrationTest {
             assertThat(sent.at("/unreachableUserIds/0").asLong()).isEqualTo(1);
             assertThat(sent.path("new").asLong()).isEqualTo(6);
             verify(remote, times(1))
-                    .sendGroup(anyString(), anyString(), anyList(), isNull(), anyString(), any());
+                    .sendGroup(anyString(), anyString(), anyList(), anyString(), any());
         } finally {
             feishu.setPolicyChatId("");
         }
@@ -1342,9 +2124,10 @@ class PolicyReviewSubmissionIntegrationTest {
                                         1, pb.confirmationToken(), List.of(chooseA), List.of())
                                 : stack(bid, 1))
                 .andExpect(status().isOk());
-        procurement.productReview(
-                user(2, "APPLICANT"), bid, new PolicyReviewRequest(2, 1, "APPROVE", null));
-        procurement.review(BUYER, bid, new PolicyReviewRequest(3, 1, "APPROVE", null));
+        if (!single)
+            procurement.productReview(
+                    user(2, "APPLICANT"), bid, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        procurement.review(BUYER, bid, new PolicyReviewRequest(single ? 2 : 3, 1, "APPROVE", null));
         var startNotice =
                 json.createObjectNode().put("kind", "START").put("policy", bid).put("version", 1);
         var start = LocalDateTime.parse("2099-05-01T00:00:00");
@@ -1390,7 +2173,7 @@ class PolicyReviewSubmissionIntegrationTest {
                                                 null)),
                                 changes))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewStage").value("PRODUCT_REVIEW"));
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
         var snapshot =
                 json.readTree(
                         jdbc.queryForObject(
@@ -1399,12 +2182,353 @@ class PolicyReviewSubmissionIntegrationTest {
                                 cid));
         assertThat(snapshot.at("/consent/decisions/0/selectedPolicyIds/0").asText())
                 .isEqualTo(selected);
-        assertThat(actions(cid, 1)).containsExactly("SEND_CARD", "SEND_CARD");
+        assertThat(members(cid, 1)).containsExactly(4L, 5L);
+        assertThat(actions(cid, 1))
+                .containsExactly("CREATE_TASK", "CREATE_TASK", "SEND_CARD", "SEND_CARD");
         if (!single)
             round(BUYER, cid, 1)
                     .andExpect(
                             jsonPath("$.changes[0].before[*].policyId")
                                     .value(containsInAnyOrder(a.id(), b.id())));
+    }
+
+    @Autowired PolicyTimeAdjustments timeAdjustments;
+
+    @Test
+    void directlyExtendedPoliciesUseOneSelectionAndOneResultAcrossConcurrentRetries()
+            throws Exception {
+        configure();
+        var first = draft();
+        var second = draft();
+        long a = Long.parseLong(first.id());
+        long b = Long.parseLong(second.id());
+        policies.submit(OWNER, a, direct(first));
+        procurement.review(BUYER, a, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        policies.submit(OWNER, b, stack(b, 1));
+        procurement.productReview(
+                user(2, "APPLICANT"), b, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        procurement.review(BUYER, b, new PolicyReviewRequest(3, 1, "APPROVE", null));
+        var changes =
+                timeAdjustments.options(OWNER).stream()
+                        .map(
+                                o ->
+                                        new EndAdjustment(
+                                                o.target(), "2099-05-20T20:01:02+08:00", "活动延期至周末"))
+                        .toList();
+        assertThat(changes).hasSize(2);
+        var shortenFirst =
+                List.of(
+                        new EndAdjustment(
+                                changes.get(0).target(), "2099-05-09T10:00:00+08:00", "拟提前结单"));
+        var oldPreview = timeAdjustments.preview(OWNER, shortenFirst);
+        var preview = timeAdjustments.preview(OWNER, changes);
+        var scope = preview.applicability().scopes().get(0);
+        var selected =
+                scope.policies().stream()
+                        .filter(p -> p.policyCode().equals(first.policyCode() + "（延期）"))
+                        .findFirst()
+                        .orElseThrow();
+        var decisions =
+                List.of(
+                        new Choice(
+                                scope.scope(),
+                                scope.segments().get(0).through(),
+                                "CHOOSE_ONE",
+                                selected.policyId(),
+                                null));
+        var key = java.util.UUID.randomUUID().toString();
+        assertThatThrownBy(
+                        () ->
+                                timeAdjustments.apply(
+                                        OWNER,
+                                        changes,
+                                        preview.confirmationToken(),
+                                        List.of(),
+                                        key))
+                .isInstanceOf(ApiException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class))
+                .isEqualTo(2);
+        var start = new CountDownLatch(1);
+        Callable<List<PolicyResponse>> call =
+                () -> {
+                    start.await(5, TimeUnit.SECONDS);
+                    return timeAdjustments.apply(
+                            OWNER, changes, preview.confirmationToken(), decisions, key);
+                };
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var x = pool.submit(call);
+            var y = pool.submit(call);
+            start.countDown();
+            var result = x.get(10, TimeUnit.SECONDS);
+            assertThat(y.get(10, TimeUnit.SECONDS)).isEqualTo(result);
+            assertThat(result).hasSize(2).allMatch(r -> "APPROVED".equals(r.status()));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class))
+                .isEqualTo(2);
+        // 旧页仍持有首次截止和版本，不会覆盖本批的调整。
+        assertThatThrownBy(
+                        () ->
+                                timeAdjustments.apply(
+                                        OWNER,
+                                        shortenFirst,
+                                        oldPreview.confirmationToken(),
+                                        List.of(),
+                                        java.util.UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        assertThat(timeAdjustments.options(OWNER))
+                .extracting(o -> o.target().policyId())
+                .containsExactlyInAnyOrder(first.id(), second.id());
+        var live = procurement.effective(BUYER, "BILLION", "PDD", 1, "2099-05-11T00:00:00+08:00");
+        assertThat(live.policies()).extracting(p -> p.winner().id()).containsExactly(first.id());
+    }
+
+    @Test
+    void consecutiveShorteningsAndExtensionKeepTheApprovedOriginalAndEveryChange() {
+        configure();
+        var original = draft();
+        long originalId = Long.parseLong(original.id());
+        policies.submit(OWNER, originalId, direct(original));
+        procurement.review(BUYER, originalId, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var originalDetail = policies.detail(OWNER, originalId);
+        String firstEnd = "2099-05-09T22:12:15+08:00";
+        String secondEnd = "2099-05-07T21:00:00+08:00";
+        String extendedEnd = "2099-05-08T22:00:00+08:00";
+
+        var first = adjustLatest(original, originalDetail.form().endTime(), firstEnd);
+        var second = adjustLatest(first, firstEnd, secondEnd);
+        assertLatestTimelineDeadline(originalDetail.form(), secondEnd);
+        assertThat(policies.detail(OWNER, originalId).timeHistory().currentEnd())
+                .isEqualTo(secondEnd);
+        assertThat(policies.detail(OWNER, originalId).form()).isEqualTo(originalDetail.form());
+        assertThat(policies.detail(OWNER, originalId).timeHistory().changes())
+                .extracting(row -> row.actualEnd())
+                .containsExactly(secondEnd, firstEnd);
+        var nextSecond = "2099-05-07T21:00:01+08:00";
+        assertThat(procurement.effective(BUYER, "BILLION", "PDD", 1, nextSecond).policies())
+                .isEmpty();
+
+        var extended = adjustLatest(second, secondEnd, extendedEnd);
+        assertLatestTimelineDeadline(originalDetail.form(), extendedEnd);
+        var extendedDetail = policies.detail(OWNER, Long.parseLong(extended.id()));
+        assertThat(extendedDetail.form().startTime()).isEqualTo(originalDetail.form().startTime());
+        assertThat(extendedDetail.timeHistory().currentEnd()).isEqualTo(extendedEnd);
+        assertThat(extendedDetail.form().goodsForm().cards())
+                .isEqualTo(originalDetail.form().goodsForm().cards());
+        assertThat(extendedDetail.goods()).isEqualTo(originalDetail.goods());
+        assertThat(procurement.effective(BUYER, "BILLION", "PDD", 1, secondEnd).policies())
+                .extracting(p -> p.winner().id())
+                .containsExactly(original.id());
+        assertThat(procurement.effective(BUYER, "BILLION", "PDD", 1, nextSecond).policies())
+                .extracting(p -> p.winner().id())
+                .containsExactly(extended.id());
+        assertThat(
+                        procurement
+                                .effective(BUYER, "BILLION", "PDD", 1, "2099-05-08T22:00:01+08:00")
+                                .policies())
+                .isEmpty();
+
+        var last = adjustLatest(extended, extendedEnd, "2099-05-08T08:00:00+08:00");
+        assertLatestTimelineDeadline(originalDetail.form(), "2099-05-08T08:00:00+08:00");
+        assertThat(timeAdjustments.options(OWNER))
+                .extracting(o -> o.target().policyId())
+                .containsExactly(last.id());
+        assertThat(policies.detail(OWNER, originalId).timeHistory().currentEnd())
+                .isEqualTo("2099-05-08T08:00:00+08:00");
+        assertThat(
+                        procurement
+                                .effective(BUYER, "BILLION", "PDD", 1, "2099-05-08T08:00:01+08:00")
+                                .policies())
+                .isEmpty();
+    }
+
+    private void assertLatestTimelineDeadline(PolicyDraftRequest filed, String actualEnd) {
+        var query =
+                new PolicyTimelineQuery(
+                        1,
+                        "12GB",
+                        "256GB",
+                        LocalDate.of(2099, 5, 1),
+                        LocalDate.of(2099, 5, 31),
+                        "BILLION",
+                        "PDD");
+        for (var result :
+                List.of(
+                        procurement.subsidyTimeline(BUYER, query),
+                        policies.subsidyTimeline(OWNER, query))) {
+            assertThat(result.tracks()).hasSize(1);
+            var track = result.tracks().get(0);
+            assertThat(track.policies()).hasSize(1);
+            var policy = track.policies().get(0);
+            assertThat(policy.policyFrom()).isEqualTo(filed.startTime());
+            assertThat(policy.policyThrough()).isEqualTo(filed.endTime());
+            assertThat(policy.effectiveThrough()).isEqualTo(actualEnd);
+            assertThat(track.plannedSegments()).hasSize(1);
+            var segmentEnd = OffsetDateTime.parse(track.plannedSegments().get(0).endAt());
+            assertThat(segmentEnd).isEqualTo(OffsetDateTime.parse(actualEnd).plusSeconds(1));
+        }
+    }
+
+    @Test
+    void staleAdjustmentIsRejectedEvenWhenTheDeadlineHasReturnedToItsOriginalValue() {
+        configure();
+        var original = draft();
+        long id = Long.parseLong(original.id());
+        policies.submit(OWNER, id, direct(original));
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var stale = timeAdjustments.options(OWNER).get(0).target();
+        var change = List.of(new EndAdjustment(stale, "2099-05-07T08:00:00+08:00", "旧页面"));
+        var preview = timeAdjustments.preview(OWNER, change);
+        var later = "2099-05-15T09:30:00+08:00";
+        adjustLatest(original, stale.previousEnd(), later);
+        adjustLatest(original, later, stale.previousEnd());
+        assertThatThrownBy(
+                        () ->
+                                timeAdjustments.apply(
+                                        OWNER,
+                                        change,
+                                        preview.confirmationToken(),
+                                        List.of(),
+                                        java.util.UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(
+                        ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_time_change", Integer.class))
+                .isEqualTo(2);
+    }
+
+    private PolicyResponse adjustLatest(PolicyResponse source, String previousEnd, String newEnd) {
+        var options = timeAdjustments.options(OWNER);
+        assertThat(options).extracting(o -> o.target().policyId()).containsExactly(source.id());
+        var option = options.get(0);
+        assertThat(option.target().previousEnd()).isEqualTo(previousEnd);
+        assertThat(option.canExtend()).isTrue();
+        assertThat(option.canShorten()).isTrue();
+        var changes = List.of(new EndAdjustment(option.target(), newEnd, "核对平台档期"));
+        var preview = timeAdjustments.preview(OWNER, changes);
+        var key = java.util.UUID.randomUUID().toString();
+        var created =
+                timeAdjustments.apply(OWNER, changes, preview.confirmationToken(), List.of(), key);
+        // 同一请求重放仍返回原单当次的版本。沿用旧核对依据的新请求须重新确认。
+        assertThat(
+                        timeAdjustments.apply(
+                                OWNER, changes, preview.confirmationToken(), List.of(), key))
+                .isEqualTo(created);
+        assertThatThrownBy(() -> timeAdjustments.preview(OWNER, changes))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        assertThatThrownBy(
+                        () ->
+                                timeAdjustments.apply(
+                                        OWNER,
+                                        changes,
+                                        preview.confirmationToken(),
+                                        List.of(),
+                                        java.util.UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(
+                        ApiException.class,
+                        error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        assertThat(created)
+                .singleElement()
+                .satisfies(
+                        result -> {
+                            assertThat(result.status()).isEqualTo("APPROVED");
+                            assertThat(result.id()).isEqualTo(source.id());
+                            var adjustment =
+                                    policies.detail(OWNER, Long.parseLong(result.id()))
+                                            .timeHistory()
+                                            .changes()
+                                            .get(0);
+                            assertThat(adjustment.previousEnd()).isEqualTo(previousEnd);
+                            assertThat(adjustment.requestedEnd()).isEqualTo(newEnd);
+                        });
+        return created.get(0);
+    }
+
+    @Test
+    void incomingPlatformOwnerCanOnlyShortenAndReceivesNoPredecessorsPrivateDetails() {
+        configure();
+        var original = draft();
+        long id = Long.parseLong(original.id());
+        policies.submit(OWNER, id, direct(original));
+        procurement.review(BUYER, id, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        var stale = timeAdjustments.options(OWNER).get(0);
+        var earlyEnd = "2099-05-07T20:00:00+08:00";
+        var changes = List.of(new EndAdjustment(stale.target(), earlyEnd, "档期提前结束"));
+        var preview = timeAdjustments.preview(OWNER, changes);
+        jdbc.update("UPDATE user_platform_assignment SET user_id=6 WHERE user_id=1");
+        assertThatThrownBy(
+                        () ->
+                                timeAdjustments.apply(
+                                        OWNER,
+                                        changes,
+                                        preview.confirmationToken(),
+                                        List.of(),
+                                        java.util.UUID.randomUUID().toString()))
+                .isInstanceOf(ApiException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class)).isOne();
+        var next = user(6, "APPLICANT");
+        var granted = timeAdjustments.options(next).get(0);
+        assertThat(granted.canShorten()).isTrue();
+        assertThat(granted.canExtend()).isFalse();
+        var theirs = timeAdjustments.preview(next, changes);
+        var applied =
+                timeAdjustments
+                        .apply(
+                                next,
+                                changes,
+                                theirs.confirmationToken(),
+                                List.of(),
+                                java.util.UUID.randomUUID().toString())
+                        .get(0);
+        assertThat(applied.id()).isEqualTo(original.id());
+        assertThatThrownBy(() -> policies.detail(next, id)).isInstanceOf(ApiException.class);
+        assertThat(policies.detail(OWNER, id).timeHistory().currentEnd()).isEqualTo(earlyEnd);
+        var latest = timeAdjustments.options(next);
+        assertThat(latest)
+                .singleElement()
+                .satisfies(
+                        o -> {
+                            assertThat(o.target().policyId()).isEqualTo(applied.id());
+                            assertThat(o.target().previousEnd()).isEqualTo(earlyEnd);
+                            assertThat(o.canShorten()).isTrue();
+                            assertThat(o.canExtend()).isFalse();
+                        });
+        var attemptedExtension =
+                List.of(
+                        new EndAdjustment(
+                                latest.get(0).target(), stale.target().previousEnd(), "接手人尝试延长"));
+        assertThatThrownBy(() -> timeAdjustments.preview(next, attemptedExtension))
+                .isInstanceOf(ApiException.class);
+        var anotherCut =
+                List.of(
+                        new EndAdjustment(
+                                latest.get(0).target(), "2099-05-05T12:00:00+08:00", "交接后再次提前结束"));
+        var checked = timeAdjustments.preview(next, anotherCut);
+        var receipt =
+                timeAdjustments
+                        .apply(
+                                next,
+                                anotherCut,
+                                checked.confirmationToken(),
+                                List.of(),
+                                java.util.UUID.randomUUID().toString())
+                        .get(0);
+        assertThat(receipt.id()).isEqualTo(original.id());
+        assertThatThrownBy(() -> policies.detail(next, id)).isInstanceOf(ApiException.class);
+        assertThat(timeAdjustments.options(OWNER)).isEmpty();
+        jdbc.update("UPDATE user_platform_assignment SET user_id=1 WHERE user_id=6");
+        assertThat(timeAdjustments.options(OWNER))
+                .singleElement()
+                .satisfies(
+                        o -> {
+                            assertThat(o.target().policyId()).isEqualTo(receipt.id());
+                            assertThat(o.canExtend()).isTrue();
+                        });
     }
 
     private List<String> actions(long id, int version) {
@@ -1436,14 +2560,41 @@ class PolicyReviewSubmissionIntegrationTest {
     }
 
     private PolicyDraftRequest form(String month) {
+        return form(month, new Target("1", "12GB", "256GB", "1"));
+    }
+
+    private PolicyDraftRequest form(String month, Target... targets) {
         var card =
                 new Card(
                         "c",
                         "COMMON",
                         true,
-                        List.of(new Target("1", "12GB", "256GB", "1")),
+                        List.of(targets),
                         List.of(new SubsidyPlan("p", "FIXED", "20.00", null, null, null)),
                         List.of(new PlatformAssignment("PDD", "p", null)));
+        return billionForm(month + "-01", month + "-10", List.of(card));
+    }
+
+    private PolicyDraftRequest specifiedGoods(String from, String through, Target... targets) {
+        var cards =
+                List.of(targets).stream()
+                        .map(
+                                target ->
+                                        new Card(
+                                                "c" + target.goodsId(),
+                                                "SPECIFIED",
+                                                true,
+                                                List.of(target),
+                                                List.of(
+                                                        new SubsidyPlan(
+                                                                "p", "FIXED", "20.00", null, null,
+                                                                null)),
+                                                List.of(new PlatformAssignment("PDD", "p", 2))))
+                        .toList();
+        return billionForm(from, through, cards);
+    }
+
+    private PolicyDraftRequest billionForm(String from, String through, List<Card> cards) {
         return new PolicyDraftRequest(
                 null,
                 "BILLION",
@@ -1451,11 +2602,11 @@ class PolicyReviewSubmissionIntegrationTest {
                 null,
                 null,
                 null,
-                month + "-01T00:00:00+08:00",
-                month + "-10T23:59:59+08:00",
+                from + "T00:00:00+08:00",
+                through + "T23:59:59+08:00",
                 null,
                 List.of(),
-                new GoodsForm(List.of(card)));
+                new GoodsForm(cards));
     }
 
     private static CurrentUserResponse user(int id, String role) {

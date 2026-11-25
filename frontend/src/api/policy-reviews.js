@@ -16,3 +16,7 @@ export async function readPolicyReviewRound(id, submissionVersion, signal) {
 export function reviewRoundAttachmentUrl(id, submissionVersion, fileId) {
   return `${roundPath(id)}/attachments/${encodeURIComponent(fileId)}/content?${new URLSearchParams({ submissionVersion })}`
 }
+
+export function timeChangeAttachmentUrl(id, submissionVersion, changeId, fileId) {
+  return `${roundPath(id)}/time-changes/${encodeURIComponent(changeId)}/attachments/${encodeURIComponent(fileId)}/content?${new URLSearchParams({ submissionVersion })}`
+}

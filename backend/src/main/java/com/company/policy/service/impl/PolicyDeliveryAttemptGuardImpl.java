@@ -32,6 +32,18 @@ class PolicyDeliveryAttemptGuardImpl implements PolicyDeliveryAttemptGuard {
         } catch (JsonProcessingException invalid) {
             throw new Failure(Kind.PERMANENT, "无法读取请求核对记录。");
         }
+        if ("SEND_CARD".equals(item.action())) {
+            // 生成消息到写入飞书之间仍可能改派或重提；发送前重新检查实际收件身份。
+            var current = queue.item(item.id());
+            boolean removed = PolicyDeliveryWorkerImpl.removalNotice(current, payload);
+            if (current.deleted() != 0
+                    || !recipient.equals(current.openId())
+                    || (!removed
+                            && (!PolicyDeliveryWorkerImpl.active(current)
+                                    || ("PURCHASE".equals(current.groupCode())
+                                            && !"ADMIN".equals(current.roleType())))))
+                throw new Failure(Kind.OBSOLETE, "发送前审核指派或收件人已变化。");
+        }
         if (item.uncertain()
                 && !PolicyDeliveryWorkerImpl.withinWindow(
                         item.action(),

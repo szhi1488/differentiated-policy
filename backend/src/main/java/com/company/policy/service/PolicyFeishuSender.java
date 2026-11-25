@@ -7,10 +7,17 @@ import java.util.UUID;
 
 /** 单次外部调用。所有重试复用同一业务标识，成功时返回消息 ID 或任务 GUID。 */
 public interface PolicyFeishuSender {
-    String INVALID_ERP_HTTPS = "请配置飞书可访问的 ERP HTTPS 根地址 FEISHU_POLICY_ERP_URL。";
-
     /** 将单个 ERP 投递动作发送到飞书并返回回执。 */
     String send(Delivery item);
+
+    /** 执行期提醒共用业务提醒队列，按业务类型确定飞书动作及回执核验方式。 */
+    static String deliveryAction(long policyId, String queueAction, JsonNode payload) {
+        if (policyId == 0
+                && "GROUP_MESSAGE".equals(queueAction)
+                && ExecutionNotices.EXPIRY_REMINDER.equals(payload.path("kind").asText()))
+            return "SEND_CARD";
+        return queueAction;
+    }
 
     /** 按轮次、业务事件和指派生成在恢复及补发时使用的稳定 UUID。 */
     static String idempotencyKey(
@@ -30,6 +37,13 @@ public interface PolicyFeishuSender {
                         action,
                         Long.toString(recipientKey));
         return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    /** 只读私聊卡的组件标识绑定实际收件人和本轮投递，用于回执核对。飞书组件标识最多 20 字符。 */
+    static String noticeElementId(
+            String recipient, String key, long member, long policyId, int version) {
+        String uuid = idempotencyKey(recipient, policyId, version, key, "SEND_CARD", member);
+        return "n" + uuid.replace("-", "").substring(0, 19);
     }
 
     record Delivery(

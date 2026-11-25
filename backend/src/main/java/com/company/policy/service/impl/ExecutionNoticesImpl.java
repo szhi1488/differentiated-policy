@@ -8,31 +8,31 @@ import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.PolicyApply;
-import com.company.policy.entity.PolicyConsent;
+import com.company.policy.entity.PolicyTimeChange;
 import com.company.policy.mapper.CatalogCleaningMapper.JobCount;
 import com.company.policy.mapper.ExecutionNoticeMapper;
 import com.company.policy.mapper.ExecutionNoticeMapper.Policy;
+import com.company.policy.mapper.PolicyTimeChangeMapper;
 import com.company.policy.mapper.UserPlatformMapper;
 import com.company.policy.service.ExecutionNotices;
 import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.PolicyFeishuSender.Failure;
 import com.company.policy.service.PolicyFeishuSender.Kind;
-import com.company.policy.support.policy.PolicyApplicabilityEvaluator;
 import com.company.policy.support.policy.PolicyChangeDescription;
 import com.company.policy.support.policy.PolicyEndTimes;
-import com.company.policy.support.policy.PolicyFormValidation;
 import com.company.policy.support.policy.PolicySnapshotCodec;
-import com.company.policy.vo.PolicyResponse.ApprovedEnd;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -46,9 +46,11 @@ import org.springframework.util.StringUtils;
 @RequiredArgsConstructor
 class ExecutionNoticesImpl implements ExecutionNotices {
     private final ExecutionNoticeMapper notices;
+    private final PolicyTimeChangeMapper changes;
     private final UserPlatformMapper platforms;
     private final PolicyCoverageService coverage;
     private final PolicySnapshotCodec codec;
+    private final PolicyApprovalMessage approvals;
     private final FeishuProperties config;
     private final ObjectMapper json;
 
@@ -57,18 +59,23 @@ class ExecutionNoticesImpl implements ExecutionNotices {
 
     private static final DateTimeFormatter DISPLAY =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final LocalTime REMINDER_TIME = LocalTime.of(17, 0);
 
     @Override
     public void initialize(LocalDateTime at) {
         String tenant = config.getTenantKey();
-        if (!config.hasCompanyTenant() || !StringUtils.hasText(config.getPolicyChatId())) return;
-        var ends = coverage.approvedEnds(tenant, at);
+        if (!config.hasCompanyTenant()) return;
+        notices.deleteUnsentLegacyNear(tenant);
         long after = 0;
         while (true) {
+            // 当天按旧规则排在午夜的截止提醒可能还在等待，启动时也要将它归到实际截止秒。
             var page = notices.activePage(tenant, after, at.toLocalDate().atStartOfDay());
             for (var p : page) {
-                var end = actualEnd(p, ends.get(Long.toString(p.id())));
+                var end = p.endTime();
                 if (!end.isBefore(at)) plan(tenant, p, end, at, false);
+                else if (StringUtils.hasText(config.getPolicyChatId())) {
+                    retainDeadline(tenant, p, end, groupPrefix(p, config.getPolicyChatId()));
+                }
                 after = p.id();
             }
             if (page.size() < 200) return;
@@ -78,87 +85,59 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public void approved(PolicyApply entry, Snapshot snapshot, LocalDateTime at) {
-        String tenant = entry.getTenantKey();
-        var p = notices.approved(tenant, entry.getId());
-        if (p != null) scheduleCurrent(tenant, p, at);
-        var changes =
-                snapshot.consent() == null
-                        ? List.<PolicyConsent.EndAdjustment>of()
-                        : snapshot.consent().endAdjustments();
-        var targets = new LinkedHashSet<Long>();
-        for (var change : changes) targets.add(Long.valueOf(change.target().policyId()));
-        if (entry.getExtensionSourceId() != null) targets.add(entry.getExtensionSourceId());
-        for (long id : targets) {
-            var old = notices.approved(tenant, id);
-            if (old == null) throw new IllegalStateException("无法还原已调整的目标政策。");
-            boolean extension =
-                    Objects.equals(entry.getExtensionSourceId(), id)
-                            || changes.stream()
-                                    .anyMatch(
-                                            c ->
-                                                    c.target().policyId().equals(Long.toString(id))
-                                                            && PolicyEndTimes.isExtension(c));
-            var body = policyPayload(extension ? "EXTENDED" : "SHORTENED", old);
-            body.put("request", entry.getId()).put("actor", entry.getApplicantId());
-            if (extension) {
-                var child = notices.extension(tenant, id);
-                if (child == null || !"APPROVED".equals(child.status()))
-                    throw new IllegalStateException("找不到对应的已批延期单。");
-                body.put("child", child.id());
-                if (p == null || child.id() != p.id())
-                    scheduleCurrent(tenant, notices.approved(tenant, child.id()), at);
-            } else {
-                var cutoff = coverage.approvedEnd(tenant, id, old.auditId(), at);
-                if (cutoff == null) throw new IllegalStateException("无法还原获批的提前截止。");
-                body.put("end", cutoff.actualEnd());
-                scheduleCurrent(tenant, old, at);
-            }
-            register(
-                    tenant,
-                    "P/"
-                            + id
-                            + "/"
-                            + body.path("kind").asText()
-                            + "/"
-                            + entry.getId()
-                            + "/"
-                            + entry.getCurrentVersion(),
-                    body,
-                    at,
-                    at);
-        }
+        scheduleCurrent(
+                entry.getTenantKey(), notices.approved(entry.getTenantKey(), entry.getId()), at);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void timeAdjusted(PolicyTimeChange change) {
+        var tenant = change.getTenantKey();
+        var p = notices.approved(tenant, change.getPolicyId());
+        if (p == null || p.auditId() != change.getAuditLogId())
+            throw new IllegalStateException("无法核对改期原单的获批轮次。");
+        var at = change.getChangedAt();
+        var kind = "EXTEND".equals(change.getDirection()) ? "EXTENDED" : "SHORTENED";
+        var payload =
+                policyPayload(kind, p)
+                        .put("changeId", change.getId())
+                        .put("actor", change.getActorId());
+        register(tenant, "P/" + p.id() + "/" + kind + "/" + change.getId(), payload, at, at);
+        scheduleCurrent(tenant, p, at);
     }
 
     private void scheduleCurrent(String tenant, Policy p, LocalDateTime at) {
-        if (!StringUtils.hasText(config.getPolicyChatId()) || p == null) return;
-        if (!enabled && notices.hasSchedule(tenant, "P/" + p.id() + "/" + p.version() + "/") == 0)
-            return;
-        plan(
-                tenant,
-                p,
-                actualEnd(p, coverage.approvedEnd(tenant, p.id(), p.auditId(), at)),
-                at,
-                true);
-    }
-
-    private LocalDateTime actualEnd(Policy p, ApprovedEnd cut) {
-        if (cut != null && Long.toString(p.auditId()).equals(cut.targetAuditId()))
-            return PolicyFormValidation.time(cut.actualEnd());
-        return PolicyApplicabilityEvaluator.originalThrough(
-                p.endTime(), p.extensionSourceId() == null ? null : "延期");
+        if (p == null) return;
+        if (!enabled
+                && notices.hasSchedule(tenant, "P/" + p.id() + "/" + p.version() + "/") == 0
+                && notices.hasSchedule(tenant, reminderPrefix(p)) == 0) return;
+        plan(tenant, p, p.endTime(), at, true);
     }
 
     private void plan(
             String tenant, Policy p, LocalDateTime end, LocalDateTime at, boolean changed) {
+        // 截止变更前后若共用某一提醒日，沿用该日登记和回执，到期天数在发送时重算。
+        var reminderPrefix = reminderPrefix(p);
+        var lastReminder = end.toLocalDate().minusDays(1);
+        var firstReminder = lastReminder.minusDays(1);
+        if (changed)
+            notices.cancelOtherReminderDates(
+                    tenant,
+                    reminderPrefix,
+                    reminderPrefix + firstReminder,
+                    reminderPrefix + lastReminder);
+        for (var date : List.of(firstReminder, lastReminder)) {
+            if (!date.isBefore(at.toLocalDate()))
+                registerSchedule(
+                        tenant,
+                        reminderPrefix + date,
+                        policyPayload(EXPIRY_REMINDER, p).put("reminderDate", date.toString()),
+                        at,
+                        date.atTime(REMINDER_TIME));
+        }
         String chat = config.getPolicyChatId();
-        String prefix =
-                "P/"
-                        + p.id()
-                        + "/"
-                        + p.version()
-                        + "/"
-                        + UUID.nameUUIDFromBytes(chat.getBytes(StandardCharsets.UTF_8))
-                        + "/";
+        if (!StringUtils.hasText(chat)) return;
+        String prefix = groupPrefix(p, chat);
         if (p.startTime().isAfter(at)
                 && p.startTime().isAfter(p.approvedAt())
                 && !p.startTime().isAfter(end)) {
@@ -169,20 +148,47 @@ class ExecutionNoticesImpl implements ExecutionNotices {
                     at,
                     p.startTime());
         }
-        for (String kind : List.of("NEAR", "END")) {
-            String key = prefix + kind + "/" + end;
-            if (changed) notices.cancelOld(tenant, prefix + kind + "/", key);
-            if (kind.equals("NEAR") && end.isBefore(at)) continue;
-            if (kind.equals("END") && end.equals(LocalDateTime.of(9999, 12, 31, 23, 59, 59)))
-                continue;
-            var due = kind.equals("NEAR") ? end.minusDays(3) : end.plusSeconds(1);
-            register(
+        String endKey = prefix + "END/" + end;
+        var retained = retainDeadline(tenant, p, end, prefix);
+        if (changed)
+            notices.cancelOld(tenant, prefix + "END/", retained == null ? endKey : retained);
+        if (retained == null && !end.equals(LocalDateTime.of(9999, 12, 31, 23, 59, 59)))
+            registerSchedule(
                     tenant,
-                    key,
-                    policyPayload(kind, p).put("end", end.toString()).put("chat", chat),
+                    endKey,
+                    policyPayload("END", p).put("end", end.toString()).put("chat", chat),
                     at,
-                    due);
-        }
+                    end.plusSeconds(1));
+    }
+
+    private void registerSchedule(
+            String tenant, String key, ObjectNode payload, LocalDateTime at, LocalDateTime due) {
+        register(tenant, key, payload, at, due);
+        notices.resumeDeadlinePlan(tenant, key, due);
+    }
+
+    private static String groupPrefix(Policy p, String chat) {
+        return "P/"
+                + p.id()
+                + "/"
+                + p.version()
+                + "/"
+                + UUID.nameUUIDFromBytes(chat.getBytes(StandardCharsets.UTF_8))
+                + "/";
+    }
+
+    private String retainDeadline(String tenant, Policy p, LocalDateTime end, String prefix) {
+        if (p.lastChange() != null) return null;
+        var dayEnd = end.toLocalDate().atTime(23, 59, 59);
+        if (end.equals(dayEnd)) return null;
+        var endPrefix = prefix + "END/";
+        var previous = notices.laterDeadlinePlan(tenant, endPrefix + end, endPrefix + dayEnd);
+        if (previous != null) notices.advanceUnsentDeadline(tenant, previous, end.plusSeconds(1));
+        return previous;
+    }
+
+    private static String reminderPrefix(Policy p) {
+        return "P/" + p.id() + "/" + EXPIRY_REMINDER + "/";
     }
 
     private ObjectNode policyPayload(String kind, Policy p) {
@@ -303,57 +309,67 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     @Override
     public Message message(String tenant, JsonNode body, LocalDateTime at) {
         String kind = body.path("kind").asText();
+        if (kind.equals("NEAR")) throw stale("临期群提醒已改为到期前两天逐日私聊原申请人。");
         if (body.has("chat") && !body.path("chat").asText().equals(config.getPolicyChatId()))
             throw stale("目标业务群已更换。");
         if (kind.equals("PLATFORM")) return platformMessage(tenant, body);
         if (kind.equals("CLEAN") || kind.equals("IMPORT")) return catalogMessage(body, kind);
         var p = notices.approved(tenant, body.path("policy").asLong());
         if (p == null || p.version() != body.path("version").asInt()) throw stale("原单已失效。");
-        var approvedCut = coverage.approvedEnd(tenant, p.id(), p.auditId(), at);
-        var end = actualEnd(p, approvedCut);
+        if (kind.equals("EXTENDED") || kind.equals("SHORTENED")) {
+            var change = changes.byId(tenant, p.id(), body.path("changeId").asLong());
+            if (change == null || change.getAuditLogId() != p.auditId()) throw stale("找不到该次改期记录。");
+            return new Message(approvals.adjusted(change), changeRecipients(tenant, p, body));
+        }
+        var end = p.endTime();
+        if (kind.equals(EXPIRY_REMINDER)) {
+            var date = LocalDate.parse(body.path("reminderDate").asText());
+            long days = ChronoUnit.DAYS.between(date, end.toLocalDate());
+            if (days != 1 && days != 2) throw stale("政策实际截止已变更，本日无需提醒。");
+            if (!date.equals(at.toLocalDate()) || at.toLocalTime().isBefore(REMINDER_TIME))
+                throw stale("不在本次到期提醒当日 17:00 起的发送时段。");
+            return new Message(
+                    policyNumber(p.id())
+                            + " 将于"
+                            + (days == 1 ? "明天" : "后天")
+                            + "到期，实际截止 "
+                            + DISPLAY.format(end)
+                            + "（北京时间）。",
+                    List.of(p.applicantId()));
+        }
         if (kind.equals("START")) {
             if (at.isBefore(p.startTime()) || at.isAfter(end)) throw stale("已离开本单执行窗口。");
             var adopted = adopted(tenant, p, p.startTime(), at);
             if (adopted.text().isEmpty()) throw stale("当前范围未采用本单。");
             return new Message(policyNumber(p.id()) + " " + adopted.text(), adopted.users());
         }
+        if (!kind.equals("END")) throw new Failure(Kind.PERMANENT, "无法识别业务提醒类型。");
+        var registeredEnd = LocalDateTime.parse(body.path("end").asText());
+        // 没有改期的单据可能留有上一版的日末登记，继续用该次投递的原回执。
+        if (p.lastChange() == null
+                && registeredEnd.isAfter(end)
+                && registeredEnd.toLocalDate().equals(end.toLocalDate())) registeredEnd = end;
+        if (!end.equals(registeredEnd)) throw stale("政策实际截止已变更。");
+        if (!at.isAfter(end)) throw stale("尚未到达截止的下一秒。");
+        var detail = "SHORTEN".equals(p.lastChange()) ? "政策已按获批调整提前结束。" : "政策自然结束。";
+        return new Message(
+                policyNumber(p.id())
+                        + " "
+                        + detail
+                        + extensionText(tenant, p)
+                        + " 实际截止 "
+                        + DISPLAY.format(end)
+                        + "。",
+                changeRecipients(tenant, p, body));
+    }
+
+    private List<Long> changeRecipients(String tenant, Policy p, JsonNode body) {
         var scopes = Set.copyOf(notices.usedPlatforms(tenant, p.id()));
         var users = new LinkedHashSet<Long>();
         users.add(p.applicantId());
         users.addAll(owners(tenant, p.channel(), scopes));
         if (body.has("actor")) users.add(body.path("actor").asLong());
-        String detail;
-        if (kind.equals("SHORTENED")) {
-            if (!end.equals(PolicyFormValidation.time(body.path("end").asText())))
-                throw stale("此截止变更已被后续批准的截止取代。");
-            detail =
-                    "截止已变更，核准截止 "
-                            + DISPLAY.format(end)
-                            + "，发起单 "
-                            + policyNumber(body.path("request").asLong())
-                            + "。";
-        } else if (kind.equals("EXTENDED")) {
-            detail = extensionText(tenant, p, end);
-        } else {
-            if (!end.equals(LocalDateTime.parse(body.path("end").asText())))
-                throw stale("政策实际截止已变更。");
-            if (kind.equals("NEAR")) {
-                if (at.isBefore(end.minusDays(3)) || at.isAfter(end)) throw stale("已离开临期提醒窗口。");
-                detail =
-                        "已进入临期窗口，实际截止 " + DISPLAY.format(end) + "。" + extensionText(tenant, p, end);
-            } else if (kind.equals("END")) {
-                if (!at.isAfter(end)) throw stale("尚未到达截止的下一秒。");
-                String extension = extensionText(tenant, p, end);
-                detail =
-                        (approvedCut != null
-                                        ? "政策已按获批调整提前结束。" + extension
-                                        : extension.isEmpty() ? "政策自然结束。" : "本段已结束。" + extension)
-                                + " 实际截止 "
-                                + DISPLAY.format(end)
-                                + "。";
-            } else throw new Failure(Kind.PERMANENT, "无法识别业务提醒类型。");
-        }
-        return new Message(policyNumber(p.id()) + " " + detail, List.copyOf(users));
+        return List.copyOf(users);
     }
 
     private Message platformMessage(String tenant, JsonNode body) {
@@ -389,36 +405,18 @@ class ExecutionNoticesImpl implements ExecutionNotices {
                                 + body.path("reviews").asLong()
                                 + " 项，技术失败 "
                                 + body.path("errors").asLong()
-                                + " 项。请在商品清洗记录处理。"
-                        : "导入批次 " + id + " 异常暂停（" + body.path("error").asText() + "），请在源商品库核对后续跑。";
+                                + " 项。"
+                        : "导入批次 " + id + " 异常暂停（" + body.path("error").asText() + "）。";
         return new Message(
                 body.path("brand").asText() + " " + action,
                 List.of(body.path("requester").asLong()));
     }
 
-    private String extensionText(String tenant, Policy p, LocalDateTime end) {
-        var child = notices.extension(tenant, p.id());
-        if (child != null && "APPROVED".equals(child.status())) {
-            var start =
-                    child.approvedAt().isAfter(child.startTime())
-                            ? child.approvedAt()
-                            : child.startTime();
-            return "延期已批，"
-                    + policyNumber(child.id())
-                    + " 从 "
-                    + DISPLAY.format(start)
-                    + " 起获准接续。"
-                    + (start.isAfter(end.plusSeconds(1)) ? "原截止与延期起点之间有空档。" : "");
-        }
+    private String extensionText(String tenant, Policy p) {
         boolean pending =
-                child != null
-                        || notices.pendingChanges(tenant, p.id(), p.auditId()).stream()
-                                .flatMap(
-                                        s ->
-                                                codec
-                                                        .readEndAdjustments(s, p.id(), p.auditId())
-                                                        .stream())
-                                .anyMatch(PolicyEndTimes::isExtension);
+                notices.pendingChanges(tenant, p.id(), p.auditId()).stream()
+                        .flatMap(s -> codec.readEndAdjustments(s, p.id(), p.auditId()).stream())
+                        .anyMatch(PolicyEndTimes::isExtension);
         return pending ? "延期仍待审核，原单按当前截止执行。" : "";
     }
 

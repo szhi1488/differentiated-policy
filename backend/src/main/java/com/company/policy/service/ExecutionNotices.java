@@ -4,6 +4,7 @@ import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.PolicyApply;
+import com.company.policy.entity.PolicyTimeChange;
 import com.company.policy.mapper.CatalogCleaningMapper.JobCount;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -12,11 +13,16 @@ import java.util.List;
 
 /** 登记执行期、平台交接及商品异常提醒，发送前重新核对范围与人员。 */
 public interface ExecutionNotices {
+    String EXPIRY_REMINDER = "EXPIRY_REMINDER";
+
     /** 启用调度时登记仍有效及未来的已批政策。 */
     void initialize(LocalDateTime at);
 
-    /** 在批准事务内更新本单、受影响原单及延期子单的提醒。 */
+    /** 在批准事务内登记本次新申请的执行提醒。 */
     void approved(PolicyApply entry, Snapshot snapshot, LocalDateTime at);
+
+    /** 在时间调整直接生效的事务内登记该项群公告并重算执行期提醒。 */
+    void timeAdjusted(PolicyTimeChange change);
 
     /** 在分工事务内登记指定渠道平台的交接。 */
     void platformChanged(String tenant, ChannelPlatform scope, long user, boolean assigned);

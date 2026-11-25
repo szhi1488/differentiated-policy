@@ -1,5 +1,5 @@
 import { computed, watch } from 'vue'
-import { isApprovedBatchExtension, verifyCurrentRound } from '../api/admin-policies'
+import { verifyCurrentRound } from '../api/admin-policies'
 import { readPolicyReviewRound } from '../api/policy-reviews'
 import { useLatestQuery } from './useLatestQuery'
 
@@ -8,11 +8,7 @@ export function useAdminPolicyRound(detail, { historical = false } = {}) {
   const query = useLatestQuery()
   const target = computed(() => {
     const current = detail.value
-    return current?.audit &&
-      !current.round &&
-      !isApprovedBatchExtension(current.audit, current.snapshot)
-      ? current
-      : null
+    return current?.audit && !current.round ? current : null
   })
   function loadRound() {
     const current = target.value

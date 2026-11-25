@@ -1,39 +1,43 @@
 <script setup>
-import { computed } from 'vue'
+import { timeChangeAttachmentUrl } from '../api/policy-reviews'
 import { policyTime } from '../utils/policy-adapter'
 import AttachmentDownload from './AttachmentDownload.vue'
 import { policyAttachmentDownloadUrl } from '../api/attachments'
-const props = defineProps({
+defineProps({
   changes: Array,
-  timeAdjustment: Object,
-  approvedEnd: Object,
+  history: Object,
+  submissionVersion: Number,
   policyId: String,
   logId: String,
   attachmentUrl: Function,
   admin: Boolean,
 })
 const time = (t) => policyTime(t).replace('T', ' ')
-const adjustments = computed(() => {
-  const records = props.changes ?? []
-  if (!props.timeAdjustment) {
-    return records
-  }
-  return [
-    props.timeAdjustment,
-    ...records.filter((change) => change.target.policyId !== props.timeAdjustment.target.policyId),
-  ]
-})
 </script>
 <template>
-  <section v-if="approvedEnd" class="policy-end-changes">
-    <h3>整单提前结束已获批</h3>
-    <strong>实际截止 {{ time(approvedEnd.actualEnd) }}</strong>
-    <p>由 {{ approvedEnd.requestPolicyCode }} 于 {{ time(approvedEnd.approvedAt) }} 审核通过。</p>
-    <p>调整原因：{{ approvedEnd.change.reason }}</p>
+  <section v-if="history?.changes.length" class="policy-end-changes" aria-label="时间调整记录">
+    <h3>时间调整记录</h3>
+    <article v-for="change in history.changes" :key="change.id">
+      <strong>{{ change.direction === 'EXTEND' ? '延期' : '提前结束' }}</strong>
+      <p>{{ time(change.previousEnd) }} → {{ time(change.actualEnd) }}</p>
+      <p v-if="change.requestedEnd !== change.actualEnd">
+        申请截止 {{ time(change.requestedEnd) }}
+      </p>
+      <p>调整原因：{{ change.reason }}</p>
+      <p>{{ change.actorName }} · {{ time(change.changedAt) }} 办理</p>
+      <p>生效时间 {{ time(change.effectiveAt) }}</p>
+      <p v-if="change.sourcePolicyCode">随 {{ change.sourcePolicyCode }} 获批</p>
+      <div v-for="file in change.attachmentInfo" :key="file.id">
+        <AttachmentDownload
+          :url="timeChangeAttachmentUrl(policyId, submissionVersion, change.id, file.id)"
+          :filename="file.originalName"
+        />
+      </div>
+    </article>
   </section>
-  <section v-if="adjustments.length" class="policy-end-changes">
+  <section v-if="changes?.length" class="policy-end-changes">
     <h3>本轮政策时间调整</h3>
-    <article v-for="change in adjustments" :key="change.target.policyId">
+    <article v-for="change in changes" :key="change.target.policyId">
       <strong>ZC-{{ change.target.policyId.padStart(6, '0') }} · 全部平台和商品</strong>
       <p>
         原截止 {{ time(change.target.previousEnd) }} →

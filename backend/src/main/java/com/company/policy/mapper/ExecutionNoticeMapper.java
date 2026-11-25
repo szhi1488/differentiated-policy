@@ -2,6 +2,7 @@ package com.company.policy.mapper;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
@@ -27,12 +28,14 @@ public interface ExecutionNoticeMapper {
             LocalDateTime startTime,
             LocalDateTime endTime,
             LocalDateTime approvedAt,
-            Long extensionSourceId) {}
+            String lastChange) {}
 
     String APPROVED =
             """
         SELECT p.id,p.current_version AS version,a.id AS audit_id,p.applicant_id,p.channel_type AS channel,
-          p.start_time,p.end_time,a.audit_time AS approved_at,p.extension_source_id
+          p.start_time,p.end_time,a.audit_time AS approved_at,
+          (SELECT c.direction FROM policy_time_change c WHERE c.policy_id=p.id AND c.tenant_key=p.tenant_key
+            AND c.after_record_version=p.record_version) AS last_change
         FROM policy_apply p JOIN policy_audit_log a ON a.policy_id=p.id AND a.tenant_key=p.tenant_key
           AND a.version=p.current_version AND a.audit_status='APPROVED'
         WHERE p.tenant_key=#{tenant} AND p.is_deleted=0 AND p.status='APPROVED'
@@ -66,18 +69,6 @@ public interface ExecutionNoticeMapper {
     @Select("SELECT DISTINCT d.platform_code " + DETAIL_SCOPE + " ORDER BY d.platform_code")
     List<String> usedPlatforms(String tenant, long id);
 
-    record Extension(long id, String status, LocalDateTime startTime, LocalDateTime approvedAt) {}
-
-    @Select(
-            """
-        SELECT p.id,p.status,p.start_time,a.audit_time AS approved_at FROM policy_apply p
-        JOIN policy_audit_log a ON a.policy_id=p.id AND a.tenant_key=p.tenant_key AND a.version=p.current_version
-        WHERE p.tenant_key=#{tenant} AND p.extension_source_id=#{id} AND p.is_deleted=0
-          AND ((p.status='APPROVED' AND a.audit_status='APPROVED') OR (p.status='PENDING' AND a.audit_status='SUBMITTED'))
-        ORDER BY p.id DESC LIMIT 1
-        """)
-    Extension extension(String tenant, long id);
-
     @Select(
             """
         SELECT JSON_EXTRACT(a.snapshot_data,'$.consent.endAdjustments')
@@ -109,6 +100,23 @@ public interface ExecutionNoticeMapper {
             "SELECT COUNT(*) FROM policy_review_delivery WHERE tenant_key=#{tenant} AND notice_key LIKE CONCAT(#{prefix},'%')")
     int hasSchedule(String tenant, String prefix);
 
+    // 普通单曾按当日日末执行。仅检查本轮、本群同日稍晚的旧截止，保留原编号和回执。
+    @Select(
+            """
+        SELECT notice_key FROM policy_review_delivery WHERE tenant_key=#{tenant}
+          AND notice_key>#{exactKey} AND notice_key<=#{lastKey} AND delivery_status<>'CANCELLED'
+        ORDER BY CASE WHEN delivery_status IN ('PENDING','RETRY') THEN 1 ELSE 0 END, id DESC LIMIT 1
+        """)
+    String laterDeadlinePlan(String tenant, String exactKey, String lastKey);
+
+    @Update(
+            """
+        UPDATE policy_review_delivery SET next_attempt_at=#{due}
+        WHERE tenant_key=#{tenant} AND notice_key=#{key} AND delivery_status='PENDING'
+          AND attempts=0 AND next_attempt_at>#{due}
+        """)
+    void advanceUnsentDeadline(String tenant, String key, LocalDateTime due);
+
     @Update(
             """
         UPDATE policy_review_delivery SET delivery_status='CANCELLED',next_attempt_at=NULL,last_error='政策实际截止已变更'
@@ -116,4 +124,38 @@ public interface ExecutionNoticeMapper {
           AND notice_key<>#{current} AND delivery_status IN ('PENDING','RETRY')
         """)
     void cancelOld(String tenant, String prefix, String current);
+
+    /** 同一单又改回原截止时，重新启用曾因改期安全撤销的那条登记，延用原编号和去重键。 */
+    @Update(
+            """
+        UPDATE policy_review_delivery SET delivery_status='PENDING', next_attempt_at=#{due}, last_error=NULL
+        WHERE tenant_key=#{tenant} AND notice_key=#{key} AND delivery_status='CANCELLED'
+          AND last_error='政策实际截止已变更' AND receipt_id IS NULL AND delivered_at IS NULL
+          AND lease_owner IS NULL AND lease_until IS NULL AND JSON_EXTRACT(payload_json,'$.lateReceipt') IS NULL
+        """)
+    void resumeDeadlinePlan(String tenant, String key, LocalDateTime due);
+
+    // 已知未送达的旧计划才能删除。保留外发、租约及人工核对证据供迟到回执追溯。
+    String UNSENT_LEGACY_NEAR =
+            """
+        notice_key LIKE 'P/%/NEAR/%' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.kind'))='NEAR'
+        AND delivery_status IN ('PENDING','RETRY','CANCELLED')
+        AND receipt_id IS NULL AND delivered_at IS NULL AND lease_owner IS NULL AND lease_until IS NULL
+        AND JSON_EXTRACT(payload_json,'$.lateReceipt') IS NULL AND JSON_EXTRACT(payload_json,'$.manualHistory') IS NULL
+        AND JSON_EXTRACT(payload_json,'$.requestFingerprint') IS NULL AND JSON_EXTRACT(payload_json,'$.requestRecipient') IS NULL
+        AND (attempts=0 OR delivery_status='RETRY' OR JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.requiresWriteGuard'))='true')
+        """;
+
+    @Delete(
+            "DELETE FROM policy_review_delivery WHERE tenant_key=#{tenant} AND "
+                    + UNSENT_LEGACY_NEAR)
+    void deleteUnsentLegacyNear(String tenant);
+
+    @Update(
+            """
+        UPDATE policy_review_delivery SET delivery_status='CANCELLED',next_attempt_at=NULL,last_error='政策实际截止已变更'
+        WHERE tenant_key=#{tenant} AND notice_key LIKE CONCAT(#{prefix},'%')
+          AND notice_key NOT IN (#{first},#{second}) AND delivery_status IN ('PENDING','RETRY')
+        """)
+    void cancelOtherReminderDates(String tenant, String prefix, String first, String second);
 }

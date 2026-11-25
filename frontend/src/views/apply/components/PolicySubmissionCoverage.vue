@@ -3,12 +3,19 @@ import { computed, onScopeDispose, reactive, ref, watch } from 'vue'
 import { deleteAttachment } from '../../../api/attachments'
 import AppIcon from '../../../components/AppIcon.vue'
 import { PLATFORM_LABELS } from '../../../constants/policy'
-import { groupSubmissionScopes } from '../../../utils/policy-applicability'
+import {
+  groupSubmissionScopes,
+  retainSubmissionChoices,
+  submissionDecisions,
+} from '../../../utils/policy-applicability'
 import PolicyEndAdjustmentEditor from './PolicyEndAdjustmentEditor.vue'
 import PolicyScopeSegment from './PolicyScopeSegment.vue'
 import ScopeProductList from './ScopeProductList.vue'
 
-const props = defineProps({ preview: { type: Object, required: true } })
+const props = defineProps({
+  preview: { type: Object, required: true },
+  choosingAdjustmentScope: Boolean,
+})
 const emit = defineEmits(['confirm', 'edit'])
 const recalculated = ref(null)
 const current = computed(() => recalculated.value ?? props.preview)
@@ -29,7 +36,7 @@ onScopeDispose(() => {
   }
 })
 const needsAdjustmentReview = ref(Boolean(changes.value.length))
-const editingAdjustments = ref(Boolean(props.preview.openEndEditor) || needsAdjustmentReview.value)
+const editingAdjustments = ref(needsAdjustmentReview.value)
 const refreshedOptions = ref(null)
 const options = computed(
   () => refreshedOptions.value ?? current.value.options ?? props.preview.options ?? [],
@@ -57,12 +64,9 @@ async function recalculate(rows) {
     }
     throw error
   }
-  const unchanged = new Map(next.ranges.map((range) => [range.key, range.confirmationBasis]))
-  for (const range of current.value.ranges) {
-    if (!unchanged.has(range.key) || unchanged.get(range.key) !== range.confirmationBasis) {
-      choices.delete(range.key)
-    }
-  }
+  const kept = retainSubmissionChoices(current.value, next, choices, changes.value, rows)
+  choices.clear()
+  kept.forEach((value, key) => choices.set(key, value))
   recalculated.value = next
   refreshedOptions.value = next.options ?? refreshedOptions.value
   void discardRemovedFiles(changes.value, rows)
@@ -100,18 +104,12 @@ watch(
     submittedFiles = false
     changes.value = props.preview.previousAdjustments ?? []
     needsAdjustmentReview.value = Boolean(changes.value.length)
-    editingAdjustments.value = Boolean(props.preview.openEndEditor) || needsAdjustmentReview.value
+    editingAdjustments.value = needsAdjustmentReview.value
     refreshedOptions.value = null
     choices.clear()
     page.value = 1
   },
 )
-function closeEndEditor() {
-  editingAdjustments.value = false
-  if (props.preview.openEndEditor && !recalculated.value) {
-    emit('edit')
-  }
-}
 function choose(members, value) {
   for (const { key } of members) {
     if (value) {
@@ -145,21 +143,13 @@ function confirm() {
     editingAdjustments.value ||
     needsAdjustmentReview.value ||
     staleChanges.value ||
-    (!direct.value && !showSubmitConfirmation.value) ||
+    (!props.choosingAdjustmentScope && !direct.value && !showSubmitConfirmation.value) ||
     choices.size !== current.value.ranges.length
   ) {
     return
   }
   showSubmitConfirmation.value = false
-  const decisions = current.value.ranges.map(({ key, scope, through }) => {
-    const choice = choices.get(key)
-    if (Array.isArray(choice)) {
-      return { scope, through, choice: 'SELECT', selectedPolicyIds: choice }
-    }
-    return choice === 'STACK'
-      ? { scope, through, choice }
-      : { scope, through, choice: 'CHOOSE_ONE', policyId: choice }
-  })
+  const decisions = submissionDecisions(current.value.ranges, choices)
   submittedFiles = true
   emit(
     'confirm',
@@ -176,7 +166,6 @@ function confirm() {
 
 <template>
   <el-dialog
-    v-if="!preview.openEndEditor || recalculated"
     :model-value="true"
     title="确认政策适用范围"
     class="submission-coverage-dialog"
@@ -272,9 +261,9 @@ function confirm() {
             :disabled="
               needsAdjustmentReview || staleChanges || choices.size !== current.ranges.length
             "
-            @click="direct ? confirm() : (showSubmitConfirmation = true)"
+            @click="choosingAdjustmentScope || direct ? confirm() : (showSubmitConfirmation = true)"
           >
-            {{ direct ? '直接提交' : '确认整单并提交' }}
+            {{ choosingAdjustmentScope ? '确认适用范围' : direct ? '直接提交' : '确认整单并提交' }}
           </el-button>
         </div>
       </div>
@@ -285,7 +274,7 @@ function confirm() {
     :options="options"
     :changes="changes"
     :apply="recalculate"
-    @close="closeEndEditor"
+    @close="editingAdjustments = false"
   />
   <el-dialog
     v-model="showSubmitConfirmation"
@@ -391,5 +380,22 @@ function confirm() {
   .scope-footer {
     gap: 8px;
   }
+}
+</style>
+
+<style>
+.submission-coverage-dialog {
+  --policy-line: #e3ebf7;
+  --policy-muted: #556784;
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+}
+.submission-coverage-dialog .el-dialog__body {
+  overflow-y: auto;
+  min-width: 0;
+}
+.submission-coverage-dialog .el-alert {
+  margin-bottom: 12px;
 }
 </style>

@@ -4,6 +4,8 @@ import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyTimelineQuery;
 import com.company.policy.entity.PolicyApply;
+import com.company.policy.entity.PolicyConsent.EndAdjustment;
+import com.company.policy.entity.PolicyConsent.Target;
 import com.company.policy.support.policy.PolicyRouteSummary;
 import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyResponse.Snapshot;
@@ -11,6 +13,7 @@ import com.company.policy.vo.PolicyReviewResponse.Effective;
 import com.company.policy.vo.PolicySubsidyTimeline;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /** 按已鉴权申请的商品和平台计算政策覆盖范围。 */
 public interface PolicyCoverageService {
@@ -34,18 +37,18 @@ public interface PolicyCoverageService {
             PolicyDraftRequest form,
             List<com.company.policy.entity.PolicyConsent.EndAdjustment> changes);
 
-    List<PolicyApplicability.AdjustmentOption> adjustableFor(
+    /** 独立调整没有在填表单，按整批原单锁定所有相关机型和延期商品。 */
+    void lockAdjustmentScope(PolicyApply applicant, List<EndAdjustment> changes);
+
+    /** 将同批延期作为拟生效政策、缩短作为历史截止变更，一起计算逐段选择。 */
+    PolicyApplicability adjustmentCoverage(
             PolicyApply applicant,
-            LocalDateTime asOf,
-            java.util.Map<String, com.company.policy.vo.PolicyResponse.ApprovedEnd> ends);
+            List<Snapshot> extensions,
+            Map<Target, PolicyApplicability.AdjustmentOption> options,
+            LocalDateTime at);
 
-    /** 按目标政策 ID 返回截至指定时点已通过的整单提前结束决定。 */
-    java.util.Map<String, com.company.policy.vo.PolicyResponse.ApprovedEnd> approvedEnds(
-            String tenant, LocalDateTime asOf);
-
-    /** 只取目标原单当前获批轮次的实际截止。若传入审核日志 ID，必须与当前获批轮次相符。 */
-    com.company.policy.vo.PolicyResponse.ApprovedEnd approvedEnd(
-            String tenant, long targetId, Long targetAuditId, LocalDateTime asOf);
+    List<PolicyApplicability.AdjustmentOption> adjustableFor(
+            PolicyApply applicant, LocalDateTime asOf);
 
     /** 查询某一时刻已通过并按确认决定生效的全部政策。 */
     Effective effective(

@@ -25,12 +25,21 @@ const checkedCounts = computed(() => {
   return counts
 })
 // 零售每个范围对应一个具体商品和一个平台方案，可直接比较原补贴和本次补贴。
-const proposedPlan = computed(() => {
+const comparisonPolicy = computed(() => {
+  if (!props.range.scope.goodsId) {
+    return null
+  }
   const pending = props.range.participants.filter((policy) => policy.proposed)
-  return props.range.scope.goodsId && pending.length === 1
-    ? pending[0].selections[0]?.subsidy
-    : null
+  if (pending.length) {
+    return pending.length === 1 ? pending[0] : null
+  }
+  // 单独调整时可用本次唯一的延期目标比较补贴。
+  const adjusted = props.range.participants.filter(({ policyId }) =>
+    props.range.rawSegments.some(({ wireIds }) => wireIds.get(policyId) !== policyId),
+  )
+  return adjusted.length === 1 ? adjusted[0] : null
 })
+const proposedPlan = computed(() => comparisonPolicy.value?.selections[0]?.subsidy)
 </script>
 
 <template>
@@ -53,15 +62,7 @@ const proposedPlan = computed(() => {
     <div class="segment-policies">
       <section v-for="policy in range.participants" :key="policy.policyId" class="segment-policy">
         <h5>
-          <span>
-            {{
-              policy.proposed
-                ? policy.policyId.startsWith('extension:')
-                  ? '拟延期'
-                  : '本次申请'
-                : '已通过'
-            }}
-          </span>
+          <span>{{ policy.proposed ? '本次申请' : '已通过' }}</span>
           {{ policy.policyCode }}
         </h5>
         <div v-for="(row, index) in policy.selections" :key="index" class="selection">
@@ -82,7 +83,7 @@ const proposedPlan = computed(() => {
             :products="row.products"
           />
           <CoverageComparison
-            v-if="!policy.proposed && row.subsidy && proposedPlan"
+            v-if="row.subsidy && proposedPlan && policy.policyId !== comparisonPolicy.policyId"
             :previous="row.subsidy"
             :proposed="proposedPlan"
           />

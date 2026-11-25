@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import { readApplicantSubsidyOptions, readCatalogGoodsSummary } from '../api/catalog'
 import { readAssignedPlatforms } from '../api/policies'
-import { readSubsidyTimeline } from '../api/subsidy-timeline'
+import { readSubsidyTimeline, SUBSIDY_UPDATE_KEY } from '../api/subsidy-timeline'
 import { CHANNEL_LABELS, PLATFORM_LABELS } from '../constants/policy'
 import { catalogGoodsNameLabel } from '../utils/catalog-dictionary'
 import { readTimelineHistory } from '../utils/policy-timeline'
@@ -105,10 +105,7 @@ export function useModelSubsidyQuery(applicant) {
     { flush: 'sync' },
   )
 
-  const { lastQuery = ref(null), showIndependent = ref(false) } = inject(
-    'modelSubsidyPreferences',
-    {},
-  )
+  const lastQuery = inject('modelSubsidyLastQuery', ref(null))
   const result = computed(() => {
     const history = timeline.data.value
     if (!applicant || !history) {
@@ -131,13 +128,18 @@ export function useModelSubsidyQuery(applicant) {
       segments: history.segments.filter(visible),
     }
   })
-  function loadHistory(selection) {
+  function loadHistory(selection, keepData = false) {
     const requestedAt = timelineTimeFromValue(Date.now())
-    lastQuery.value = selection
-    return timeline.run(async (signal) => {
-      const response = await readSubsidyTimeline(selection.params, signal, applicant)
-      return { ...readTimelineHistory(response), selection: { ...selection, requestedAt } }
-    })
+    if (!keepData) {
+      lastQuery.value = selection
+    }
+    return timeline.run(
+      async (signal) => {
+        const response = await readSubsidyTimeline(selection.params, signal, applicant)
+        return { ...readTimelineHistory(response), selection: { ...selection, requestedAt } }
+      },
+      { keepData },
+    )
   }
   function search() {
     if (!model.value || !config.value || !hasPlatforms.value) {
@@ -193,12 +195,12 @@ export function useModelSubsidyQuery(applicant) {
     dates.value = [dates.value?.[0] && dates.value[0] <= today ? dates.value[0] : today, today]
     return search()
   }
-  async function refreshPlatforms(forceReload = false) {
+  async function refreshPlatforms(forceReload = false, refreshHistoryOnReturn = false) {
     if (permissions.loading.value) {
       return
     }
     const previous = platformOptions.value
-    await permissions.run(readAssignedPlatforms)
+    await permissions.run(readAssignedPlatforms, { keepData: true })
     const current = platformOptions.value
     if (!current.length) {
       platform.value = ''
@@ -211,21 +213,54 @@ export function useModelSubsidyQuery(applicant) {
       !previous.every((item) => current.some((option) => option.value === item.value))
     ) {
       await loadCatalog()
+    } else if (refreshHistoryOnReturn) {
+      await refreshHistory()
     }
+  }
+  function refreshHistory() {
+    // 只刷新已应用的查询；表单里尚未提交的筛选继续留给用户编辑。
+    if (
+      document.hidden ||
+      !lastQuery.value ||
+      !hasPlatforms.value ||
+      !catalog.data.value?.length ||
+      catalog.loading.value
+    ) {
+      return
+    }
+    if (applicant && timeline.error.value?.code === 'POLICY_PLATFORM_FORBIDDEN') {
+      return refreshPlatforms(true)
+    }
+    return loadHistory(lastQuery.value, true)
   }
   function onVisible() {
     if (!document.hidden) {
-      void refreshPlatforms()
+      if (applicant) {
+        void refreshPlatforms(false, true)
+      } else {
+        void refreshHistory()
+      }
+    }
+  }
+  function onPolicyChange(event) {
+    if (event.key === SUBSIDY_UPDATE_KEY && event.newValue) {
+      void refreshHistory()
     }
   }
   onMounted(() => {
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    window.addEventListener('storage', onPolicyChange)
     if (applicant) {
-      document.addEventListener('visibilitychange', onVisible)
       return refreshPlatforms()
     }
     return loadCatalog()
   })
-  onScopeDispose(() => document.removeEventListener('visibilitychange', onVisible))
+  onScopeDispose(() => {
+    window.removeEventListener('storage', onPolicyChange)
+    window.removeEventListener('focus', onVisible)
+    document.removeEventListener('visibilitychange', onVisible)
+  })
   return {
     brand,
     modelId,
@@ -234,7 +269,7 @@ export function useModelSubsidyQuery(applicant) {
     platformOptions,
     hasPlatforms,
     platformError: permissions.error,
-    loadingPlatforms: permissions.loading,
+    loadingPlatforms: computed(() => permissions.loading.value && !permissions.data.value),
     refreshPlatforms,
     dates,
     brands,
@@ -246,7 +281,6 @@ export function useModelSubsidyQuery(applicant) {
     result,
     historyStatus: timeline.status,
     historyError: timeline.error,
-    showIndependent,
     search,
     resetFilters: () => applyFilters(),
     locateCurrentTime,

@@ -1,8 +1,9 @@
--- 已有项目库在 Navicat 中停写、备份后执行一次。空库使用最新建表基线。
+-- 旧版延期子单的结构与核对脚本，仅用于查阅当时的开发方案。
+-- 现行原单改期见 database-design.md 的「已有库升级原单时间调整」说明及 upgrade_policy_time_changes.sql。既有测试单无需转换。
 SELECT DATABASE() AS target_database, VERSION() AS mysql_version;
 SET @policies_before = (SELECT COUNT(*) FROM policy_apply);
 
--- 一张已通过单最多直接承接一张延期单，后续可从已通过的延期单继续延长。
+-- 旧版结构允许一张已通过单直接承接一张延期子单。
 ALTER TABLE policy_apply
   ADD COLUMN extension_source_id BIGINT DEFAULT NULL COMMENT '本次延期承接的已通过政策 ID' AFTER policy_no,
   ADD UNIQUE KEY uk_apply_extension_source (extension_source_id, tenant_key),
@@ -28,8 +29,7 @@ WITH approved_cuts AS (
 extensions AS (
   SELECT child.*, source.id AS source_id, source.applicant_id AS source_applicant,
          source.status AS source_status, source.is_deleted AS source_deleted,
-         CASE WHEN source.extension_source_id IS NULL THEN TIMESTAMP(DATE(source.end_time), '23:59:59')
-              ELSE source.end_time END AS original_end,
+         source.end_time AS original_end,
          DATE_SUB(child.start_time, INTERVAL 1 SECOND) AS prior_second
   FROM policy_apply AS child
   LEFT JOIN policy_apply AS source ON source.id = child.extension_source_id AND source.tenant_key = child.tenant_key

@@ -4,6 +4,7 @@ import { routerKey } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
+import PolicyEndAdjustments from '../../../components/PolicyEndAdjustments.vue'
 import PolicyBanner from '../../../layouts/components/PolicyBanner.vue'
 import { readAdminPolicy, reviewAdminPolicy } from '../../../api/admin-policies'
 import { REVIEW_STAGE_LABELS } from '../../../constants/review-workflow'
@@ -470,6 +471,17 @@ watch(detailOpen, (open) => {
       <div v-else-if="detail">
         <el-tabs v-model="detailTab" class="admin-policy-detail-tabs" aria-label="政策详情内容">
           <el-tab-pane label="当前申请" name="current" />
+          <el-tab-pane label="时间调整记录" name="timeHistory">
+            <div v-if="detailTab === 'timeHistory'" class="admin-policy-time-history">
+              <PolicyEndAdjustments
+                v-if="detail.timeHistory?.changes?.length"
+                :history="detail.timeHistory"
+                :policy-id="detail.policy.id"
+                :submission-version="detail.policy.submissionVersion"
+              />
+              <el-empty v-else description="暂无时间调整记录" :image-size="60" />
+            </div>
+          </el-tab-pane>
           <el-tab-pane label="审核记录" name="history" />
         </el-tabs>
         <AdminPolicyDetail
@@ -490,7 +502,11 @@ watch(detailOpen, (open) => {
             />
           </template>
         </AdminPolicyDetail>
-        <AdminPolicyHistory v-else-if="detailOpen" :key="selectedId" :policy-id="selectedId" />
+        <AdminPolicyHistory
+          v-else-if="detailOpen && detailTab === 'history'"
+          :key="selectedId"
+          :policy-id="selectedId"
+        />
       </div>
       <template v-if="detailTab === 'current' && canReview" #footer>
         <el-button

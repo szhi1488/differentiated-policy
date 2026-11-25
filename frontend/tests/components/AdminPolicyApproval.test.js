@@ -121,13 +121,17 @@ it('当前管理员缺少本轮采购办理权时只读，即使当前单据标�
   expect(button(wrapper, '驳回')).toBeUndefined()
 })
 
-it.each(['缺失审核轮次', '已批准的随单延期'])('%s不会仅凭列表标记开放终审', async (scenario) => {
+it.each(['缺失审核轮次', '已改期的获批原单'])('%s不会仅凭列表标记开放终审', async (scenario) => {
   const detail = groupedPolicyDetail()
-  const extension = scenario === '已批准的随单延期'
+  const extension = scenario === '已改期的获批原单'
   if (extension) {
     detail.policy.status = 'APPROVED'
     detail.audit = { ...detail.audit, auditStatus: 'APPROVED' }
-    detail.snapshot.consent = { batchPolicyKey: 'EXT-5' }
+    detail.timeHistory = {
+      initialEnd: '2026-12-10T00:00:00+08:00',
+      currentEnd: '2026-12-12T00:00:00+08:00',
+      changes: [],
+    }
   }
   const calls = []
   vi.stubGlobal('fetch', async (path, options) => {
@@ -152,7 +156,10 @@ it.each(['缺失审核轮次', '已批准的随单延期'])('%s不会仅凭列�
   await wrapper.get('[aria-label="审核政策 ZC-000005"]').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain(extension ? '机型及补贴信息' : '本轮缺少审核阶段')
-  expect(calls.some(({ path }) => path.startsWith('/api/policy-reviews/'))).toBe(!extension)
+  if (extension) {
+    expect(wrapper.text()).toContain('当前截止2026-12-12 00:00:00')
+  }
+  expect(calls.some(({ path }) => path.startsWith('/api/policy-reviews/'))).toBe(true)
   expect(button(wrapper, '通过')).toBeUndefined()
   expect(button(wrapper, '驳回')).toBeUndefined()
   expect(calls.every(({ method }) => method === 'GET')).toBe(true)

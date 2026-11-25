@@ -6,11 +6,13 @@ import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyAuditLog;
 import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
+import com.company.policy.entity.PolicyTimeChange;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogGoodsMapper;
-import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyReviewMapper;
+import com.company.policy.mapper.PolicyTimeChangeMapper;
 import com.company.policy.vo.ApplicantCatalogResponse;
+import com.company.policy.vo.PolicyApplicability.Group;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,38 +21,37 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
+import java.util.Map;
+import java.util.Objects;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
-/** 从原单已通过快照还原延期段。父单获批时在同一事务写入真实子单和补贴明细。 */
+/** 按原获批快照试算新增时段。改期生效时更新原政策并逐项保存调整依据。 */
 @Component
 public class PolicyBatchExtensions {
-    private final PolicyApplyMapper policies;
+    private final PolicyTimeChangeMapper history;
     private final PolicyReviewMapper reviews;
     private final CatalogGoodsMapper catalog;
     private final PolicySnapshotCodec codec;
     private final ObjectMapper json;
 
     public PolicyBatchExtensions(
-            PolicyApplyMapper policies,
+            PolicyTimeChangeMapper history,
             PolicyReviewMapper reviews,
             CatalogGoodsMapper catalog,
             PolicySnapshotCodec codec,
             ObjectMapper json) {
-        this.policies = policies;
+        this.history = history;
         this.reviews = reviews;
         this.catalog = catalog;
         this.codec = codec;
         this.json = json;
     }
 
-    public List<Snapshot> proposals(PolicyApply parent, Snapshot request) {
-        if (request.consent() == null) return List.of();
+    public List<Snapshot> extensionProposals(PolicyApply parent, PolicyConsent consent) {
+        if (consent == null) return List.of();
         var changes =
-                request.consent().endAdjustments().stream()
-                        .filter(PolicyEndTimes::isExtension)
-                        .toList();
+                consent.endAdjustments().stream().filter(PolicyEndTimes::isExtension).toList();
         if (changes.isEmpty()) return List.of();
         var byAudit = new HashMap<String, Snapshot>();
         var auditIds =
@@ -62,16 +63,17 @@ public class PolicyBatchExtensions {
                     reviews.coverageSnapshots(
                             parent.getTenantKey(),
                             auditIds.subList(i, Math.min(i + 500, auditIds.size())))) {
-                byAudit.put(log.getId().toString(), approvedSource(log, parent));
+                byAudit.put(log.getId().toString(), approvedSource(log));
             }
         }
         var proposals = new ArrayList<Snapshot>();
         for (var change : changes) {
             var source = byAudit.get(change.target().auditLogId());
             if (source == null || !source.id().equals(change.target().policyId())) throw changed();
+            if (!parent.getApplicantId().toString().equals(source.applicantId())) throw changed();
             var form = source.form();
-            var originalCode = policyCode(Long.parseLong(source.id()));
-            var extensionForm =
+            var originalCode = source.policyCode();
+            var adjustmentForm =
                     new PolicyDraftRequest(
                             null,
                             form.perspective(),
@@ -88,26 +90,25 @@ public class PolicyBatchExtensions {
                             new PolicyDraftRequest.GoodsForm(form.goodsForm().cards(), change));
             proposals.add(
                     new Snapshot(
-                            "extension:" + parent.getId() + ":" + source.id(),
+                            extensionKey(parent, change),
                             originalCode + "（延期）",
-                            source.applicantId(),
+                            parent.getApplicantId().toString(),
                             source.applicantName(),
-                            1,
-                            extensionForm,
+                            source.submissionVersion(),
+                            adjustmentForm,
                             source.goods(),
-                            request.consent(),
-                            originalCode));
+                            consent,
+                            originalCode,
+                            source.wholeConfigurationSelection()));
         }
         return proposals;
     }
 
-    private Snapshot approvedSource(PolicyAuditLog log, PolicyApply parent) {
+    private Snapshot approvedSource(PolicyAuditLog log) {
         try {
             var source = codec.read(log.getSnapshotData());
             if (!String.valueOf(log.getPolicyId()).equals(source.id())
-                    || log.getVersion() != source.submissionVersion()
-                    || !parent.getApplicantId().toString().equals(source.applicantId()))
-                throw changed();
+                    || log.getVersion() != source.submissionVersion()) throw changed();
             PolicySnapshotCodec.requireReplayableCards(source);
             return source;
         } catch (IllegalStateException
@@ -158,7 +159,7 @@ public class PolicyBatchExtensions {
         var ids =
                 changes.stream()
                         .filter(PolicyEndTimes::isExtension)
-                        .map(c -> Long.valueOf(c.target().auditLogId()))
+                        .map(c -> PolicyFormValidation.id(c.target().auditLogId()))
                         .distinct()
                         .sorted()
                         .toList();
@@ -177,102 +178,140 @@ public class PolicyBatchExtensions {
         }
     }
 
-    public void approve(
+    public List<PolicyTimeChange> approve(
+            PolicyApply parent, Snapshot request, UserInfo admin, LocalDateTime approved) {
+        if (request.consent() == null || request.consent().endAdjustments().isEmpty())
+            return List.of();
+        return saveApproved(
+                parent,
+                request.consent().endAdjustments(),
+                request.consent(),
+                admin,
+                approved,
+                null,
+                null);
+    }
+
+    /** 写入顺序与用户核对顺序一致；事务由独立提交或采购终审统一管理。 */
+    public List<PolicyTimeChange> saveApproved(
             PolicyApply parent,
-            Snapshot request,
-            UserInfo admin,
-            LocalDateTime submitted,
-            LocalDateTime approved) {
-        for (var proposal : proposals(parent, request)) {
-            var form = proposal.form();
-            var change = form.goodsForm().timeAdjustment();
-            var child = new PolicyApply();
-            child.setTenantKey(parent.getTenantKey());
-            child.setApplicantId(parent.getApplicantId());
-            child.setApplicantName(parent.getApplicantName());
-            child.setPolicyNo(
-                    UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT));
-            child.setExtensionSourceId(Long.valueOf(change.target().policyId()));
-            child.setChannelType(form.perspective());
-            child.setPlatforms(encode(form.selectedPlatforms()));
-            child.setWriteOffType(form.verifyType());
-            child.setSceneTypes(form.sceneTypes() == null ? null : encode(form.sceneTypes()));
-            child.setIsEstimated(form.estimated());
-            child.setStartTime(PolicyFormValidation.time(form.startTime()));
-            child.setEndTime(PolicyFormValidation.time(form.endTime()));
-            child.setRemark(form.specialRemark());
-            child.setAttachmentUrls(encode(form.attachmentInfo()));
-            child.setGoodsFormJson(encode(form.goodsForm()));
-            child.setStatus("DRAFT");
-            child.setRecordVersion(1);
-            if (policies.insert(child, submitted) != 1
-                    || policies.markSubmitted(child, submitted) != 1) throw changed();
-            var decisions =
-                    request.consent().decisions().stream()
-                            .filter(d -> d.eligiblePolicyIds().contains(proposal.id()))
-                            .toList();
-            var saved =
-                    new Snapshot(
-                            child.getId().toString(),
-                            policyCode(child.getId()),
-                            proposal.applicantId(),
-                            proposal.applicantName(),
-                            1,
-                            form,
-                            proposal.goods(),
-                            new PolicyConsent(
-                                    4,
-                                    request.consent().comparedRounds(),
-                                    decisions,
-                                    List.of(),
-                                    proposal.id()),
-                            proposal.sourcePolicyCode());
-            if (policies.insertAudit(
-                            child.getId(),
-                            child.getTenantKey(),
-                            1,
-                            codec.write(saved),
-                            submitted,
-                            0)
-                    != 1) throw changed();
-            var lines = new ArrayList<PolicyApplyMapper.DetailLine>();
-            for (var card : form.goodsForm().cards()) {
-                for (var target : card.targets()) {
-                    for (var assignment : card.platformAssignments()) {
-                        lines.add(
-                                new PolicyApplyMapper.DetailLine(
-                                        assignment.platformCode(),
-                                        Long.valueOf(target.goodsId()),
-                                        Long.valueOf(target.spuId()),
-                                        target.ram(),
-                                        target.rom()));
-                    }
-                }
+            List<EndAdjustment> changes,
+            PolicyConsent confirmed,
+            UserInfo actor,
+            LocalDateTime approved,
+            String requestKey,
+            String requestHash) {
+        var aliases = new HashMap<String, String>();
+        for (var change : changes)
+            if (PolicyEndTimes.isExtension(change))
+                aliases.put(extensionKey(parent, change), change.target().policyId());
+
+        var saved = new ArrayList<PolicyTimeChange>();
+        for (var change : changes) {
+            var target = change.target();
+            var policyId = PolicyFormValidation.id(target.policyId());
+            var original = history.original(parent.getTenantKey(), policyId);
+            var before = PolicyFormValidation.time(target.previousEnd());
+            if (original == null
+                    || !before.equals(original.getEndTime())
+                    || !Objects.equals(original.getRecordVersion(), target.recordVersion()))
+                throw changed();
+            var requested = PolicyFormValidation.time(change.endTime());
+            boolean extension = PolicyEndTimes.isExtension(change);
+            if (!extension && approved.isAfter(before)) throw changed();
+            var actualEnd =
+                    !extension && requested.isBefore(approved)
+                            ? approved.minusSeconds(1)
+                            : requested;
+            var effective = extension ? before.plusSeconds(1) : actualEnd.plusSeconds(1);
+            if (extension && effective.isBefore(approved)) effective = approved;
+            if (extension && actualEnd.isBefore(effective)) throw changed();
+
+            var item = new PolicyTimeChange();
+            item.setTenantKey(parent.getTenantKey());
+            item.setPolicyId(policyId);
+            item.setPolicyVersion(original.getCurrentVersion());
+            item.setAuditLogId(PolicyFormValidation.id(target.auditLogId()));
+            item.setPreviousEnd(before);
+            item.setRequestedEnd(requested);
+            item.setActualEnd(actualEnd);
+            item.setEffectiveAt(effective);
+            item.setChangedAt(approved);
+            item.setDirection(extension ? "EXTEND" : "SHORTEN");
+            item.setReason(change.reason());
+            item.setActorId(actor.getId());
+            item.setActorName(actor.getName());
+            item.setAttachmentJson(encode(change.attachmentInfo()));
+            item.setConsentJson(
+                    encode(originalConsent(extensionKey(parent, change), confirmed, aliases)));
+            item.setRequestKey(requestKey);
+            item.setRequestHash(requestHash);
+            if (requestKey == null) {
+                item.setSourcePolicyId(parent.getId());
+                item.setSourceVersion(parent.getCurrentVersion());
             }
-            for (int i = 0; i < lines.size(); i += 500) {
-                var page = lines.subList(i, Math.min(i + 500, lines.size()));
-                if (policies.insertDetails(child.getId(), 1, page, submitted) != page.size())
-                    throw changed();
-            }
-            if (reviews.review(child.getId(), child.getTenantKey(), 2, 1, "APPROVED", approved) != 1
-                    || reviews.reviewAudit(
-                                    child.getId(),
-                                    child.getTenantKey(),
-                                    1,
-                                    "APPROVED",
-                                    admin.getId(),
-                                    admin.getName(),
-                                    null,
+            item.setAfterRecordVersion(original.getRecordVersion() + 1);
+            if (history.updateEnd(
+                                    item.getTenantKey(),
+                                    policyId,
+                                    original.getRecordVersion(),
+                                    before,
+                                    actualEnd,
                                     approved)
-                            != 1) throw changed();
+                            != 1
+                    || history.insert(item) != 1) throw changed();
+            saved.add(item);
         }
+        return saved;
+    }
+
+    private static String extensionKey(PolicyApply parent, EndAdjustment change) {
+        return extensionKey(parent.getId().toString(), change.target().policyId());
+    }
+
+    static String extensionKey(String parentId, String sourceId) {
+        return "extension:" + parentId + ":" + sourceId;
+    }
+
+    /** 预览用增量时段区分同一张政策。落库的候选、分组和最终采用名单全部使用真实政策 ID。 */
+    private PolicyConsent originalConsent(
+            String proposalId, PolicyConsent confirmed, Map<String, String> aliases) {
+        var decisions =
+                confirmed.decisions().stream()
+                        .filter(d -> d.eligiblePolicyIds().contains(proposalId))
+                        .map(
+                                d ->
+                                        new PolicyConsent.Decision(
+                                                d.scope(),
+                                                d.from(),
+                                                d.through(),
+                                                d.action(),
+                                                d.groups().stream()
+                                                        .map(
+                                                                g ->
+                                                                        new Group(
+                                                                                g.sceneTypes(),
+                                                                                g.verifyType(),
+                                                                                policyIds(
+                                                                                        g
+                                                                                                .policyIds(),
+                                                                                        aliases)))
+                                                        .toList(),
+                                                policyIds(d.eligiblePolicyIds(), aliases),
+                                                policyIds(d.selectedPolicyIds(), aliases)))
+                        .toList();
+        return new PolicyConsent(4, confirmed.comparedRounds(), decisions);
+    }
+
+    private List<String> policyIds(List<String> ids, Map<String, String> aliases) {
+        return ids.stream().map(id -> aliases.getOrDefault(id, id)).distinct().toList();
     }
 
     private String encode(Object value) {
         try {
             return json.writeValueAsString(value);
         } catch (JsonProcessingException error) {
-            throw new IllegalStateException("不能保存延期表单。", error);
+            throw new IllegalStateException("无法保存政策时间调整记录。", error);
         }
     }
 
@@ -282,6 +321,6 @@ public class PolicyBatchExtensions {
 
     private static ApiException changed() {
         return new ApiException(
-                HttpStatus.CONFLICT, "POLICY_ADJUSTMENT_CHANGED", "延期目标已变化，请重新核对后送审。");
+                HttpStatus.CONFLICT, "POLICY_ADJUSTMENT_CHANGED", "原政策已变化，请重新核对截止和版本。");
     }
 }

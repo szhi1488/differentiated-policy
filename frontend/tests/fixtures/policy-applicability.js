@@ -5,6 +5,7 @@ export const endOption = {
   target: {
     policyId: '518',
     auditLogId: '99',
+    recordVersion: 3,
     previousEnd: '2026-12-31T23:59:59+08:00',
   },
   policyCode: 'ZC-000518',

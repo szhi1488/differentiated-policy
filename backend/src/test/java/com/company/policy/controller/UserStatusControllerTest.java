@@ -55,6 +55,7 @@ class UserStatusControllerTest {
 
     @BeforeEach
     void setup() {
+        jdbc.update("DELETE FROM policy_time_change");
         jdbc.update("DELETE FROM policy_audit_log");
         jdbc.update("DELETE FROM policy_apply");
         jdbc.update("DELETE FROM user_info");

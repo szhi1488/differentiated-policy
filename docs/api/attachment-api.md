@@ -38,16 +38,15 @@ C:/Users/admin/Desktop/differentiated policy/data/
 
 - 草稿 `attachmentInfo` 接受最多 10 个 `{ "type": "FILE", "id": "上传返回的 UUID", "originalName": "文件名" }` 和一个外部链接。服务端核验上传者、租户、文件存在性和重复 ID，文件名以存储元数据为准，客户端名称不会覆盖服务端名称。沿用现有 JSON 字段和本地存储。
 - 时间调整的 `attachmentInfo` 可省略、传 `null` 或空数组。每个目标可带 0 至 10 个 `FILE`，只接受本人在同租户上传的文件。服务端校验文件存在、同一目标内 ID 唯一，并按存储元数据确定文件名。外部链接、空元素或他人的文件无法作为本次调整的证明。原政策主附件和本次调整附件分别展示。
-- 独立创建或保存时间调整草稿时，证明随 `policy_apply.goods_form_json` 的 `$.timeAdjustment.attachmentInfo` 绑定。随单批量预览只核验文件，正式提交时才把每项目标的证明冻结在本轮 `$.consent.endAdjustments[*].attachmentInfo`。同一批调整在预览后增删证明，须重新取得凭证。
-- 本人当前内容的下载按申请归属及状态鉴权。草稿和驳回单查当前主表附件和独立调整附件，待审和通过单查最近提交的 `$.form.attachmentInfo` 和 `$.form.goodsForm.timeAdjustment.attachmentInfo`。当前轮的 `$.consent.endAdjustments` 中的证明也可按本轮下载。历史下载始终核对指定申请、该轮日志与上述快照内文件，再核验磁盘元数据租户。
-- 管理员通过已提交申请的指定轮次下载。目标旧单的 `approvedEnd` 显示获批的缩短原因及截止，调整附件随发起单和轮次授权。批量延期产生的子单可从自身轮次下载继承的原附件及本项目标证明。读取文件时须能在请求轮次内核对其文件引用。
+- 独立改期在确认生效时将证明保存到本次 `policy_time_change.attachment_json`。随单调整在发起单提交时冻结证明，终审生效时再写入每项目标的改期记录。增删证明须重新预览。
+- 当前申请表单和历轮附件按原有归属及指定轮次鉴权。改期证明另按目标原单、获批轮次、变更 ID 和文件引用校验。原单详情可下载对应变更的文件；批量随单提交的证明也可由有该轮阅读权的用户从发起单查阅。
 - 从已保存草稿移除文件时，页面先移除引用，再通过保存草稿更新。已绑定文件不由页面直接物理删除。未绑定文件的移除调用独立删除接口。
 - 本人未提交草稿可通过政策接口物理删除，其附件引用随主表记录解除。磁盘文件继续保留，其他草稿或历史快照引用仍由附件删除接口保护。
 - 物理删除同时检查全部政策的主表单、独立调整和各轮批量调整附件引用，含已删除申请。仍被引用时返回 409 `ATTACHMENT_REFERENCED`。绑定和删除在事务内锁定同一上传者的用户行，防止保存提交前的引用检查窗口造成文件丢失。移除引用后文件保留在磁盘，自动回收仍待实现。
 
 ## 已实现接口
 
-使用现有 HttpSession；写请求需可信 `Origin` 和 `X-Policy-Request: 1`。响应禁止缓存，不暴露磁盘路径和上传者信息。无需建表或修改 SQL。
+使用现有 HttpSession；写请求需可信 `Origin` 和 `X-Policy-Request: 1`。响应禁止缓存，不暴露磁盘路径和上传者信息。改期证明使用[原单改期增量](../sql/upgrade_policy_time_changes.sql)中的引用。
 
 页面的文件名使用共用 `AttachmentDownload.vue` 触发下载，通过 `api/request.js` 在当前网页会话读取文件字节，再以 Blob 临时地址保存并释放临时地址。管理员详情、本人申请详情和提交页均使用该入口，下载期间防重复点击。管理员及申请详情的错误显示在文件名下，提交页通过 `popupError` 使用 Message 弹出错误。离开页面时取消未完成的读取。
 
@@ -61,6 +60,7 @@ C:/Users/admin/Desktop/differentiated policy/data/
 | GET | `/api/policies/{id}/attachments/{attachmentId}/content` | 本人申请及当前内容的文件 ID | 200，强制下载 |
 | GET | `/api/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content` | 本人申请、提交日志及文件 ID | 200，强制下载 |
 | GET | `/api/admin/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content` | 管理员可读申请、提交日志及文件 ID | 200，强制下载 |
+| GET | `/api/policy-reviews/{id}/time-changes/{changeId}/attachments/{attachmentId}/content?submissionVersion=2` | 核对获批轮次的阅读权限和该次改期的文件引用 | 200，强制下载 |
 | GET | `/api/policy-reviews/{id}/attachments/{attachmentId}/content?submissionVersion=2` | 审核详情阅读人、同一申请、指定轮次及该轮文件引用；产品运营的指派被移除后，凭该指派访问返回 404。[轮次授权](../architecture/policy-workflow-phase-c.md#api-与字段) | 200，强制下载 |
 
 上传返回 `id`、`originalName`、`size`（字节）、`contentType`（服务端推导）、`uploadedAt`（Instant）。下载固定返回 `application/octet-stream`、`Content-Disposition: attachment` 和 `X-Content-Type-Options: nosniff`。

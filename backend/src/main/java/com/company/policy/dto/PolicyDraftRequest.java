@@ -46,21 +46,6 @@ public record PolicyDraftRequest(
         }
     }
 
-    public PolicyDraftRequest withTimeAdjustment(EndAdjustment change) {
-        return new PolicyDraftRequest(
-                recordVersion,
-                perspective,
-                selectedPlatforms,
-                verifyType,
-                sceneTypes,
-                estimated,
-                startTime,
-                endTime,
-                specialRemark,
-                attachmentInfo,
-                new GoodsForm(goodsForm.cards(), change));
-    }
-
     public record Card(
             String key,
             @Schema(allowableValues = {"COMMON", "SPECIFIED"}) String cardType,
@@ -87,14 +72,6 @@ public record PolicyDraftRequest(
             String platformCode,
             String planKey,
             @JsonDeserialize(using = IntOnly.class) Integer quantity) {}
-
-    public record TimeAdjustment(
-            @JsonDeserialize(using = IntOnly.class) Integer recordVersion,
-            @Schema(description = "北京时间新截止时刻，精确到秒") String endTime,
-            @Schema(description = "已核对的原单实际截止。创建取列表 endTime，修改取详情 adjustmentSourceEnd。该值变化返回 409")
-                    String expectedSourceEnd,
-            @Schema(description = "必填，1 至 512 字") String reason,
-            @Schema(description = "选填的证明文件") List<Link> attachmentInfo) {}
 
     public record AdjustmentPreview(
             @JsonDeserialize(using = IntOnly.class) Integer recordVersion,

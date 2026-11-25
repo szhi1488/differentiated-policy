@@ -1,6 +1,6 @@
 # 页面接口总览
 
-更新日期 2026-11-24。申请人选品、申请及历史接口已接入。首提和重提均按本轮内容分流。没有确认段及随单时间调整时直接进入采购终审。有确认段或随单调整时，运营从本轮飞书私聊卡通过或退回。运营通过后转采购，采购在管理员「差异化政策」终审，通过即结束审核。管理员可查本公司已提交的政策、历轮审核与快照。接口同时提供单商品有效政策查询。管理员用户管理页面已接入七个后端接口。
+更新日期 2026-11-25。申请人选品、申请及历史接口已接入。首提和重提均按本轮内容分流。整轮存在实际叠加，且来自各叠加段的全部参与政策整单所选商品 ID 集合完全相同时，运营从本轮私聊卡通过或退回。其余轮次直接进入采购终审。运营通过后转采购，采购在管理员「差异化政策」终审，通过即结束审核。管理员可查本公司已提交的政策、历轮审核与快照。接口同时提供单商品有效政策查询。管理员用户管理页面已接入七个后端接口。
 
 ## 用户管理页面
 
@@ -54,15 +54,19 @@ GET /api/admin/policies/subsidy-timeline?spuId=101&ram=16GB&rom=512GB&dateFrom=2
 | 响应字段 | 含义 |
 | --- | --- |
 | `asOf`、`tracks[]` | 北京时间，精确到秒并带 `+08:00`。两张图共用一份结果。 |
-| `configurationGoodsCount` | 所查机型版本、RAM 和 ROM 对应的标准商品总数，包含下架商品。没有授权范围或配置不存在时为 0。页面按同一平台、同一时段核对实际覆盖的商品 ID 数量，避免将部分颜色误标为整组。 |
+| `configurationGoodsCount` | 所查机型版本、RAM 和 ROM 对应的标准商品总数，包含下架商品。没有授权范围或配置不存在时为 0。用于缺少整组标记的既有普通卡。新整组卡以获批轮次冻结的配置成员为准。 |
 | `tracks[].perspective`、`platformCode`、`goodsIds[]` | 零售按具体商品判定，完整历史和方案一致的普通商品合并。百亿轨道返回空的 `goodsIds`，表示该平台上同一机型版本、RAM 和 ROM 共用审核决定。两图均从各轮 `selections[].products[]` 展示原单实际申报的商品。 |
-| `tracks[].policies[]` | 每个轮次含字符串 `policyId`、`auditLogId`、对外 `policyCode`、`submissionVersion`、`approvedAt`、`policyFrom`、`policyThrough`、`verifyType`、`sceneTypes`、`estimated`。普通单默认有效至截止日 23:59:59。获批整单提前结束和延期轮次按实际截止秒。百亿预估字段为空。 |
+| `tracks[].policies[]` | 每个轮次含字符串 `policyId`、`auditLogId`、对外 `policyCode`、`submissionVersion`、`approvedAt`、`verifyType`、`sceneTypes`、`estimated`。百亿预估字段为空。`policyFrom`、`policyThrough` 保存该轮原单申报的起止时间。`effectiveThrough` 为截至 `asOf` 已获批的最新整单截止时间，计入历次延期和提前结束，包含截止当秒。 |
 | `policies[].matchesQuery` | 为 true 的轮次绘制政策行，包含原单期内整段未被采用的政策。其余轮次为展示完整原单期间的对照数据，可在相应时点的明细中引用。 |
-| `policies[].selections[]` | 按原商品卡及平台分配提供 `cardType`（COMMON／SPECIFIED）、商品快照 `products[]`、该平台的 `quantity` 和 `subsidy`。补贴含 `subsidyMode`、`fixedAmount`、`maxSubsidyAmount`、`ratio`、`priceBase`。金额和比例为十进制字符串。指定数量 0 与 null 分别表示零和未填写。商品名称缺失时仍返回实际商品 ID。 |
+| `policies[].selections[]` | 按原商品卡及平台分配提供 `cardType`（COMMON／SPECIFIED）、商品快照 `products[]`、新整组普通卡在该配置的冻结件数 `wholeConfigurationGoodsCount`、该平台的 `quantity` 和 `subsidy`。补贴含 `subsidyMode`、`fixedAmount`、`maxSubsidyAmount`、`ratio`、`priceBase`。金额和比例为十进制字符串。指定数量 0 与 null 分别表示零和未填写。商品名称缺失时仍返回实际商品 ID。 |
 | `tracks[].segments[]` | 每段含 `startAt`、`endAt` 和采用、未采用两份名单 `adoptedAuditLogIds[]`、`excludedAuditLogIds[]`。在同轨道的政策轮次中按审核日志 ID 取原单和方案。区间左闭右开，末段 `endAt=null` 时仅表示记录到 `asOf` 当秒。实际记录截至 `asOf` 当秒。 |
 | `tracks[].plannedSegments[]` | 字段与历史段相同，每段均有明确的右开结束时间。查询范围包含未来时，按截至 `asOf` 已通过的审核快照回放完整原单期间的后续安排。跨越查询当秒的组合从下一秒开始列入计划。按轨道、审核轮次和确认过的名单区分计划采用与未采用，可只选旧单或叠加多单。之后有新政策获批时，重新查询可取得更新的计划。 |
 
-例如拼多多百亿示例中，201 和 202 分别对应审核日志 `"81"` 和 `"82"`。若某段只采用 201，该段的两份名单分别为 `["81"]` 和 `["82"]`。若两单叠加，则采用名单包含两个 ID，未采用名单为空。前端可在同一份响应内核对两单，移动指针、展开独立商品和缩放都无需再次发起请求。
+时间轴左侧以 `policyFrom`、`effectiveThrough` 展示整单当前有效期。选择色块后，右侧取所选执行段的起止时间。有确定结束时间时，展示的末秒为 `endAt` 前一秒。明细中的每张政策按查询当秒 `asOf` 与该单当前有效期标记「待生效」「生效中」或「已结束」。
+
+两种角色在重新查询、切回查询菜单、标签页恢复可见或窗口重新获得焦点时重读数据。同一浏览器其他标签页成功独立改期或采购终审批准后，可见的查询页也会按上次已应用的条件重查。政策明细以 `policyCode`、状态及两项补贴参数同排展示。固定补贴用 `fixedAmount` 和 `maxSubsidyAmount`，比例补贴用 `ratio` 和 `priceBase`。[页面布局与示例](../architecture/frontend-development.md#机型补贴查询的政策有效期与执行时段)
+
+例如拼多多百亿示例中，201 和 202 分别对应审核日志 `"81"` 和 `"82"`。若某段只采用 201，该段的两份名单分别为 `["81"]` 和 `["82"]`。若两单叠加，则采用名单包含两个 ID，未采用名单为空。前端可在同一份响应内核对两单，查看独立商品、移动指针和缩放都无需再次发起请求。
 
 在百亿按配置审核的时段，普通原单整组申报、另一单只报白色时，交叉段按各原单的商品拆行。每行的采用或未采用状态都取该配置的同一份名单。点击其余颜色也能核对整组批准的政策和各自原单商品。交叉段外恢复按当段原单的商品合并。[页面展示](../architecture/admin-workspace.md#机型补贴查询)
 
@@ -70,10 +74,10 @@ GET /api/admin/policies/subsidy-timeline?spuId=101&ram=16GB&rom=512GB&dateFrom=2
 
 ### 区间与时点如何对应
 
-- 各轮从 `max(申请开始时间, 本轮审核通过时间)` 起参与选择。普通原单默认取截止日最后一秒，延期单取所选截止秒。已获批的提前结束调整按每张旧单的实际截止秒限制查询。零售按具体商品、完整场景组合与核销类型分组，并应用该段勾选的政策名单，百亿按配置应用本轮决定。时间轴复用单时点查询的采用规则。[覆盖规则](../business/override-engine.md#5-申请人后端区间试算)
-- 查询须带入起始日前已经适用的政策。按商品审核的时段，依各商品的审核轮次、采用名单和补贴参数分组。按整配置审核的时段，同一轮次中方案相同的普通卡可合并显示，金额、上限、比例或计算基数有差异时分行。两图都以 `goodsId` 区分同色的不同商品。指定卡展开或收起只改变可见行，采用名单取自服务端。
+- 各轮从 `max(申请开始时间, 本轮审核通过时间)` 起参与选择。提前结束缩短原单适用期，延期按同一原单号增加适用时段，截止均含实际截止当秒。到期后才办理延期时，原截止与重新生效之间的空档保留。零售按具体商品、完整场景组合与核销类型分组并应用该段名单，百亿按配置应用本轮决定。时间轴复用单时点查询的采用规则。[覆盖规则](../business/override-engine.md#5-申请人后端区间试算)
+- 查询须带入起始日前已经适用的政策。按商品审核的时段，依各商品的审核轮次、采用名单和补贴参数分组。按整配置审核的时段，同一轮次中方案相同的普通卡可合并显示，金额、上限、比例或计算基数有差异时分行。两图都以 `goodsId` 区分同色的不同商品。指定卡默认可见，采用名单取自服务端。
 - 例如零售京东原先给黑、白两件商品各补 100 元。完整场景组合与核销类型相同的新单只给黑色补 150 元，11 月 10 日 09:00 起生效。假设申请人在黑色的交叉段单选新单且已提前获批，则 08:59:59 两色仍各补 100 元，09:00:00 黑色改为 150 元，白色仍为 100 元。若该段只勾旧单，黑色在 09:00:00 也仍是 100 元。[单商品时点查询](admin-api.md#覆盖预览与有效政策)
-- 前端共用一次返回的区间完成悬停、选中色块、时点面板、双图缩放和独立商品开关。「当前时间」沿用现有浏览器北京时间与日期调整规则，重新查询当前所选配置，恢复完整缩放，两图与面板的指针都定位在返回结果可覆盖的当前秒。
+- 前端共用一次返回的区间完成悬停、选中色块、时点面板、双图缩放和独立商品明细。「当前时间」沿用现有浏览器北京时间与日期调整规则，重新查询当前所选配置，恢复完整缩放，两图与面板的指针都定位在返回结果可覆盖的当前秒。
 
 ### 后端验证
 
@@ -91,18 +95,19 @@ GET /api/admin/policies/subsidy-timeline?spuId=101&ram=16GB&rom=512GB&dateFrom=2
 | 申请人提交范围确认 | `GET /api/policies/{id}/submission-preview`、`POST /api/policies/{id}/submission-preview`、`POST /api/policies/{id}/submit` | GET 返回交叉时段、各旧单可提前或延期的权限。确认调整时一次 POST 全部所选旧单及各自的新截止、必填原因和选传证明文件，重算交叉时段，正式提交时送回该次预览的确认凭证及决定。[整单提前结束](policy-api.md#整单提前结束) |
 | 我的提交 `#/apply/submissions` | `GET /api/policies/mine`、`GET /api/policies/{id}` | 按状态、渠道、整单平台分页查本人申请，查看详情，`#/apply?policyId=<id>` 继续编辑草稿或驳回申请 |
 | 我的提交 `#/apply/submissions` | `DELETE /api/policies/{id}/draft?recordVersion={version}` | 二次确认后物理删除本人未提交草稿，刷新列表和分页并清理该草稿编辑缓存 |
-| 我的提交 → 调整政策时间 | `POST /api/policies/{id}/time-adjustment-draft`、`PUT /api/policies/{id}/time-adjustment-date` | 依 `canShorten`、`canExtend` 提供入口。提前结束申请按整单缩短，延期申请自实际截止后一秒接续。原因必填，证明文件选传，均单独送审 |
+| 我的提交 → 调整政策时间 | `GET /api/policies/time-adjustments/options`、`POST /api/policies/time-adjustments/preview`、`POST /api/policies/time-adjustments` | 筛选栏统一选择一张或多张有权调整的已通过政策。逐项填写原因、选传证明，核对延期交叉段后整批直接通过并登记群通知。[申请人接口](policy-api.md#延长已通过的政策) |
 | 驳回原因（详情与继续编辑页） | `GET /api/policies/{id}/audit-logs?page=1&pageSize=1` | 读取并核对本轮退回记录，页面展示退回环节、原因、实际办理人和时间 |
 | 申请人历轮记录（仅后端接口） | `GET /api/policies/{id}/audit-logs`、`GET /api/policies/{id}/audit-logs/{logId}` | 保留日志与快照读取能力，申请人页面不提供历轮入口 |
-| 飞书卡片 → 查看本轮详情 | `GET /api/policy-reviews/{id}?submissionVersion=2` | 按指定轮次只读展示快照、逐段依据、成员及结果 |
+| ERP 按轮只读详情 | `GET /api/policy-reviews/{id}?submissionVersion=2` | 按指定轮次只读展示快照、逐段依据、成员及结果 |
 | 产品运营飞书初审 | `card.action.trigger` | 当前初审成员携带 `recordVersion`、`submissionVersion` 提交同意或退回。首个有效决定生效，退回须填写原因 |
 | 审核轮次附件 | `GET /api/policy-reviews/{id}/attachments/{attachmentId}/content?submissionVersion=2` | 按该轮详情阅读权及快照中的文件引用下载。[附件接口](attachment-api.md#政策绑定与历史保护) |
 | 管理员政策审核设置、在途改派 | `GET/PUT /api/admin/policy-review-settings`、`POST /api/admin/policy-reviews/{id}/reassign` | 设置供后续首提与重提使用。在政策详情改派只变更本轮目标组。[设置与改派](policy-review-settings.md) |
 | 差异化政策 `#/admin/policies` | `GET /api/admin/policies`、`GET /api/admin/policies/{id}`、`POST /api/admin/policies/{id}/review` | 筛选已提交政策并查看本轮快照，审核通过前复核本轮决定，未确认的组合由管理员驳回后重提 |
+| 管理员原单时间调整记录 | `GET /api/admin/policies/{id}` | 「当前申请」显示 `timeHistory.initialEnd` 和 `currentEnd`。其后的「时间调整记录」按详情自带的 `timeHistory.changes` 展示该单历次调整，再后为「审核记录」。[页签与字段](../architecture/frontend-development.md#政策审核详情的时间调整记录) |
 | 管理员历轮审核 | `GET /api/admin/policies/{id}/audit-logs`、`GET /api/admin/policies/{id}/audit-logs/{logId}` | 查看与审核窗口的「审核记录」页签分页读取历轮结果，支持查看指定轮次完整快照及附件；历史只读 |
 | 管理员覆盖与有效政策查询（后端接口） | `GET /api/admin/policies/{id}/override-preview`、`GET /api/admin/policies/effective` | 预览返回本轮决定及能否继续审核，实际查询返回指定时点的全部适用政策 |
 
-- 两个抽屉均支持配置多选，「全部配置」按当前品牌、系列和机型范围全选。普通卡默认跨页勾选所选配置的在售商品。翻页、搜索或再次选择配置后，手动取消的商品仍保持取消。草稿和正式提交保存最终勾选的 `goodsId`。指定卡单选一件商品，数量按平台选填。[选品规则](../business/perspective-rules.md#选商品与配置)
+- 「选择适用商品」中的「选择手机型号」支持多选整组和当前品牌、系列、机型范围内的「全部配置」。普通卡跨页收齐所选配置的在售商品，翻页和关键词只筛选预览。「指定适用机型」单选一件商品，数量按平台选填。两种方式均保存实际商品 ID。[选品规则](../business/perspective-rules.md#选商品与配置)
 - 已有普通卡取消配置时，按完整卡片暂存该配置全部商品的移除，确认保存配置后才更新表单；取消编辑不改原卡。申请地址切换复用未保存内容确认，取消导航不发起目标详情请求，确认后继续使用原有 `GET /api/policies/{id}`。两处修复未新增接口或修改 DTO、数据库结构。
 - `#/apply` 的「提交申请」先保存表单，再用返回版本读取覆盖预览，无交叉且无调整时可按保存版本直提。有交叉时携带保存版本 `recordVersion`、预览凭证 `confirmationToken` 及分段 `decisions`。随单调整旧政策截止时，还须携带逐单的 `endAdjustments` 和调整后预览的凭证，重算后无交叉则 `decisions` 为空数组。驳回重提沿用原申请 ID 和单号，新增一轮。确认成功后移除地址中的申请 ID，清理表单和本地附件状态并返回新申请页首；失败或结果待核对时保留输入。已提交政策从「我的提交」查看。[申请人接口](policy-api.md)
 - 「我的提交」列表不显示提交轮次，详情只展示当前申请，不提供历轮审核或快照入口。后台保留日志和快照。草稿及已驳回申请的编辑入口回填当前表单，待审核和已通过申请只读。[申请人接口](policy-api.md)

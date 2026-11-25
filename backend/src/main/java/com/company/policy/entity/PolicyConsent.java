@@ -12,18 +12,9 @@ public record PolicyConsent(
         int ruleVersion,
         List<ComparedRound> comparedRounds,
         List<Decision> decisions,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<EndAdjustment> endAdjustments,
-        @JsonInclude(JsonInclude.Include.NON_NULL) String batchPolicyKey) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<EndAdjustment> endAdjustments) {
     public boolean supported() {
         return ruleVersion >= 2 && ruleVersion <= 4;
-    }
-
-    public PolicyConsent(
-            int ruleVersion,
-            List<ComparedRound> comparedRounds,
-            List<Decision> decisions,
-            List<EndAdjustment> endAdjustments) {
-        this(ruleVersion, comparedRounds, decisions, endAdjustments, null);
     }
 
     public PolicyConsent {
@@ -35,8 +26,13 @@ public record PolicyConsent(
         this(ruleVersion, comparedRounds, decisions, List.of());
     }
 
-    /** 原截止和审核日志标识一起核验，防止覆盖另一笔先通过的调整。 */
-    public record Target(String policyId, String auditLogId, String previousEnd) {}
+    /** 原政策、获批轮次和当前记录版本共同构成本次调整的核对依据。 */
+    public record Target(
+            String policyId, String auditLogId, String previousEnd, Integer recordVersion) {
+        public Target(String policyId, String auditLogId, String previousEnd) {
+            this(policyId, auditLogId, previousEnd, null);
+        }
+    }
 
     public record EndAdjustment(
             Target target,

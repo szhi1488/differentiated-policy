@@ -13,6 +13,7 @@ import {
   billionGroupHistory,
   directory,
   history,
+  midnightPolicyHistory,
   retailGroupHistory,
 } from '../fixtures/subsidy-history'
 
@@ -219,11 +220,53 @@ async function openPage() {
   wrapper = mount(AdminModelSubsidiesPage)
   await flushPromises()
 }
+
+it('不足一个像素的单秒交界可点击，定位到该秒且悬停显示真实截止', async () => {
+  const at = '2026-12-08T00:00:00'
+  const after = '2026-12-08T00:00:01'
+  const base = readTimelineHistory(retailGroupHistory()).rows[0]
+  const row = {
+    ...base,
+    parts: [{ startAt: at, endAt: after, used: true, status: '计划采用' }],
+  }
+  wrapper = mount(PolicySubsidyTimeline, {
+    props: {
+      rows: [row],
+      range: [at, '2026-12-09T00:00:00'],
+      currentAt: AS_OF,
+      cursorAt: after,
+      label: '零售',
+    },
+  })
+  const option = charts[0].getOption()
+  const series = option.series[0]
+  const [entry] = series.data
+  const group = series.renderItem(
+    { coordSys: { x: 100, y: 0, width: 600, height: 150 } },
+    {
+      value: (i) => entry[i],
+      coord: ([time]) => [200 + (time - entry[1]) / 120000, 80],
+    },
+  )
+  expect(group.children.find((child) => child.type === 'circle')?.shape).toMatchObject({
+    cx: 200,
+    cy: 64,
+    r: 5,
+  })
+  expect(option.tooltip.formatter({ data: entry })).toContain('本段计划结束 2026-12-08 00:00:00')
+  charts[0].clickPolicy(entry)
+  expect(wrapper.emitted('select-policy')[0][1]).toBe(at)
+})
 const select = (label) =>
   wrapper.findAllComponents({ name: 'ElSelect' }).find((s) => s.props('ariaLabel') === label)
 const button = (label) => wrapper.findAll('button').find((b) => b.text() === label)
 const timelines = () => wrapper.findAllComponents(PolicySubsidyTimeline)
 const panel = () => wrapper.get('.model-subsidy-detail-card')
+const adoptedPolicyCodes = () =>
+  panel()
+    .findAll('.model-subsidy-source:not(.muted) header strong')
+    .map((item) => item.text())
+    .sort()
 const lastParams = () => new URL(fetch.mock.calls.at(-1)[0], 'http://localhost').searchParams
 async function move(at, chart = timelines()[0]) {
   chart.vm.$emit('cursor-change', at)
@@ -298,7 +341,6 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
   select('平台').vm.$emit('update:modelValue', 'PDD')
   const dates = ['2026-11-04', '2026-11-20']
   wrapper.getComponent({ name: 'ElDatePicker' }).vm.$emit('update:modelValue', dates)
-  await wrapper.get('input[type="checkbox"]').setValue(true)
   await wrapper.get('form').trigger('submit')
   await flushPromises()
   expect(timelines()).toHaveLength(0)
@@ -320,7 +362,11 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
   expect(select('配置').props('modelValue')).toBe('16GB+1024GB')
   expect(select('平台').props('modelValue')).toBe('PDD')
   expect(wrapper.getComponent({ name: 'ElDatePicker' }).props('modelValue')).toEqual(dates)
-  expect(wrapper.get('input[type="checkbox"]').element.checked).toBe(true)
+  expect(
+    timelines()[0]
+      .props('rows')
+      .some((row) => row.plan.cardType === 'SPECIFIED'),
+  ).toBe(true)
   expect(timelines()[0].props('label')).toContain('一加 15')
 
   await navigate('admin-policies')
@@ -332,7 +378,6 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
   await navigate('admin-policies')
   await navigate('admin-model-subsidies')
   expect(requests.at(-1)).toEqual(defaults)
-  expect(wrapper.get('input[type="checkbox"]').element.checked).toBe(false)
 })
 
 it('默认两张时间轴展示整月，跨月政策保留原单日期', async () => {
@@ -340,13 +385,15 @@ it('默认两张时间轴展示整月，跨月政策保留原单日期', async (
   Object.assign(sample.tracks[0].policies[0], {
     policyFrom: '2026-10-15T00:00:00+08:00',
     policyThrough: '2026-12-15T23:59:59+08:00',
+    effectiveThrough: '2026-12-15T23:59:59+08:00',
   })
   fetch.mockResolvedValueOnce(Response.json(directory)).mockResolvedValueOnce(Response.json(sample))
   await openPage()
   for (const chart of timelines()) {
     expect(chart.props('range')).toEqual(['2026-11-01T00:00:00', '2026-11-30T23:59:59'])
   }
-  expect(timelines()[0].text()).toContain('2026-10-15 至 2026-12-15')
+  expect(timelines()[0].text()).toContain('起 2026-10-15 00:00:00')
+  expect(timelines()[0].text()).toContain('止 2026-12-15 23:59:59')
 })
 
 it.each([
@@ -383,14 +430,17 @@ it.each([
   expect(panel().text()).toContain('百亿渠道')
 })
 
-it('点击整组、拆出的单色及恢复后的色块可核对各自当段的商品和采用政策', async () => {
+it('同平台整组只占一行，交叉段在原行标出部分采用，并可查看独立商品', async () => {
   fetch
     .mockResolvedValueOnce(Response.json(directory))
-    .mockResolvedValueOnce(Response.json(retailGroupHistory()))
+    .mockResolvedValueOnce(Response.json(retailGroupHistory('SPECIFIED')))
   await openPage()
   const chart = timelines()[0]
   const rows = chart.props('rows')
   expect(chart.text()).toContain('京东 · 整组配置')
+  expect(rows.map((row) => row.segment.label).sort()).toEqual(
+    ['整组配置', '独立商品 · 可可棕'].sort(),
+  )
   async function clickPart(code, label, time) {
     const at = '2026-11-' + time
     await move(at, chart)
@@ -421,15 +471,21 @@ it('点击整组、拆出的单色及恢复后的色块可核对各自当段的�
     ]),
   )
   await move('2026-11-15T00:00:00', chart)
-  expect(panel().get('.model-subsidy-source.inspected:not(.muted)').text()).toContain('ZC-000023')
-  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('初雪白')
-  await clickPart('ZC-000024', '可可棕', '15T00:00:00')
+  expect(chart.get('.timeline-policy-states').text()).toContain('该时点部分采用')
+  const mixedEntry = charts[0]
+    .getOption()
+    .series[0].data.find(([index, , , part]) => rows[index].parts[part].mixed)
+  const tooltip = charts[0].getOption().tooltip.formatter({ data: mixedEntry })
+  expect(tooltip).toContain('采用商品 初雪白、奇遇喵')
+  expect(tooltip).toContain('未采用商品 可可棕')
+  await clickPart('ZC-000023', '整组配置', '15T00:00:00')
+  await clickPart('ZC-000024', '独立商品 · 可可棕', '15T00:00:00')
   expect(panel().get('.model-subsidy-source.inspected').text()).toContain('可可棕')
   expect(panel().get('.model-subsidy-source.muted').text()).toContain('ZC-000023')
-  expect(panel().get('.model-subsidy-detail-summary').text()).not.toContain('初雪白')
+  expect(panel().get('.model-subsidy-source.inspected').text()).not.toContain('初雪白')
   await move('2026-11-18T00:00:00', chart)
   expect(panel().get('.model-subsidy-source:not(.muted)').text()).toContain('ZC-000023')
-  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('整组配置')
+  expect(panel().get('.model-subsidy-source:not(.muted)').text()).toMatch(/可可棕.*初雪白.*奇遇喵/)
   await clickPart('ZC-000023', '整组配置', '18T00:00:00')
   expect(panel().text()).toContain('本段计划采用')
   expect(panel().find('.model-subsidy-source.muted').exists()).toBe(false)
@@ -441,7 +497,11 @@ it('采用名单按轨道及审核轮次，展示对照单、缺口、晚审切�
   const chart = timelines()[0]
   const [old, estimate] = chart.props('rows')
   expect(chart.props('rows')).toHaveLength(2)
-  expect(old.plan.usePeriods).toHaveLength(2)
+  expect(old.plan.usePeriods.map(({ startAt, endAt }) => [startAt, endAt])).toEqual([
+    ['2026-11-01T00:00:00', '2026-11-03T00:00:00'],
+    ['2026-11-03T00:00:00', '2026-11-05T10:29:59'],
+    ['2026-11-09T00:00:00', '2026-11-16T12:00:01'],
+  ])
   expect(estimate.plan.estimated).toBe(true)
   chart.vm.$emit('select-policy', estimate, '2026-11-02T23:59:59')
   await nextTick()
@@ -454,7 +514,7 @@ it('采用名单按轨道及审核轮次，展示对照单、缺口、晚审切�
   await move('2026-11-08T23:59:59')
   expect(panel().get('.model-subsidy-source.muted').text()).toContain('ZC-000001')
   await move('2026-11-09T00:00:00')
-  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('跨组叠加')
+  expect(adoptedPolicyCodes()).toEqual(['ZC-000001', 'ZC-000002'])
   await move(AS_OF)
   expect(panel().text()).toContain('截至查询时')
   const periods = panel().findAll('.model-subsidy-upcoming li strong')
@@ -465,8 +525,7 @@ it('采用名单按轨道及审核轮次，展示对照单、缺口、晚审切�
   expect(panel().text()).toContain('本段计划未采用')
   expect(wrapper.get('.timeline-policy-states span').text()).toBe('计划采用')
   await move('2026-11-20T00:00:00')
-  expect(panel().text()).toContain('跨组叠加')
-  expect(panel().findAll('.model-subsidy-source:not(.muted)')).toHaveLength(2)
+  expect(adoptedPolicyCodes()).toEqual(['ZC-000001', 'ZC-000002'])
   expect(fetch).toHaveBeenCalledTimes(2)
   await button('当前时间').trigger('click')
   await flushPromises()
@@ -475,18 +534,54 @@ it('采用名单按轨道及审核轮次，展示对照单、缺口、晚审切�
   expect(panel().text()).not.toContain('实际开始')
 })
 
-it('百亿同一轮的多个分配只计一单，展开指定商品保留原采用与未采用名单及数量', async () => {
+it('当前查询仅命中独立商品时，两渠道首次进入直接显示商品及数量', async () => {
+  const sample = structuredClone(history)
+  const original = sample.tracks[1].policies[1]
+  const only = {
+    ...sample.tracks[1],
+    policies: [original],
+    segments: [
+      {
+        startAt: original.policyFrom,
+        endAt: null,
+        adoptedAuditLogIds: [original.auditLogId],
+        excludedAuditLogIds: [],
+      },
+    ],
+    plannedSegments: [],
+  }
+  sample.tracks = [{ ...only, perspective: 'RETAIL', platformCode: 'JD', goodsIds: ['52'] }, only]
+  fetch.mockResolvedValueOnce(Response.json(directory)).mockResolvedValueOnce(Response.json(sample))
+  await openPage()
+  expect(timelines()).toHaveLength(2)
+  for (const chart of timelines()) {
+    const [row] = chart.props('rows')
+    expect(row.segment.label).toBe('独立商品 · #52')
+    chart.vm.$emit('select-policy', row, AS_OF)
+    await nextTick()
+    expect(panel().find('.model-subsidy-detail-summary').exists()).toBe(false)
+    expect(panel().text()).not.toMatch(/单独适用|本段(?:申报)?商品|审核范围|整组配置|Find X8/)
+    expect(
+      panel()
+        .findAll('.model-subsidy-detail-fields dt')
+        .map((field) => field.text()),
+    ).toEqual(['本段实际开始', '本段实际结束'])
+    expect(panel().get('.model-subsidy-source.inspected header strong').text()).toBe('ZC-000005')
+    expect(panel().get('.model-subsidy-source.inspected').text()).toMatch(/原单指定商品\s*·\s*#52/)
+    expect(panel().text()).toMatch(/该平台数量\s*未填写/)
+  }
+})
+
+it('百亿同一轮的多个分配只计一单，独立商品直接显示并保留采用名单及数量', async () => {
   await openPage()
   const chart = timelines()[1]
   const first = chart.props('rows')[0]
-  expect(chart.props('rows')).toHaveLength(1)
   chart.vm.$emit('select-policy', first, AS_OF)
   await nextTick()
   expect(panel().get('.model-subsidy-source-heading').text()).toMatch(/采用\s*1 单/)
   expect(panel().findAll('.model-subsidy-source:not(.muted)')).toHaveLength(2)
   expect(panel().text()).toMatch(/该平台数量\s*0/)
   expect(panel().get('.model-subsidy-source.muted').text()).toMatch(/该平台数量\s*未填写/)
-  await wrapper.get('input[type="checkbox"]').setValue(true)
   expect(chart.props('rows')).toHaveLength(3)
   expect(new Set(chart.props('rows').map((r) => r.key)).size).toBe(3)
   expect(chart.props('rows')[2].parts.map((p) => p.status ?? p.used)).toEqual([
@@ -496,11 +591,11 @@ it('百亿同一轮的多个分配只计一单，展开指定商品保留原采�
   ])
   expect(wrapper.text()).toContain('独立商品 · #52')
   await move('2026-11-07T23:59:59', chart)
-  expect(panel().text()).toContain('同配置叠加')
+  expect(adoptedPolicyCodes()).toEqual(['ZC-000004', 'ZC-000004', 'ZC-000005'])
   expect(fetch).toHaveBeenCalledTimes(2)
 })
 
-it('百亿点击其他颜色仍展示配置级换单和叠加，展开独立商品可查看数量，结束后重新显示整组', async () => {
+it('百亿按原单展示整组和独立商品，配置级换单和叠加在相应时段显示', async () => {
   fetch
     .mockResolvedValueOnce(Response.json(directory))
     .mockResolvedValueOnce(Response.json(billionGroupHistory('SPECIFIED')))
@@ -508,16 +603,15 @@ it('百亿点击其他颜色仍展示配置级换单和叠加，展开独立商�
   const chart = timelines()[0]
   const rows = () => chart.props('rows')
   expect(chart.text()).toContain('拼多多 · 整组配置')
-  expect(rows().some((row) => row.plan.cardType === 'SPECIFIED')).toBe(false)
-  const others = rows().find(
-    (row) => row.plan.policyCode === 'ZC-000023' && row.segment.label === '初雪白、奇遇喵',
+  expect(rows().some((row) => row.plan.cardType === 'SPECIFIED')).toBe(true)
+  expect(rows()).toHaveLength(2)
+  const group = rows().find(
+    (row) => row.plan.policyCode === 'ZC-000023' && row.segment.label === '整组配置',
   )
-  expect(others).toBeDefined()
-  chart.vm.$emit('select-policy', others, AS_OF)
+  expect(group).toBeDefined()
+  chart.vm.$emit('select-policy', group, AS_OF)
   await nextTick()
-  const summary = panel().get('.model-subsidy-detail-summary').text()
-  expect(summary).toMatch(/审核范围\s*·\s*整组配置/)
-  expect(summary).toMatch(/本段申报商品\s*·\s*初雪白/)
+  expect(panel().get('.model-subsidy-upcoming p').text()).toMatch(/审核范围\s*·\s*整组配置/)
   expect(
     panel()
       .findAll('.model-subsidy-upcoming li strong')
@@ -534,18 +628,15 @@ it('百亿点击其他颜色仍展示配置级换单和叠加，展开独立商�
     expect(whole).toContain(color)
   }
   await move('2026-11-17T00:00:00', chart)
-  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('同配置叠加')
   expect(panel().get('.model-subsidy-source-heading').text()).toMatch(/本段计划采用\s*2 单/)
-  expect(panel().findAll('.model-subsidy-source:not(.muted)')).toHaveLength(2)
-  await wrapper.get('input[type="checkbox"]').setValue(true)
+  expect(adoptedPolicyCodes()).toEqual(['ZC-000023', 'ZC-000024'])
   const specified = rows().find((row) => row.plan.cardType === 'SPECIFIED')
   expect(specified.segment.label).toBe('独立商品 · 可可棕')
   chart.vm.$emit('select-policy', specified, '2026-11-17T23:59:59')
   await nextTick()
   expect(panel().get('.model-subsidy-source.inspected').text()).toContain('ZC-000024')
   await move('2026-11-18T00:00:00', chart)
-  expect(panel().get('.model-subsidy-detail-summary').text()).toContain('整组配置')
-  expect(panel().get('.model-subsidy-source').text()).toContain('ZC-000023')
+  expect(panel().get('.model-subsidy-source').text()).toMatch(/ZC-000023.*可可棕.*初雪白.*奇遇喵/)
   expect(panel().findAll('.model-subsidy-source')).toHaveLength(1)
   expect(fetch).toHaveBeenCalledTimes(2)
 })
@@ -586,13 +677,17 @@ it('保留整段未采用政策及旧单超过原截止的已知采用段，查�
   const sample = structuredClone(history)
   sample.tracks[1].plannedSegments = []
   sample.tracks[1].policies[0].policyThrough = '2026-11-06T23:59:59+08:00'
+  sample.tracks[1].policies[0].effectiveThrough = sample.tracks[1].policies[0].policyThrough
   sample.tracks[1].segments[0].adoptedAuditLogIds = ['104']
   sample.tracks[1].segments[0].excludedAuditLogIds = ['105']
   const { rows } = readTimelineHistory(sample)
   const old = rows.find((r) => r.plan.auditLogId === '104')
   expect(old.endAt).toBe('2026-11-16T12:00:01')
   const unused = rows.find((r) => r.plan.auditLogId === '105')
-  expect(unused.parts.map((p) => p.used)).toEqual([false])
+  expect(unused.parts.map(({ startAt, endAt, used }) => [startAt, endAt, used])).toEqual([
+    ['2026-11-01T00:00:00', '2026-11-08T00:00:00', false],
+    ['2026-11-08T00:00:00', '2026-11-16T12:00:01', false],
+  ])
   await openPage()
   wrapper
     .getComponent({ name: 'ElDatePicker' })
@@ -609,6 +704,7 @@ it('十二月的已通过百亿政策定位到计划首日，展示原单金额�
     policyCode: 'ZC-000008',
     policyFrom: '2026-12-02T00:00:00+08:00',
     policyThrough: '2026-12-05T23:59:59+08:00',
+    effectiveThrough: '2026-12-05T23:59:59+08:00',
   })
   plan.selections = [plan.selections[0]]
   Object.assign(plan.selections[0].subsidy, { fixedAmount: '100.00', maxSubsidyAmount: '200.00' })
@@ -642,19 +738,25 @@ it('十二月的已通过百亿政策定位到计划首日，展示原单金额�
   const [chart] = timelines()
   expect(chart.props('cursorAt')).toBe('2026-12-02T00:00:00')
   const [row] = chart.props('rows')
-  expect(row.parts).toEqual([
+  expect(row.parts).toMatchObject([
     {
       startAt: '2026-12-02T00:00:00',
       endAt: '2026-12-06T00:00:00',
       status: '计划采用',
       used: true,
       open: false,
+      mixed: false,
+      scopes: [{ used: true, scope: { planned: true, label: '整组配置' } }],
     },
   ])
   expect(row.plan.usePeriods).toEqual([])
-  expect(panel().text()).toContain('ZC-000008')
-  expect(panel().text()).toContain('固定 100 元')
-  expect(panel().text()).toContain('200 元')
+  const header = panel().get('.model-subsidy-source header')
+  expect(header.findAll('strong,small,span').map((field) => field.text())).toEqual([
+    'ZC-000008',
+    '待生效',
+    '固定 100 元',
+    '补贴上限：200 元',
+  ])
   expect(panel().text()).not.toContain('该时点采用')
   expect(panel().text()).not.toContain('未采用')
   await move('2026-12-05T23:59:59', chart)
@@ -662,6 +764,165 @@ it('十二月的已通过百亿政策定位到计划首日，展示原单金额�
   await move('2026-12-06T00:00:00', chart)
   expect(panel().find('.model-subsidy-source').exists()).toBe(false)
 })
+
+async function queryDecember(sample) {
+  await openPage()
+  fetch.mockResolvedValueOnce(Response.json(sample))
+  wrapper
+    .getComponent({ name: 'ElDatePicker' })
+    .vm.$emit('update:modelValue', ['2026-12-01', '2026-12-31'])
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+  return timelines()[0]
+}
+
+it('切回窗口按已应用条件读取连续改期，保留核对时点、缩放、选中政策和正在编辑的筛选', async () => {
+  const sample = midnightPolicyHistory('RETAIL')
+  const [track] = sample.tracks
+  const [policy] = track.policies
+  policy.selections[0].subsidy = { subsidyMode: 'RATIO', ratio: '12.00', priceBase: 'HAND_PRICE' }
+  const chart = await queryDecember(sample)
+  const at = '2026-12-07T10:00:00'
+  chart.vm.$emit('select-policy', chart.props('rows')[0], at)
+  chart.vm.$emit('zoom-change', { start: 5, end: 50 })
+  await nextTick()
+  const applied = Object.fromEntries(lastParams())
+  const picker = wrapper.getComponent({ name: 'ElDatePicker' })
+  const draftDates = ['2026-12-20', '2026-12-26']
+  picker.vm.$emit('update:modelValue', draftDates)
+  select('平台').vm.$emit('update:modelValue', 'JD')
+  await nextTick()
+  for (const [through, exclusive, event] of [
+    ['2026-12-18T00:00:00', '2026-12-18T00:00:01', 'focus'],
+    ['2026-12-07T12:00:00', '2026-12-07T12:00:01', 'visibilitychange'],
+    ['2026-12-12T23:59:59', '2026-12-13T00:00:00', 'storage'],
+  ]) {
+    policy.effectiveThrough = through + '+08:00'
+    track.plannedSegments[0].endAt = exclusive + '+08:00'
+    fetch.mockResolvedValueOnce(Response.json(sample))
+    const before = fetch.mock.calls.length
+    if (event === 'storage') {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'policy-subsidy-updated', newValue: '1' }),
+      )
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'policy-subsidy-updated', newValue: null }),
+      )
+    } else {
+      const target = event === 'focus' ? window : document
+      target.dispatchEvent(new Event(event))
+    }
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledTimes(before + 1)
+    expect(Object.fromEntries(lastParams())).toEqual(applied)
+    expect(chart.props('zoom')).toEqual({ start: 5, end: 50 })
+    expect(chart.props('cursorAt')).toBe(at)
+    expect(chart.get('.timeline-policy-row').text()).toContain('止 ' + through.replace('T', ' '))
+    const selected = panel().get('.model-subsidy-source.inspected header')
+    expect(selected.findAll('strong,small,span').map((field) => field.text())).toEqual([
+      policy.policyCode,
+      '待生效',
+      '比例 12%',
+      '计算基数：到手价',
+    ])
+    expect(panel().get('.model-subsidy-detail-fields').text()).toContain(
+      '本段计划结束' + through.replace('T', ' '),
+    )
+    expect(picker.props('modelValue')).toEqual(draftDates)
+    expect(select('平台').props('modelValue')).toBe('JD')
+  }
+})
+
+it.each(['RETAIL', 'BILLION'])(
+  '%s 时间轴与悬停显示最新有效期，明细仅展示阶段起止，截止秒仍可核对',
+  async (channel) => {
+    const chart = await queryDecember(midnightPolicyHistory(channel))
+    const from = '2026-12-07 00:00:00'
+    const through = '2026-12-08 00:00:00'
+    expect(
+      chart
+        .get('.timeline-policy-row')
+        .findAll('time')
+        .map((time) => time.text()),
+    ).toEqual(['起 ' + from, '止 ' + through])
+    const option = charts.at(-1).getOption()
+    const tooltip = option.tooltip.formatter({ data: option.series[0].data[0] })
+    for (const text of [
+      '政策开始 ' + from,
+      '当前截止 ' + through,
+      '本段计划开始 ' + from,
+      '本段计划结束 ' + through,
+    ]) {
+      expect(tooltip).toContain(text)
+    }
+    await move('2026-12-06T23:59:59', chart)
+    expect(panel().find('.model-subsidy-source').exists()).toBe(false)
+    for (const at of ['2026-12-07T00:00:00', '2026-12-07T23:59:59', '2026-12-08T00:00:00']) {
+      await move(at, chart)
+      const source = panel().get('.model-subsidy-source')
+      expect(source.text()).toContain('ZC-000013')
+      expect(source.text()).not.toMatch(/原单申报时间|审核通过|获批调整后截止|2026-\d{2}-\d{2}/)
+      expect(panel().text()).toContain('本段计划开始' + from)
+      expect(panel().text()).toContain('本段计划结束' + through)
+    }
+    await move('2026-12-08T00:00:01', chart)
+    expect(panel().find('.model-subsidy-source').exists()).toBe(false)
+  },
+)
+
+it.each([
+  ['2026-12-07T19:39:07+08:00', '生效中'],
+  ['2026-12-07T19:39:08+08:00', '已结束'],
+])('历史阶段的政策按查询当秒 %s 和获批调整后的截止展示状态 %s', async (asOf, status) => {
+  const sample = midnightPolicyHistory('RETAIL')
+  sample.asOf = asOf
+  const [track] = sample.tracks
+  const [policy] = track.policies
+  policy.effectiveThrough = '2026-12-07T19:39:07+08:00'
+  track.segments = [{ ...track.plannedSegments[0], endAt: '2026-12-07T19:39:08+08:00' }]
+  track.plannedSegments = []
+  const chart = await queryDecember(sample)
+  await move('2026-12-07T12:00:00', chart)
+  expect(panel().get('.model-subsidy-source header small').text()).toBe(status)
+  expect(panel().get('.model-subsidy-detail-fields').text()).toContain(
+    '本段实际结束2026-12-07 19:39:07',
+  )
+})
+
+it.each(['RETAIL', 'BILLION'])(
+  '%s 原单获批缩短后显示最新截止，实际段与计划段分别核对',
+  async (channel) => {
+    const sample = midnightPolicyHistory(channel)
+    sample.asOf = '2026-12-07T08:00:00+08:00'
+    const [track] = sample.tracks
+    const [original] = track.policies
+    original.policyFrom = '2026-12-07T07:59:59+08:00'
+    original.policyThrough = '2026-12-07T12:30:45+08:00'
+    original.effectiveThrough = '2026-12-07T08:00:01+08:00'
+    const [plan] = track.plannedSegments
+    track.segments = [{ ...plan, startAt: original.policyFrom, endAt: null }]
+    plan.startAt = original.effectiveThrough
+    plan.endAt = '2026-12-07T08:00:02+08:00'
+    const chart = await queryDecember(sample)
+    expect(chart.props('rows')[0].endAt).toBe('2026-12-07T08:00:02')
+    expect(chart.get('.timeline-policy-row').text()).toContain('止 2026-12-07 08:00:01')
+    expect(chart.get('.timeline-policy-row').text()).not.toContain('12:30:45')
+    const option = charts.at(-1).getOption()
+    const tips = option.series[0].data.map((data) => option.tooltip.formatter({ data }))
+    expect(tips[0]).toContain('本段实际结束 2026-12-07 08:00:00（截至查询时）')
+    expect(tips[1]).toContain('本段计划结束 2026-12-07 08:00:01')
+    expect(tips.every((text) => text.includes('当前截止 2026-12-07 08:00:01'))).toBe(true)
+    await move('2026-12-07T08:00:00', chart)
+    expect(panel().text()).toContain('本段实际结束2026-12-07 08:00:00（截至查询时）')
+    await move('2026-12-07T08:00:01', chart)
+    expect(panel().text()).toContain('本段计划开始2026-12-07 08:00:01')
+    expect(panel().get('.model-subsidy-source').text()).not.toMatch(
+      /原单申报时间|审核通过|获批调整后截止|12:30:45/,
+    )
+    await move('2026-12-07T08:00:02', chart)
+    expect(panel().find('.model-subsidy-source').exists()).toBe(false)
+  },
+)
 
 it('目录为空时只读目录，目录错误可重试，无示例回退', async () => {
   fetch.mockResolvedValueOnce(Response.json({ message: '目录服务不可用' }, { status: 503 }))

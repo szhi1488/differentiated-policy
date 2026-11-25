@@ -26,7 +26,7 @@ const applicationRoute = computed(() => ({
   query: state.record.value ? { policyId: state.record.value.id } : {},
 }))
 provide('policyForm', state)
-provide('modelSubsidyPreferences', { lastQuery: ref(null), showIndependent: ref(false) })
+provide('modelSubsidyLastQuery', ref(null))
 // 在地址变更前确认，取消导航时保留原地址、表单和附件；加载由申请页负责。
 const removePolicyGuard = router.beforeEach((to) => {
   const id = to.query.policyId

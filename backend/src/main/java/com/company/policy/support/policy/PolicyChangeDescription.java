@@ -4,11 +4,15 @@ import com.company.policy.vo.PolicyApplicability.Policy;
 import com.company.policy.vo.PolicyApplicability.Product;
 import com.company.policy.vo.PolicyApplicability.Selection;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -61,21 +65,148 @@ public final class PolicyChangeDescription {
         return PLATFORMS.getOrDefault(code, code);
     }
 
-    /** 卡片先给时段和商品，再分别列出本轮冻结的原采用、拟采用名单。 */
-    public static String cardScope(PolicyExecutionChange change) {
+    public static String sceneLabel(String code) {
+        return SCENES.getOrDefault(code, code);
+    }
+
+    public static String verifyLabel(String code) {
+        return VERIFICATION.getOrDefault(code, code);
+    }
+
+    public static String priceBaseLabel(String code) {
+        return BASES.getOrDefault(code, code);
+    }
+
+    /** 同一段的原、拟执行名单出现同单不同轮时，单号旁补上轮次。 */
+    public static Map<String, Set<Integer>> policyVersions(PolicyExecutionChange change) {
+        var versions = new HashMap<String, Set<Integer>>();
+        Stream.concat(change.before().stream(), change.after().stream())
+                .forEach(
+                        p ->
+                                versions.computeIfAbsent(p.policyId(), id -> new HashSet<>())
+                                        .add(p.submissionVersion()));
+        return versions;
+    }
+
+    public static String policyName(Policy policy, Map<String, Set<Integer>> versions) {
+        return policy.policyCode()
+                + (versions.getOrDefault(policy.policyId(), Set.of()).size() > 1
+                        ? " 第 " + policy.submissionVersion() + " 轮"
+                        : "");
+    }
+
+    /** 以该段原、拟实际执行的单据及轮次区分沿用叠加和本轮拟议的叠加。 */
+    public static String cardDecision(PolicyExecutionChange change) {
+        if (change.after().isEmpty()) return "本段无拟执行政策";
+        if (change.after().size() == 1) return "拟执行";
+        return PolicyExecutionChange.sameMembers(change.before(), change.after())
+                ? "继续叠加执行"
+                : "拟叠加执行";
+    }
+
+    public static String cardPeriod(
+            PolicyExecutionChange change, LocalDateTime from, LocalDateTime through) {
         String platform = change.scope().platformCode();
         return platformLabel(platform)
                 + ("RETAIL".equals(change.perspective()) ? "零售" : "百亿")
                 + " · "
-                + TIME.format(change.from())
+                + TIME.format(from)
                 + " 至 "
-                + TIME.format(change.through())
-                + "\n"
-                + scopeName(change);
+                + TIME.format(through);
     }
 
-    public static String cardPolicies(List<Policy> policies, PolicyExecutionChange change) {
-        return policies.isEmpty() ? "无" : describePolicies(policies, change);
+    /** 百亿按配置作决定，部分申报时在标题列实际申报的颜色，各单另列自身的商品范围。 */
+    public static String cardScope(
+            PolicyExecutionChange change,
+            boolean wholeConfiguration,
+            Set<String> ambiguousGoodsIds) {
+        if (wholeConfiguration) return scopeName(change, "整组配置");
+        if (change.scope().goodsId() != null)
+            return identifyCardProduct(
+                    scopeName(change), change.scope().goodsId().toString(), ambiguousGoodsIds);
+        var policies = change.after().isEmpty() ? change.before() : change.after();
+        String colors =
+                policies.stream()
+                        .flatMap(p -> p.selections().stream())
+                        .flatMap(s -> s.products().stream())
+                        .map(p -> identifyCardProduct(colorOrId(p), p.goodsId(), ambiguousGoodsIds))
+                        .distinct()
+                        .collect(Collectors.joining("、"));
+        return scopeName(change, colors.isEmpty() ? "商品范围未记录" : colors);
+    }
+
+    private record ConfigurationColor(String spuId, String ram, String rom, String color) {}
+
+    /** 在不同段可实际申报同色同配的不同商品，按本轮冻结的商品 ID 消歧。 */
+    public static Set<String> ambiguousCardGoodsIds(List<PolicyExecutionChange> changes) {
+        var firstIds = new HashMap<ConfigurationColor, String>();
+        var ambiguous = new HashSet<String>();
+        changes.stream()
+                .flatMap(change -> change.after().stream())
+                .flatMap(policy -> policy.selections().stream())
+                .flatMap(row -> row.products().stream())
+                .filter(
+                        p ->
+                                p.goodsId() != null
+                                        && p.colorName() != null
+                                        && !p.colorName().isBlank())
+                .forEach(
+                        p -> {
+                            var color =
+                                    new ConfigurationColor(
+                                            p.spuId(), p.ram(), p.rom(), p.colorName());
+                            var first = firstIds.putIfAbsent(color, p.goodsId());
+                            if (first != null && !first.equals(p.goodsId())) {
+                                ambiguous.add(first);
+                                ambiguous.add(p.goodsId());
+                            }
+                        });
+        return ambiguous;
+    }
+
+    private static String identifyCardProduct(
+            String label, String goodsId, Set<String> ambiguousGoodsIds) {
+        return goodsId != null && ambiguousGoodsIds.contains(goodsId)
+                ? label + "（商品 ID " + goodsId + "）"
+                : label;
+    }
+
+    public static String cardTerms(
+            Policy policy,
+            boolean retail,
+            boolean wholeConfiguration,
+            Set<String> ambiguousGoodsIds) {
+        var termsBySelection =
+                policy.selections().stream()
+                        .map(
+                                selection -> {
+                                    String terms = subsidy(selection, true, wholeConfiguration);
+                                    if (retail || wholeConfiguration) return terms;
+                                    var products =
+                                            selection.products().stream()
+                                                    .map(
+                                                            p ->
+                                                                    identifyCardProduct(
+                                                                            colorOrId(p),
+                                                                            p.goodsId(),
+                                                                            ambiguousGoodsIds))
+                                                    .collect(Collectors.joining("、"));
+                                    return products.isEmpty() ? terms : products + " · " + terms;
+                                });
+        if (wholeConfiguration) termsBySelection = termsBySelection.distinct();
+        String rows = termsBySelection.collect(Collectors.joining("\n"));
+        if (rows.isBlank()) rows = "补贴参数未记录";
+        if (!retail) return rows;
+        var terms = new ArrayList<String>();
+        if (policy.sceneTypes() != null && !policy.sceneTypes().isEmpty())
+            terms.add(
+                    policy.sceneTypes().stream()
+                            .map(PolicyChangeDescription::sceneLabel)
+                            .collect(Collectors.joining("+")));
+        String type = policy.verifyType();
+        terms.add("核销类型：" + (type == null || type.isBlank() ? "未记录" : verifyLabel(type)));
+        terms.add(rows);
+        return String.join(" · ", terms);
     }
 
     static String describe(PolicyExecutionChange change) {
@@ -122,6 +253,10 @@ public final class PolicyChangeDescription {
     }
 
     private static String scopeName(PolicyExecutionChange change) {
+        return scopeName(change, null);
+    }
+
+    private static String scopeName(PolicyExecutionChange change, String productRange) {
         var scope = change.scope();
         var product =
                 Stream.concat(change.after().stream(), change.before().stream())
@@ -136,7 +271,14 @@ public final class PolicyChangeDescription {
         if (product == null) {
             return scope.goodsId() != null
                     ? "商品 " + scope.goodsId()
-                    : "机型 " + scope.spuId() + " " + scope.ram() + "+" + scope.rom() + " 整组配置";
+                    : "机型 "
+                            + scope.spuId()
+                            + " "
+                            + scope.ram()
+                            + "+"
+                            + scope.rom()
+                            + " "
+                            + (productRange == null ? "整组配置" : productRange);
         }
         String model = product.modelName();
         if (model == null || model.isBlank()) model = product.goodsName();
@@ -145,7 +287,9 @@ public final class PolicyChangeDescription {
                         model,
                         product.edition(),
                         product.ram() + "+" + product.rom(),
-                        scope.goodsId() == null ? "整组配置" : colorOrId(product))
+                        productRange != null
+                                ? productRange
+                                : scope.goodsId() == null ? "整组配置" : colorOrId(product))
                 .filter(s -> s != null && !s.isBlank())
                 .collect(Collectors.joining(" "));
     }
@@ -165,16 +309,13 @@ public final class PolicyChangeDescription {
                                 if (p.sceneTypes() != null && !p.sceneTypes().isEmpty()) {
                                     terms.add(
                                             p.sceneTypes().stream()
-                                                    .map(s -> SCENES.getOrDefault(s, s))
+                                                    .map(PolicyChangeDescription::sceneLabel)
                                                     .collect(Collectors.joining("+")));
                                 }
-                                if (p.verifyType() != null)
-                                    terms.add(
-                                            VERIFICATION.getOrDefault(
-                                                    p.verifyType(), p.verifyType()));
+                                if (p.verifyType() != null) terms.add(verifyLabel(p.verifyType()));
                             }
                             for (var selection : p.selections()) {
-                                String allocation = subsidy(selection);
+                                String allocation = subsidy(selection, false, false);
                                 if ("BILLION".equals(change.perspective())) {
                                     // 配置审核跨颜色，每条补贴仍要能回到这份原单实际申报的商品。
                                     String products =
@@ -202,28 +343,35 @@ public final class PolicyChangeDescription {
                 .collect(Collectors.joining("、"));
     }
 
-    private static String subsidy(Selection selection) {
+    private static String subsidy(
+            Selection selection, boolean forCard, boolean wholeConfiguration) {
         var plan = selection.subsidy();
         var fields = new ArrayList<String>();
         if (plan == null) {
             fields.add("补贴参数缺失");
         } else {
             if ("RATIO".equals(plan.subsidyMode()) && plan.ratio() != null) {
-                String base =
-                        plan.priceBase() == null
-                                ? "基数未填写"
-                                : BASES.getOrDefault(plan.priceBase(), plan.priceBase());
-                fields.add("按" + base + "的 " + decimal(new BigDecimal(plan.ratio())) + "%");
+                String base = plan.priceBase() == null ? "基数未填写" : priceBaseLabel(plan.priceBase());
+                String percent = decimal(new BigDecimal(plan.ratio())) + "%";
+                fields.add(
+                        forCard ? "比例补贴 " + base + " × " + percent : "按" + base + "的 " + percent);
             } else if ("FIXED".equals(plan.subsidyMode()) && plan.fixedAmount() != null) {
-                fields.add(decimal(new BigDecimal(plan.fixedAmount())) + " 元/台");
+                fields.add(
+                        (forCard ? "固定金额 " : "")
+                                + decimal(new BigDecimal(plan.fixedAmount()))
+                                + " 元/台");
             }
             if (plan.maxSubsidyAmount() != null)
                 fields.add("上限 " + decimal(new BigDecimal(plan.maxSubsidyAmount())) + " 元");
             if (fields.isEmpty()) fields.add("补贴参数缺失");
         }
         if ("SPECIFIED".equals(selection.cardType())) {
+            String label = wholeConfiguration ? "每件申报数量" : "数量";
             fields.add(
-                    selection.quantity() == null ? "数量未填写" : "数量 " + selection.quantity() + " 台");
+                    label
+                            + (selection.quantity() == null
+                                    ? "未填写"
+                                    : " " + selection.quantity() + " 台"));
         }
         return String.join("，", fields);
     }

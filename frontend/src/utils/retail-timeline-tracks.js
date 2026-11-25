@@ -165,13 +165,6 @@ export function retailDisplayTracks(response) {
       platforms.get(track.platformCode).push(track)
     }
   }
-  const retail = [...platforms.values()].flatMap((tracks) =>
-    groupPlatform(tracks, response.asOf).map((track) => ({
-      ...track,
-      fullConfiguration:
-        track.goodsIds.length === response.configurationGoodsCount &&
-        track.policies.some((p) => p.selections.some((s) => s.cardType === 'COMMON')),
-    })),
-  )
+  const retail = [...platforms.values()].flatMap((tracks) => groupPlatform(tracks, response.asOf))
   return [...retail, ...response.tracks.filter((track) => track.perspective !== 'RETAIL')]
 }

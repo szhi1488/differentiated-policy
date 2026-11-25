@@ -24,19 +24,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     canEdit: () => !confirming.value && !persistence.locked.value,
   })
   const { files, attachmentNotice } = attachments
-  const adjustmentUploads = useAttachments({
-    discardUnboundOnRestore: true,
-    onChange: (values) => {
-      form.value.adjustmentFiles = values
-    },
-  })
-  const persistence = usePolicyDraft(
-    form,
-    confirming,
-    attachments,
-    refreshPlatforms,
-    adjustmentUploads,
-  )
+  const persistence = usePolicyDraft(form, confirming, attachments, refreshPlatforms)
   const blocked = () => confirming.value || persistence.locked.value
   const { notice, noticeType } = persistence
   let revision = 0
@@ -212,7 +200,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       !goods.color ||
       form.value.cards.some(({ id }) => id === goods.id)
     ) {
-      return
+      return false
     }
     const model = createPolicyModel()
     model.id = goods.id
@@ -220,6 +208,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     applyModelPlatforms(model, form.value.platforms)
     form.value.cards.push(model)
     notice.value = ''
+    return true
   }
 
   function addFiles(list) {
@@ -251,7 +240,6 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     form.value = createForm()
     persistence.markSaved()
     attachments.restore()
-    adjustmentUploads.restore()
     notice.value = ''
   }
 
@@ -260,16 +248,9 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       return
     }
     if (
-      [
-        'verifyType',
-        'scenes',
-        'estimated',
-        'startTime',
-        'endTime',
-        'remark',
-        'links',
-        'adjustmentReason',
-      ].includes(field)
+      ['verifyType', 'scenes', 'estimated', 'startTime', 'endTime', 'remark', 'links'].includes(
+        field,
+      )
     ) {
       form.value[field] = value
     }
@@ -373,7 +354,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     const message =
       model.id === undefined
         ? '确定移除所选配置及其补贴方案吗？'
-        : '确定移除该特殊商品及其平台数量和补贴方案吗？'
+        : '确定移除该独立商品及其平台数量和补贴方案吗？'
     if (
       await confirmed(() =>
         confirm(message, { confirmButtonText: '移除商品卡', cancelButtonText: '保留商品卡' }),
@@ -385,13 +366,14 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     return false
   }
 
-  function removeGoods(keys, cardKey) {
+  function removeConfiguration(configurationKey, cardKey) {
     const model = editModel(cardKey)
-    if (!model) {
+    if (!model || model.id !== undefined) {
       return
     }
-    const removed = new Set(keys)
-    const remaining = model.goods.filter((item) => !removed.has(item.key))
+    const remaining = model.goods.filter(
+      (item) => policyConfigurationKey(item) !== configurationKey,
+    )
     if (!remaining.length) {
       return removeModel(cardKey)
     }
@@ -474,7 +456,6 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
 
   return {
     ...persistence,
-    adjustmentUploads,
     reloadDraft,
     preparePolicyEdit,
     confirmPolicyReplacement,
@@ -507,7 +488,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     updateSubsidy,
     removeSubsidy,
     removeModel,
-    removeGoods,
+    removeConfiguration,
     removeFile,
   }
 }

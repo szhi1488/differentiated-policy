@@ -57,7 +57,7 @@ async function picker(existing = rows, editing = true) {
       existingGoods: goods,
       addedKeys: goods.map(({ id }) => id),
       blockedConfigurations: new Set(),
-      special: false,
+      specifiedIds: [],
       editing,
     }),
   )
@@ -77,7 +77,7 @@ describe('商品配置取消与重选', () => {
     expect([...state.selected.value.keys()]).toEqual([])
   })
 
-  it('单独取消的已有颜色在取消配置、重选及全部配置后仍不恢复', async () => {
+  it('普通模式无法单独移除已有颜色，重新选择配置仍包含整组', async () => {
     const state = await picker()
     state.toggle(applicantGood(rows[0]), false)
     state.changeConfig([key('16GB')])
@@ -85,8 +85,6 @@ describe('商品配置取消与重选', () => {
     await flushPromises()
     state.changeConfig(['ALL_CONFIGS'])
     await flushPromises()
-    expect([...state.removed.value]).toEqual(['1'])
-    state.toggle(applicantGood(rows[0]), true)
     expect([...state.removed.value]).toEqual([])
   })
 
@@ -100,17 +98,18 @@ describe('商品配置取消与重选', () => {
     expect(state.removed.value.has('105')).toBe(true)
   })
 
-  it('取消本次新增配置清理新增商品，手动取消项在再次选配置后仍保留取消', async () => {
+  it('普通模式无法去掉组内单件，整组移除后重选恢复全部商品', async () => {
     const state = await picker([], false)
     state.changeConfig([key()])
     await flushPromises()
     state.toggle(applicantGood(rows[0]), false)
+    expect([...state.selected.value.keys()]).toEqual(['1', '2'])
     state.changeConfig([])
     await flushPromises()
     expect(state.selected.value.size).toBe(0)
     state.changeConfig([key()])
     await flushPromises()
-    expect([...state.selected.value.keys()]).toEqual(['2'])
+    expect([...state.selected.value.keys()]).toEqual(['1', '2'])
     expect(state.removed.value.size).toBe(0)
   })
 })

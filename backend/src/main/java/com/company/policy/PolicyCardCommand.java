@@ -34,10 +34,8 @@ final class PolicyCardCommand {
                                 "--jackyun.clean-scheduling-enabled=false",
                                 "--spring.sql.init.mode=never")) {
             var feishu = context.getBean(FeishuProperties.class);
-            if (!feishu.isConfigured()
-                    || !feishu.hasCompanyTenant()
-                    || feishu.getPolicyErpUrl().isBlank()) {
-                throw new IllegalArgumentException("请先配置当前飞书应用、企业和 FEISHU_POLICY_ERP_URL。");
+            if (!feishu.isConfigured() || !feishu.hasCompanyTenant()) {
+                throw new IllegalArgumentException("请先配置当前飞书工作台应用的凭证和所属企业。");
             }
             var worker = context.getBean(PolicyDeliveryWorker.class);
             var result = worker.processTrialCard(policyId, round, key);

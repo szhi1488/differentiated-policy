@@ -9,10 +9,15 @@ import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyApplicability.Action;
 import com.company.policy.vo.PolicyApplicability.Scope;
 import com.company.policy.vo.PolicyApplicability.Status;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +28,38 @@ public final class PolicyConfirmation {
     private PolicyConfirmation() {}
 
     private record Key(Scope scope, String through) {}
+
+    /** 用户阅读期间，正在执行的首段起点随当前秒推进，无须因此作废确认。 */
+    public static List<List<Object>> tokenRanges(PolicyApplicability result) {
+        var ranges = new ArrayList<List<Object>>();
+        for (var scope : result.scopes()) {
+            for (var segment : scope.segments()) {
+                var start =
+                        segment.from().equals(result.effectiveFrom()) ? "START" : segment.from();
+                ranges.add(
+                        List.of(
+                                scope.scope(),
+                                start,
+                                segment.through(),
+                                segment.action(),
+                                segment.groups(),
+                                segment.eligiblePolicyIds(),
+                                segment.continuesPrevious()));
+            }
+        }
+        return ranges;
+    }
+
+    public static String fingerprint(ObjectMapper json, Object contents) {
+        try {
+            return HexFormat.of()
+                    .formatHex(
+                            MessageDigest.getInstance("SHA-256")
+                                    .digest(json.writeValueAsBytes(contents)));
+        } catch (NoSuchAlgorithmException | JsonProcessingException error) {
+            throw new IllegalStateException("无法生成政策核对凭证。", error);
+        }
+    }
 
     public static List<Decision> ranges(PolicyApplicability result) {
         var ranges = new ArrayList<Decision>();

@@ -51,6 +51,7 @@ class PolicyReviewRoundTest {
                         "policy_review_decision",
                         "policy_review_member",
                         "policy_review_round",
+                        "policy_time_change",
                         "policy_audit_log",
                         "policy_apply",
                         "user_info")) jdbc.update("DELETE FROM " + table);
@@ -202,9 +203,7 @@ class PolicyReviewRoundTest {
         detail(4, 1).andExpect(status().isNotFound());
     }
 
-    @Test
-    void downloadChecksTheRequestedRoundItsSnapshotAndCurrentReader() throws Exception {
-        var bytes = "%PDF-1.7 review evidence".getBytes(StandardCharsets.UTF_8);
+    private String uploadEvidence(byte[] bytes) throws Exception {
         var upload =
                 mvc.perform(
                                 multipart("/api/attachments")
@@ -217,7 +216,76 @@ class PolicyReviewRoundTest {
                         .andExpect(status().isCreated())
                         .andReturn()
                         .getResponse();
-        String id = json.readTree(upload.getContentAsString()).path("id").asText();
+        return json.readTree(upload.getContentAsString()).path("id").asText();
+    }
+
+    @Test
+    void changeEvidenceBelongsToTheOriginalPolicyAndItsApprovedRound() throws Exception {
+        var bytes = "%PDF-1.7 time change".getBytes(StandardCharsets.UTF_8);
+        String fileId = uploadEvidence(bytes);
+        String unrelated = uploadEvidence(bytes);
+        String previous = "2099-12-30 00:00:00", end = "2099-12-31 00:00:00";
+        jdbc.update(
+                "UPDATE policy_apply SET status='APPROVED',end_time=?,record_version=3 WHERE id=101",
+                end);
+        jdbc.update("UPDATE policy_review_round SET stage='FINISHED' WHERE policy_id=101");
+        jdbc.update(
+                """
+                UPDATE policy_audit_log SET audit_status='APPROVED', auditor_id=4, auditor_name='采购',
+                    audit_time=CURRENT_TIMESTAMP, snapshot_data=? WHERE policy_id=101
+                """,
+                """
+                {"id":"101","submissionVersion":1,"form":{"endTime":"2099-12-30T00:00:00+08:00"}}
+                """);
+        jdbc.update(
+                """
+                INSERT INTO policy_time_change(id,policy_id,tenant_key,policy_version,audit_log_id,
+                   after_record_version,direction,previous_end,requested_end,actual_end,effective_at,changed_at,
+                   reason,actor_id,actor_name,attachment_json,consent_json,request_key,request_hash)
+                SELECT 200,policy_id,tenant_key,version,id,3,'EXTEND',?,?,?, '2099-12-30 00:00:01',
+                   CURRENT_TIMESTAMP,'平台延续',1,'成员1',?,'{}','request-1','hash' FROM policy_audit_log
+                   WHERE policy_id=101 AND version=1
+                """,
+                previous,
+                end,
+                end,
+                json.writeValueAsString(
+                        java.util.List.of(
+                                java.util.Map.of(
+                                        "type", "FILE", "id", fileId, "originalName", "证明.pdf"))));
+        for (int reader : new int[] {1, 2, 4}) {
+            detail(reader, 1)
+                    .andExpect(status().isOk())
+                    .andExpect(
+                            jsonPath("$.timeHistory.currentEnd").value("2099-12-31T00:00:00+08:00"))
+                    .andExpect(jsonPath("$.timeHistory.changes[0].actorName").value("成员1"))
+                    .andExpect(jsonPath("$.allowedActions").isEmpty());
+            changeFile(reader, 1, 200, fileId)
+                    .andExpect(status().isOk())
+                    .andExpect(content().bytes(bytes));
+            changeFile(reader, 1, 201, fileId).andExpect(status().isNotFound());
+            changeFile(reader, 1, 200, unrelated).andExpect(status().isNotFound());
+            changeFile(reader, 2, 200, fileId).andExpect(status().isNotFound());
+            file(reader, 1, fileId).andExpect(status().isNotFound());
+        }
+        changeFile(5, 1, 200, fileId).andExpect(status().isNotFound());
+    }
+
+    private ResultActions changeFile(int reader, int version, long changeId, String fileId)
+            throws Exception {
+        return mvc.perform(
+                get(
+                                "/api/policy-reviews/101/time-changes/{changeId}/attachments/{fileId}/content",
+                                changeId,
+                                fileId)
+                        .param("submissionVersion", Integer.toString(version))
+                        .session(session(reader)));
+    }
+
+    @Test
+    void downloadChecksTheRequestedRoundItsSnapshotAndCurrentReader() throws Exception {
+        var bytes = "%PDF-1.7 review evidence".getBytes(StandardCharsets.UTF_8);
+        String id = uploadEvidence(bytes);
         jdbc.update(
                 """
                 UPDATE policy_audit_log SET snapshot_data=?, audit_status='REJECTED', auditor_id=2, auditor_name='初审',

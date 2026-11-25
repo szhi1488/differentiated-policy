@@ -37,7 +37,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -152,6 +151,7 @@ class GoodsSyncIntegrationTest {
             jdbc.update("DELETE FROM " + table);
         }
         jdbc.update("DELETE FROM policy_goods_detail");
+        jdbc.update("DELETE FROM policy_time_change");
         jdbc.update("DELETE FROM policy_audit_log");
         jdbc.update("DELETE FROM policy_apply");
         jdbc.update("DELETE FROM catalog_operation_log");
@@ -1706,7 +1706,8 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void applicantSubmitsOnlySavedGoodsAndFreezesTheirNames() throws Exception {
+    void applicantMustConfirmAllOnSaleGoodsOfEachCommonConfigurationAndFreezesTheirNames()
+            throws Exception {
         var imported = importedGoodForEditing();
         String blackId = imported.path("id").asText();
         String spu = imported.path("spuId").asText();
@@ -1844,7 +1845,9 @@ class GoodsSyncIntegrationTest {
         ((ObjectNode) specified.withArray("targets").get(0)).put("rom", "512GB");
         mvc.perform(policyRequest(put(path + "/draft"), owner).content(mixedCards.toString()))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("同一平台的该颜色已同时选入普通卡和指定卡，请先编辑普通卡并取消勾选该颜色。"));
+                .andExpect(
+                        jsonPath("$.message")
+                                .value("同一平台的商品已同时选入普通卡和指定卡，请移除重复的指定卡，或将该配置改为仅用指定卡申报。"));
         var sameConfiguration = json.readTree(full);
         var cards = sameConfiguration.path("goodsForm").withArray("cards");
         var first = (ObjectNode) cards.get(0);
@@ -1882,33 +1885,62 @@ class GoodsSyncIntegrationTest {
         mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "1"))
                 .andExpect(status().isConflict());
         mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "2"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_COMMON_SCOPE_CHANGED"));
+        // 即使缺少的商品另填了指定卡，也不能用该指定卡凑齐普通卡的整组范围。
+        var mixed = (ObjectNode) json.readTree(full);
+        mixed.remove("recordVersion");
+        var mixedCardsArray = ((ObjectNode) mixed.get("goodsForm")).withArray("cards");
+        var whiteCard = ((ObjectNode) mixedCardsArray.get(0)).deepCopy();
+        whiteCard.put("key", "white").put("cardType", "SPECIFIED");
+        ((ObjectNode) whiteCard.withArray("targets").get(0)).put("goodsId", whiteId);
+        mixedCardsArray.add(whiteCard);
+        String mixedId = createPolicy(owner, mixed.toString()).path("id").asText();
+        mvc.perform(
+                        policyRequest(post("/api/policies/" + mixedId + "/submit"), owner)
+                                .content("{\"recordVersion\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_COMMON_SCOPE_CHANGED"));
+        jdbc.update("UPDATE goods SET status = 2 WHERE id = ?", whiteId);
+        mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.applicability.status").value("DIRECT"));
+        jdbc.update("UPDATE goods SET status = 1 WHERE id = ?", whiteId);
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("POLICY_COMMON_SCOPE_CHANGED"));
+        var corrected = (ObjectNode) json.readTree(full);
+        corrected.put("recordVersion", 2);
+        var targets = ((ObjectNode) corrected.at("/goodsForm/cards/0")).withArray("targets");
+        targets.add(((ObjectNode) targets.get(0)).deepCopy().put("goodsId", whiteId));
+        mvc.perform(policyRequest(put(path + "/draft"), owner).content(corrected.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recordVersion").value(3));
         mvc.perform(
                         policyRequest(post(path + "/submit"), owner)
-                                .content("{\"recordVersion\":2,\"confirmationToken\":\"old\"}"))
+                                .content("{\"recordVersion\":3,\"confirmationToken\":\"old\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("POLICY_COVERAGE_CHANGED"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_audit_log", Integer.class))
                 .isZero();
-        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":3}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.submissionVersion").value(1));
-        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":2}"))
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content("{\"recordVersion\":3}"))
                 .andExpect(status().isConflict());
         assertThat(
                         jdbc.queryForList(
                                 "SELECT goods_id FROM policy_goods_detail ORDER BY platform_code",
                                 String.class))
-                .containsExactlyInAnyOrder(blackId, blackId, extraId);
+                .containsExactlyInAnyOrder(blackId, blackId, whiteId, whiteId, extraId);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_audit_log", Integer.class))
                 .isOne();
-        mvc.perform(deleteGoods(GOODS + "/" + whiteId)).andExpect(status().isNoContent());
+        mvc.perform(deleteGoods(GOODS + "/" + whiteId)).andExpect(status().isConflict());
         jdbc.update("UPDATE goods SET goods_name = '修改后的名称' WHERE id = ?", blackId);
         mvc.perform(get(path).session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.goods.length()").value(2))
+                .andExpect(jsonPath("$.goods.length()").value(3))
                 .andExpect(jsonPath("$.goods[0].goodsId").value(blackId))
                 .andExpect(
                         jsonPath("$.goods[0].goodsName")
@@ -2337,11 +2369,6 @@ class GoodsSyncIntegrationTest {
                 "colorId",
                 jdbc.queryForObject(
                         "SELECT id FROM color_dict WHERE color_name='白色'", String.class));
-        var response =
-                mvc.perform(mutation(GOODS).content(product.toString()))
-                        .andExpect(status().isCreated())
-                        .andReturn();
-        var white = json.readTree(response.getResponse().getContentAsByteArray());
         var owner = session("test-tenant", "interval-owner", "APPLICANT");
         assignPlatforms("interval-owner", "BILLION:PDD");
         var history = attachmentPolicyForm(black, UUID.randomUUID().toString());
@@ -2364,6 +2391,11 @@ class GoodsSyncIntegrationTest {
         jdbc.update(
                 "UPDATE policy_apply SET end_time='2099-12-31 23:59:59' WHERE id=?",
                 priorIds.get(0));
+        var response =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var white = json.readTree(response.getResponse().getContentAsByteArray());
         var draft = attachmentPolicyForm(white, UUID.randomUUID().toString());
         draft.remove("attachmentInfo");
         draft.put("startTime", "2099-11-01T00:00:00+08:00")
@@ -2388,7 +2420,7 @@ class GoodsSyncIntegrationTest {
                                 .value(contains(id, priorIds.get(0))))
                 .andExpect(
                         jsonPath("$.applicability.scopes[0].segments[0].through")
-                                .value("2099-11-08T23:59:59+08:00"))
+                                .value("2099-11-08T09:00:00+08:00"))
                 .andExpect(
                         jsonPath("$.applicability.scopes[0].segments[1].from")
                                 .value("2099-11-15T00:00:00+08:00"))
@@ -2706,8 +2738,7 @@ class GoodsSyncIntegrationTest {
         assignPlatforms("platform-owner", "RETAIL:JD", "RETAIL:PDD");
         String path = "/api/policies/" + createPolicy(owner, form.toString()).path("id").asText();
         var confirmedBeforeApproval = confirmedSubmission(path, owner, 1);
-        approveProduct(colleagueId, 2, 1);
-        mvc.perform(reviewRound(colleagueId, 3, 1, "APPROVE")).andExpect(status().isOk());
+        mvc.perform(reviewRound(colleagueId, 2, 1, "APPROVE")).andExpect(status().isOk());
 
         // 两个平台都包含接手前获批的同渠道记录，京东另含本人的较早申请。
         var result =
@@ -2796,8 +2827,10 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isConflict());
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-01-02T08:59:59+08:00"))
                 .andExpect(jsonPath("$.policies").isEmpty());
-        mvc.perform(effectiveRequest(goodsId, "TAOBAO", "2099-01-05T23:59:59+08:00"))
+        mvc.perform(effectiveRequest(goodsId, "TAOBAO", "2099-01-05T18:00:00+08:00"))
                 .andExpect(jsonPath("$.policies[*].winner.id").value(contains(older)));
+        mvc.perform(effectiveRequest(goodsId, "TAOBAO", "2099-01-05T18:00:01+08:00"))
+                .andExpect(jsonPath("$.policies").isEmpty());
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-01-06T00:00:00+08:00"))
                 .andExpect(jsonPath("$.policies").isEmpty());
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-01-06T09:00:00+08:00"))
@@ -2829,6 +2862,7 @@ class GoodsSyncIntegrationTest {
         for (var good : List.of(black, white)) {
             var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
             form.remove("attachmentInfo");
+            ((ObjectNode) form.at("/goodsForm/cards/0")).put("cardType", "SPECIFIED");
             form.put("startTime", "2099-03-01T00:00:00+08:00")
                     .put("endTime", "2099-03-31T09:00:00+08:00");
             var id = createPolicy(owner, form.toString()).path("id").asText();
@@ -2907,8 +2941,7 @@ class GoodsSyncIntegrationTest {
             mvc.perform(policyRequest(post(path + "/submit"), owner).content(body.toString()))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.submissionVersion").value(2));
-            approveProduct(pending, 4, 2);
-            mvc.perform(reviewRound(pending, 5, 2, "APPROVE")).andExpect(status().isOk());
+            mvc.perform(reviewRound(pending, 4, 2, "APPROVE")).andExpect(status().isOk());
             var audits =
                     jdbc.queryForList(
                             "SELECT snapshot_data FROM policy_audit_log WHERE policy_id=? ORDER BY version",
@@ -2935,23 +2968,26 @@ class GoodsSyncIntegrationTest {
                         .andExpect(jsonPath("$.policies.length()").value(1))
                         .andExpect(jsonPath("$.policies[*].winner.id").value(contains(approved)));
 
-            var extra = attachmentPolicyForm(black, UUID.randomUUID().toString());
+            var winningGood = first == 200 ? black : white;
+            var extra = attachmentPolicyForm(winningGood, UUID.randomUUID().toString());
             extra.remove("attachmentInfo");
+            ((ObjectNode) extra.at("/goodsForm/cards/0")).put("cardType", "SPECIFIED");
             extra.put("startTime", "2099-03-10T00:00:00+08:00")
                     .put("endTime", "2099-03-20T00:00:00+08:00");
             String third = createPolicy(owner, extra.toString()).path("id").asText();
             mvc.perform(confirmedSubmission("/api/policies/" + third, owner, 1))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.reviewStage").value("PRODUCT_REVIEW"));
             approveProduct(third, 2, 1);
             mvc.perform(reviewRound(third, 3, 1, "APPROVE")).andExpect(status().isOk());
             mvc.perform(
                             effectiveRequest(
-                                    black.path("id").asText(), "PDD", "2099-03-20T23:59:59+08:00"))
+                                    black.path("id").asText(), "PDD", "2099-03-20T00:00:00+08:00"))
                     .andExpect(
                             jsonPath("$.policies[*].winner.id").value(contains(third, approved)));
             mvc.perform(
                             effectiveRequest(
-                                    black.path("id").asText(), "PDD", "2099-03-21T00:00:00+08:00"))
+                                    black.path("id").asText(), "PDD", "2099-03-20T00:00:01+08:00"))
                     .andExpect(jsonPath("$.policies[*].winner.id").value(contains(approved)));
         } finally {
             pool.shutdownNow();
@@ -3025,7 +3061,7 @@ class GoodsSyncIntegrationTest {
                                         p.path("policyId").asText()));
         assertThat(track.path("segments").size()).isZero();
         for (var day : expected.entrySet()) {
-            String at = "2099-06-" + day.getKey() + "T23:59:59+08:00";
+            String at = "2099-06-" + day.getKey() + "T11:00:00+08:00";
             var plan =
                     java.util.stream.StreamSupport.stream(
                                     track.path("plannedSegments").spliterator(), false)
@@ -3156,14 +3192,13 @@ class GoodsSyncIntegrationTest {
     void applicantTimelineFollowsCurrentChannelAssignmentsAcrossAuthorsAndMultiPlatformPolicies()
             throws Exception {
         var good = importedGoodForEditing();
-        // 同配置另一件商品未在零售政策中勾选，也应计入整组基数。
+        // 百亿整组提交后新增同配置商品，零售使用指定卡仅申报原商品。
         jdbc.update("INSERT INTO color_dict (color_name) VALUES ('白色')");
         var sibling = (ObjectNode) editBody(good).path("product");
         sibling.put(
                 "colorId",
                 jdbc.queryForObject(
                         "SELECT id FROM color_dict WHERE color_name='白色'", String.class));
-        mvc.perform(mutation(GOODS).content(sibling.toString())).andExpect(status().isCreated());
         var author = session("test-tenant", "timeline-author", "APPLICANT");
         var viewer = session("test-tenant", "timeline-reader", "APPLICANT");
         assignPlatforms("timeline-author", "RETAIL:PDD", "RETAIL:TAOBAO", "BILLION:PDD");
@@ -3172,6 +3207,7 @@ class GoodsSyncIntegrationTest {
                         author, good, "2020-01-01", "2099-12-31", "2020-01-01 08:00:00", false);
         mvc.perform(reviewRound(billionId, 2, 1, "APPROVE")).andExpect(status().isOk());
 
+        mvc.perform(mutation(GOODS).content(sibling.toString())).andExpect(status().isCreated());
         var form = attachmentPolicyForm(good, "unused");
         form.remove("attachmentInfo");
         form.put("perspective", "RETAIL").put("estimated", false).put("verifyType", "SALES");
@@ -3179,6 +3215,7 @@ class GoodsSyncIntegrationTest {
         form.putArray("sceneTypes").add("NATIONAL_SUB");
         form.withArray("selectedPlatforms").add("TAOBAO");
         var card = (ObjectNode) form.at("/goodsForm/cards/0");
+        card.put("cardType", "SPECIFIED");
         card.withArray("subsidyPlans")
                 .addObject()
                 .put("key", "taobao")
@@ -3335,7 +3372,7 @@ class GoodsSyncIntegrationTest {
                                     .value(month.plusDays(1) + "T00:00:00+08:00"))
                     .andExpect(
                             jsonPath("$.tracks[0].plannedSegments[0].endAt")
-                                    .value(month.plusDays(5) + "T00:00:00+08:00"))
+                                    .value(month.plusDays(4) + "T00:00:01+08:00"))
                     .andExpect(
                             jsonPath("$.tracks[0].plannedSegments[0].adoptedAuditLogIds.length()")
                                     .value(1))
@@ -3398,6 +3435,7 @@ class GoodsSyncIntegrationTest {
         form.withArray("selectedPlatforms").remove(1);
         card.withArray("platformAssignments").remove(1);
         targets.remove(1);
+        card.put("cardType", "SPECIFIED");
         form.put("startTime", "2099-03-04T00:00:00+08:00")
                 .put("endTime", "2099-03-09T23:59:59+08:00");
         if ("RETAIL".equals(channel)) form.putArray("sceneTypes").add("LOCAL_SUB");
@@ -3452,7 +3490,8 @@ class GoodsSyncIntegrationTest {
         addDecisions(body, adjusted, (segment, row) -> {});
         body.put("confirmationToken", adjusted.path("confirmationToken").asText());
         mvc.perform(policyRequest(post(path + "/submit"), owner).content(body.toString()))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
         // 两张待审单基于相同的旧截止，批准第一张后第二张必须重提。
         String secondId = createPolicy(owner, form.toString()).path("id").asText();
         String secondPath = "/api/policies/" + secondId;
@@ -3474,7 +3513,8 @@ class GoodsSyncIntegrationTest {
         mvc.perform(
                         policyRequest(post(secondPath + "/submit"), owner)
                                 .content(secondBody.toString()))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewStage").value("PURCHASE_REVIEW"));
         var at = "2099-03-06T14:15:17+08:00";
         mvc.perform(get(path).session(owner))
                 .andExpect(jsonPath("$.endAdjustments[0].reason").value("原活动整单结束"));
@@ -3483,50 +3523,43 @@ class GoodsSyncIntegrationTest {
                         jsonPath("$.snapshot.consent.endAdjustments[0].target.previousEnd")
                                 .value("2099-03-30T23:59:59+08:00"));
         assertThat(effectiveIds(channel, validGoodsId, "PDD", at)).containsExactly(prior);
-        approveProduct(id, 2, 1);
-        approveProduct(secondId, 2, 1);
-        mvc.perform(reviewRound(id, 3, 1, "APPROVE")).andExpect(status().isOk());
+        mvc.perform(reviewRound(id, 2, 1, "APPROVE")).andExpect(status().isOk());
         assertThat(effectiveIds(channel, validGoodsId, "PDD", "2099-03-06T14:15:16+08:00"))
                 .contains(prior, id);
         assertThat(effectiveIds(channel, validGoodsId, "PDD", at)).containsExactly(id);
-        mvc.perform(reviewRound(secondId, 3, 1, "APPROVE"))
+        mvc.perform(reviewRound(secondId, 2, 1, "APPROVE"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("POLICY_RECONFIRM_REQUIRED"));
-        mvc.perform(reviewRound(secondId, 3, 1, "REJECT")).andExpect(status().isOk());
+        mvc.perform(reviewRound(secondId, 2, 1, "REJECT")).andExpect(status().isOk());
         String afterOwnerEnds = "2099-03-11T00:00:00+08:00";
         assertThat(effectiveIds(channel, validGoodsId, "PDD", afterOwnerEnds)).isEmpty();
         assertThat(effectiveIds(channel, validGoodsId, "TAOBAO", afterOwnerEnds)).isEmpty();
         assertThat(effectiveIds(channel, other.path("id").asText(), "PDD", afterOwnerEnds))
                 .isEmpty();
         mvc.perform(get("/api/policies/" + prior).session(owner))
-                .andExpect(jsonPath("$.approvedEnd.actualEnd").value("2099-03-06T14:15:16+08:00"));
+                .andExpect(jsonPath("$.timeHistory.currentEnd").value("2099-03-06T14:15:16+08:00"));
         mvc.perform(get("/api/admin/policies/" + prior).session(admin))
-                .andExpect(jsonPath("$.approvedEnd.change.reason").value("原活动整单结束"));
-        mvc.perform(
-                        policyRequest(
-                                        post("/api/policies/" + prior + "/time-adjustment-draft"),
-                                        owner)
-                                .content(
-                                        "{\"recordVersion\":3,\"endTime\":\"2099-03-31T19:20:21+08:00\",\"reason\":\"活动排期延长\",\"expectedSourceEnd\":\"2099-03-30T23:59:59+08:00\"}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("POLICY_EXTENSION_SOURCE_CHANGED"));
-        var renewed =
+                .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("原活动整单结束"));
+        var available =
                 json.readTree(
-                        mvc.perform(
-                                        policyRequest(
-                                                        post(
-                                                                "/api/policies/"
-                                                                        + prior
-                                                                        + "/time-adjustment-draft"),
-                                                        owner)
-                                                .content(
-                                                        "{\"recordVersion\":3,\"endTime\":\"2099-03-06T19:20:21+08:00\",\"reason\":\"活动排期延长\"}"))
+                        mvc.perform(get("/api/policies/time-adjustments/options").session(owner))
                                 .andExpect(status().isOk())
                                 .andReturn()
                                 .getResponse()
                                 .getContentAsByteArray());
-        mvc.perform(get("/api/policies/" + renewed.path("id").asText()).session(owner))
-                .andExpect(jsonPath("$.form.startTime").value("2099-03-06T14:15:17+08:00"));
+        var options = available.valueStream().toList();
+        assertThat(options).extracting(o -> o.at("/target/policyId").asText()).contains(prior);
+        var receipt =
+                options.stream()
+                        .filter(
+                                o ->
+                                        "2099-03-06T14:15:16+08:00"
+                                                .equals(o.at("/target/previousEnd").asText()))
+                        .findFirst()
+                        .orElseThrow();
+        String receiptId = receipt.at("/target/policyId").asText();
+        assertThat(receiptId).isEqualTo(prior);
+        assertThat(receipt.path("canExtend").asBoolean()).isTrue();
         var timeline =
                 json.readTree(
                         mvc.perform(
@@ -3549,15 +3582,15 @@ class GoodsSyncIntegrationTest {
                                 .getResponse()
                                 .getContentAsByteArray());
         assertThat(otherPlatform.at("/tracks/0/policies/0/policyThrough").asText())
+                .isEqualTo("2099-03-30T23:59:59+08:00");
+        assertThat(otherPlatform.at("/tracks/0/policies/0/effectiveThrough").asText())
                 .isEqualTo("2099-03-06T14:15:16+08:00");
-        jdbc.update(
-                "UPDATE policy_audit_log SET audit_time=? WHERE policy_id=?",
-                java.sql.Timestamp.valueOf("2099-03-07 11:22:33"),
-                id);
-        assertThat(effectiveIds(channel, validGoodsId, "TAOBAO", "2099-03-07T11:22:32+08:00"))
-                .containsExactly(prior);
-        assertThat(effectiveIds(channel, validGoodsId, "TAOBAO", "2099-03-07T11:22:33+08:00"))
-                .isEmpty();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_time_change WHERE policy_id=?",
+                                Integer.class,
+                                prior))
+                .isOne();
     }
 
     @Test
@@ -3648,9 +3681,9 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"));
         var route = workflowRoute(id);
-        assertThat(route.requiresProductReview()).isTrue();
+        assertThat(route.requiresProductReview()).isFalse();
         assertThat(route.triggerSegments()).isZero();
-        assertThat(route.summary()).contains("1 项随单时间调整", option.path("policyCode").asText());
+        assertThat(route.summary()).contains("采购直审", "提前至", option.path("policyCode").asText());
         assertThat(route.adjustments())
                 .singleElement()
                 .satisfies(
@@ -3660,8 +3693,7 @@ class GoodsSyncIntegrationTest {
                         });
         var oldId = oldGood.path("id").asText();
         assertThat(effectiveIds("BILLION", oldId, "TAOBAO", afterEnd)).containsExactly(prior);
-        approveProduct(id, 2, 1);
-        mvc.perform(reviewRound(id, 3, 1, "APPROVE")).andExpect(status().isOk());
+        mvc.perform(reviewRound(id, 2, 1, "APPROVE")).andExpect(status().isOk());
         assertThat(effectiveIds("BILLION", oldId, "TAOBAO", end)).containsExactly(prior);
         assertThat(effectiveIds("BILLION", oldId, "TAOBAO", afterEnd)).isEmpty();
         assertThat(
@@ -3674,98 +3706,167 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void extensionDraftCanReconfirmTheSourceCutoffAfterAnotherAdjustmentIsApproved()
+    void accompanyingRetailExtensionContinuesOneSelectionThroughTheOriginalDeadline()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "extension-source-refresh", "APPLICANT");
-        assignPlatforms("extension-source-refresh", "BILLION:PDD");
-        var original =
-                coveragePolicy(
-                        owner, good, "2099-01-01", "2099-01-31", "2026-01-01 09:00:00", false);
-        mvc.perform(reviewRound(original, 2, 1, "APPROVE")).andExpect(status().isOk());
-        var route = "/api/policies/" + original + "/time-adjustment-draft";
-        var extension =
-                json.createObjectNode()
-                        .put("recordVersion", 3)
-                        .put("endTime", "2099-03-05T11:12:13+08:00")
-                        .put("reason", "延续活动");
-        var ext =
-                mvc.perform(policyRequest(post(route), owner).content(extension.toString()))
-                        .andExpect(status().isOk())
-                        .andReturn();
-        var path =
-                "/api/policies/"
-                        + json.readTree(ext.getResponse().getContentAsByteArray())
-                                .path("id")
-                                .asText();
-        var oldEnd = "2099-01-31T23:59:59+08:00";
-        var newEnd = "2099-01-26T11:12:13+08:00";
-        var shortForm = extension.deepCopy().put("endTime", newEnd).put("reason", "原活动先结单");
-        var cut =
-                mvc.perform(policyRequest(post(route), owner).content(shortForm.toString()))
-                        .andExpect(status().isOk())
-                        .andReturn();
-        var cutId = json.readTree(cut.getResponse().getContentAsByteArray()).path("id").asText();
-        var cutPath = "/api/policies/" + cutId;
-        var cutPreview =
+        var owner = session("test-tenant", "retail-continuation-owner", "APPLICANT");
+        assignPlatforms("retail-continuation-owner", "RETAIL:PDD");
+        var form = attachmentPolicyForm(good, "unused");
+        form.remove("attachmentInfo");
+        var start = "2099-01-01T00:00:00+08:00";
+        var oldEnd = "2099-01-10T00:00:00+08:00";
+        var continuation = "2099-01-10T00:00:01+08:00";
+        var mainEnd = "2099-01-13T00:00:00+08:00";
+        var extendedEnd = "2099-01-14T00:00:00+08:00";
+        form.put("perspective", "RETAIL").put("estimated", false).put("verifyType", "ACTIVATION");
+        form.putArray("sceneTypes").add("NATIONAL_SUB");
+        form.put("startTime", start).put("endTime", oldEnd);
+        var original = createPolicy(owner, form.toString()).path("id").asText();
+        mvc.perform(confirmedSubmission("/api/policies/" + original, owner, 1))
+                .andExpect(status().isOk());
+        mvc.perform(reviewRound(original, 2, 1, "REJECT")).andExpect(status().isOk());
+        mvc.perform(confirmedSubmission("/api/policies/" + original, owner, 3))
+                .andExpect(status().isOk());
+        mvc.perform(reviewRound(original, 4, 2, "APPROVE")).andExpect(status().isOk());
+
+        form.put("verifyType", "SALES").put("endTime", mainEnd);
+        var parent = createPolicy(owner, form.toString()).path("id").asText();
+        var path = "/api/policies/" + parent;
+        var response =
                 mvc.perform(
-                                get(cutPath + "/submission-preview")
+                                get(path + "/submission-preview")
                                         .session(owner)
                                         .param("recordVersion", "1"))
                         .andExpect(status().isOk())
-                        .andReturn();
-        var consent =
-                json.createObjectNode()
-                        .put("recordVersion", 1)
-                        .put(
-                                "confirmationToken",
-                                json.readTree(cutPreview.getResponse().getContentAsByteArray())
-                                        .path("confirmationToken")
-                                        .asText());
-        mvc.perform(policyRequest(post(cutPath + "/submit"), owner).content(consent.toString()))
-                .andExpect(status().isOk());
-        mvc.perform(reviewRound(cutId, 2, 1, "APPROVE")).andExpect(status().isOk());
-        mvc.perform(get(path).session(owner))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.adjustmentSourceEnd").value(newEnd))
-                .andExpect(
-                        jsonPath("$.form.goodsForm.timeAdjustment.target.previousEnd")
-                                .value(oldEnd));
-        extension.put("recordVersion", 1);
-        for (var stale :
-                List.of(extension, extension.deepCopy().put("expectedSourceEnd", oldEnd))) {
-            mvc.perform(
-                            policyRequest(put(path + "/time-adjustment-date"), owner)
-                                    .content(stale.toString()))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.code").value("POLICY_EXTENSION_SOURCE_CHANGED"));
-        }
+                        .andReturn()
+                        .getResponse();
+        var target =
+                json.readTree(response.getContentAsByteArray())
+                        .at("/applicability/adjustmentOptions/0/target");
+        var body = json.createObjectNode().put("recordVersion", 1);
+        var adjustment = body.putArray("endAdjustments").addObject().put("reason", "活动改期");
+        adjustment.set("target", target);
+        var shortened = "2099-01-07T00:00:00+08:00";
+        adjustment.put("endTime", shortened);
         mvc.perform(
-                        policyRequest(put(path + "/time-adjustment-date"), owner)
-                                .content(extension.put("expectedSourceEnd", newEnd).toString()))
+                        policyRequest(post(path + "/submission-preview"), owner)
+                                .content(body.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.recordVersion").value(2));
-        mvc.perform(get(path).session(owner))
-                .andExpect(jsonPath("$.form.startTime").value("2099-01-26T11:12:14+08:00"))
+                .andExpect(jsonPath("$.applicability.scopes[0].segments.length()").value(1))
                 .andExpect(
-                        jsonPath("$.form.goodsForm.timeAdjustment.target.previousEnd")
-                                .value(newEnd));
-        mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "2"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.applicability.status").value("DIRECT"));
-        mvc.perform(confirmedSubmission(path, owner, 2)).andExpect(status().isOk());
-        var extensionId =
-                json.readTree(ext.getResponse().getContentAsByteArray()).path("id").asText();
-        var plan = workflowRoute(extensionId);
-        assertThat(plan.requiresProductReview()).isFalse();
-        assertThat(plan.changes())
+                        jsonPath("$.applicability.scopes[0].segments[0].through").value(shortened));
+
+        adjustment.put("endTime", extendedEnd);
+        var result =
+                mvc.perform(
+                                policyRequest(post(path + "/submission-preview"), owner)
+                                        .content(body.toString()))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        var preview = json.readTree(result.getResponse().getContentAsByteArray());
+        var segments = preview.at("/applicability/scopes/0/segments");
+        assertThat(
+                        preview.at("/applicability/scopes/0/policies")
+                                .valueStream()
+                                .filter(
+                                        p ->
+                                                p.path("policyId")
+                                                        .asText()
+                                                        .equals(
+                                                                "extension:"
+                                                                        + parent
+                                                                        + ":"
+                                                                        + original))
+                                .toList())
+                .singleElement()
+                .satisfies(p -> assertThat(p.path("submissionVersion").asInt()).isEqualTo(2));
+        assertThat(segments.size()).isEqualTo(2);
+        assertThat(segments.get(0).path("continuesPrevious").asBoolean()).isFalse();
+        assertThat(segments.get(1).path("continuesPrevious").asBoolean()).isTrue();
+        assertThat(segments.get(0).path("through").asText()).isEqualTo(oldEnd);
+        assertThat(segments.get(1).path("through").asText()).isEqualTo(mainEnd);
+        // 界面只勾一次，提交时两个原始范围都选择同一组业务单号。
+        body.put("confirmationToken", preview.path("confirmationToken").asText());
+        addDecisions(body, preview, (segment, choice) -> {});
+        mvc.perform(policyRequest(post(path + "/submit"), owner).content(body.toString()))
+                .andExpect(status().isOk());
+        approveProduct(parent, 2, 1);
+        var review =
+                mvc.perform(
+                                get("/api/policy-reviews/" + parent)
+                                        .param("submissionVersion", "1")
+                                        .session(admin))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.changeSummary.triggerSegments").value(1))
+                        .andExpect(jsonPath("$.adjustments[0].target.policyId").value(original))
+                        .andReturn()
+                        .getResponse();
+        var detail = json.readTree(review.getContentAsByteArray());
+        assertThat(detail.path("changes").toString()).doesNotContain("extension:", "（延期）");
+        var solo =
+                detail.path("changes")
+                        .valueStream()
+                        .filter(
+                                change ->
+                                        change.path("from")
+                                                .asText()
+                                                .equals("2099-01-13T00:00:01+08:00"))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(solo.at("/after/0/policyId").asText()).isEqualTo(original);
+        assertThat(solo.at("/after/0/submissionVersion").asInt()).isEqualTo(2);
+        var stacked =
+                detail.path("changes")
+                        .valueStream()
+                        .filter(change -> change.path("after").size() == 2)
+                        .toList();
+        assertThat(stacked)
                 .singleElement()
                 .satisfies(
-                        segment -> {
-                            assertThat(segment.kind()).isEqualTo(Kind.ORDINARY_ADDITION);
-                            assertThat(segment.from()).isEqualTo("2099-01-26T11:12:14");
-                            assertThat(segment.through()).isEqualTo("2099-03-05T11:12:13");
+                        change -> {
+                            assertThat(change.path("from").asText()).isEqualTo(start);
+                            assertThat(change.path("through").asText()).isEqualTo(mainEnd);
+                            assertThat(change.path("after").findValuesAsText("policyId"))
+                                    .containsExactlyInAnyOrder(original, parent);
                         });
+        assertThat(detail.at("/changeSummary/summary").asText())
+                .contains("2099-01-01 00:00:00 至 2099-01-13 00:00:00")
+                .doesNotContain("（延期）");
+        mvc.perform(reviewRound(parent, 3, 1, "APPROVE")).andExpect(status().isOk());
+        mvc.perform(get("/api/policies/" + original).session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.timeHistory.changes.length()").value(1))
+                .andExpect(jsonPath("$.timeHistory.changes[0].previousEnd").value(oldEnd))
+                .andExpect(jsonPath("$.timeHistory.changes[0].actualEnd").value(extendedEnd))
+                .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("活动改期"));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key LIKE ?",
+                                Integer.class,
+                                "P/" + original + "/EXTENDED/%"))
+                .isOne();
+        var goodsId = good.path("id").asText();
+        for (var point : List.of(start, oldEnd, continuation, mainEnd)) {
+            assertThat(effectiveIds("RETAIL", goodsId, "PDD", point))
+                    .containsExactlyInAnyOrder(original, parent);
+        }
+        for (var point : List.of("2099-01-13T00:00:01+08:00", extendedEnd)) {
+            assertThat(effectiveIds("RETAIL", goodsId, "PDD", point)).containsExactly(original);
+        }
+        assertThat(effectiveIds("RETAIL", goodsId, "PDD", "2099-01-14T00:00:01+08:00")).isEmpty();
+        mvc.perform(
+                        timelineRequest(good, "2099-01-01", "2099-01-14")
+                                .session(admin)
+                                .param("platformCode", "PDD"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tracks[0].policies.length()").value(2))
+                .andExpect(jsonPath("$.tracks[0].plannedSegments.length()").value(2))
+                .andExpect(
+                        jsonPath("$.tracks[0].plannedSegments[0].adoptedAuditLogIds.length()")
+                                .value(2))
+                .andExpect(
+                        jsonPath("$.tracks[0].plannedSegments[1].adoptedAuditLogIds.length()")
+                                .value(1));
     }
 
     @Test
@@ -3938,14 +4039,16 @@ class GoodsSyncIntegrationTest {
         assertThat(route.changes())
                 .anySatisfy(
                         segment -> {
-                            // 两份延期先交叉，本单尚未开始，两个临时身份共同构成新增叠加。
-                            assertThat(segment.from()).isEqualTo("2099-05-06T00:00:00");
+                            // 第一张开始延期后即与第二张叠加；第二张随后跨过原截止，仍是同一组合。
+                            assertThat(segment.from()).isEqualTo("2099-05-03T18:00:01");
                             assertThat(segment.through()).isEqualTo("2099-05-06T23:59:59");
                             assertThat(segment.kind()).isEqualTo(Kind.STACK);
-                            assertThat(segment.before()).isEmpty();
+                            assertThat(segment.before())
+                                    .extracting(Policy::policyId)
+                                    .containsExactly(second);
                             assertThat(segment.after())
                                     .extracting(Policy::policyId)
-                                    .containsExactlyInAnyOrder(firstKey, secondKey);
+                                    .containsExactlyInAnyOrder(first, second);
                         });
         assignPlatforms("batch-transfer", "BILLION:TAOBAO");
         approveProduct(parent, 2, 1);
@@ -3954,42 +4057,140 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.code").value("POLICY_RECONFIRM_REQUIRED"));
         assertThat(
                         jdbc.queryForObject(
-                                "SELECT COUNT(*) FROM policy_apply WHERE extension_source_id IS NOT NULL",
+                                "SELECT COUNT(*) FROM policy_time_change WHERE direction='EXTEND'",
                                 Integer.class))
                 .isZero();
         assignPlatforms("batch-extension-owner", "BILLION:TAOBAO");
         mvc.perform(reviewRound(parent, 3, 1, "APPROVE")).andExpect(status().isOk());
         assertThat(
                         jdbc.queryForObject(
-                                "SELECT COUNT(*) FROM policy_apply WHERE extension_source_id IS NOT NULL AND status='APPROVED'",
+                                "SELECT COUNT(*) FROM policy_time_change WHERE direction='EXTEND'",
                                 Integer.class))
                 .isEqualTo(2);
-        var child =
-                jdbc.queryForObject(
-                        "SELECT id FROM policy_apply WHERE extension_source_id=?",
-                        String.class,
-                        second);
-        mvc.perform(get("/api/policies/" + child).session(owner))
+        mvc.perform(get("/api/policies/" + second).session(owner))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("延长活动 " + second))
                 .andExpect(
-                        jsonPath("$.form.goodsForm.timeAdjustment.reason").value("延长活动 " + second))
-                .andExpect(jsonPath("$.form.startTime").value("2099-05-06T00:00:00+08:00"));
+                        jsonPath("$.timeHistory.changes[0].effectiveAt")
+                                .value("2099-05-05T18:00:01+08:00"));
         var goodsId = good.path("id").asText();
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-05-08T12:00:00+08:00"))
-                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(child)));
+                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(second)));
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-05-12T12:00:00+08:00"))
                 .andExpect(jsonPath("$.policies[*].winner.id").value(contains(later)));
         mvc.perform(effectiveRequest(goodsId, "PDD", "2099-05-12T12:30:46+08:00"))
-                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(child)));
+                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(second)));
         mvc.perform(effectiveRequest(goodsId, "TAOBAO", "2099-05-15T19:20:21+08:00"))
-                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(child)));
+                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(second)));
         mvc.perform(effectiveRequest(goodsId, "TAOBAO", "2099-05-15T19:20:22+08:00"))
                 .andExpect(jsonPath("$.policies").isEmpty());
         mvc.perform(
                         timelineRequest(good, "2099-05-14", "2099-05-15")
                                 .session(admin)
                                 .param("platformCode", "TAOBAO"))
-                .andExpect(jsonPath("$.tracks[0].policies[0].policyId").value(child));
+                .andExpect(jsonPath("$.tracks[0].policies[0].policyId").value(second));
+    }
+
+    @Test
+    void directlyAdjustsMultiplePoliciesOnceAndKeepsTheSelectedExecutionPeriods() throws Exception {
+        var good = importedGoodForEditing();
+        var owner = session("test-tenant", "direct-adjust-owner", "APPLICANT");
+        var other = session("test-tenant", "direct-adjust-other", "APPLICANT");
+        assignPlatforms("direct-adjust-owner", "BILLION:PDD");
+        var original =
+                coveragePolicy(
+                        owner, good, "2099-04-01", "2099-04-05", "2099-01-01 09:00:00", false);
+        var later =
+                coveragePolicy(
+                        owner, good, "2099-04-06", "2099-04-20", "2099-01-02 09:00:00", false);
+        for (var id : List.of(original, later)) {
+            mvc.perform(reviewRound(id, 2, 1, "APPROVE")).andExpect(status().isOk());
+        }
+        var path = "/api/policies/time-adjustments";
+        mvc.perform(get(path + "/options").session(other))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+        var options =
+                json.readTree(
+                        mvc.perform(get(path + "/options").session(owner))
+                                .andExpect(status().isOk())
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsByteArray());
+        assertThat(options.size()).isEqualTo(2);
+        var body = json.createObjectNode();
+        var changes = body.putArray("endAdjustments");
+        String cutoff = "2099-04-09T16:30:15+08:00";
+        for (var option : options) {
+            boolean extend = original.equals(option.at("/target/policyId").asText());
+            changes.addObject()
+                    .put("endTime", extend ? "2099-04-15T21:30:00+08:00" : cutoff)
+                    .put("reason", extend ? "延续原补贴" : "渠道活动提前结束")
+                    .set("target", option.get("target"));
+        }
+        var preview =
+                json.readTree(
+                        mvc.perform(
+                                        policyRequest(post(path + "/preview"), owner)
+                                                .content(body.toString()))
+                                .andExpect(status().isOk())
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsByteArray());
+        assertThat(preview.at("/applicability/scopes").size()).isPositive();
+        body.put("confirmationToken", preview.get("confirmationToken").asText());
+        String key = UUID.randomUUID().toString();
+        mvc.perform(
+                        policyRequest(post(path), owner)
+                                .header("Idempotency-Key", key)
+                                .content(body.toString()))
+                .andExpect(status().isConflict());
+        addDecisions(
+                body,
+                preview,
+                (segment, choice) -> choice.put("choice", "CHOOSE_ONE").put("policyId", later));
+
+        // 分工在预览后变更，整批回滚。恢复原分工后可继续核对同一批。
+        assignPlatforms("direct-adjust-other", "BILLION:PDD");
+        var apply =
+                policyRequest(post(path), owner)
+                        .header("Idempotency-Key", key)
+                        .content(body.toString());
+        mvc.perform(apply).andExpect(status().is4xxClientError());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class))
+                .isEqualTo(2);
+        assignPlatforms("direct-adjust-owner", "BILLION:PDD");
+        var saved =
+                mvc.perform(apply)
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$[0].status").value("APPROVED"))
+                        .andExpect(jsonPath("$[1].status").value("APPROVED"))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsByteArray();
+        mvc.perform(apply).andExpect(status().isOk()).andExpect(content().bytes(saved));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM policy_apply", Integer.class))
+                .isEqualTo(2);
+        mvc.perform(get("/api/policies/" + original).session(owner))
+                .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("延续原补贴"))
+                .andExpect(
+                        jsonPath("$.timeHistory.changes[0].effectiveAt")
+                                .value("2099-04-05T18:00:01+08:00"));
+        mvc.perform(get("/api/policies/" + later).session(owner))
+                .andExpect(jsonPath("$.timeHistory.currentEnd").value(cutoff))
+                .andExpect(jsonPath("$.timeHistory.changes[0].reason").value("渠道活动提前结束"));
+        var goodsId = good.path("id").asText();
+        assertThat(effectiveIds("BILLION", goodsId, "PDD", cutoff)).containsExactly(later);
+        assertThat(effectiveIds("BILLION", goodsId, "PDD", "2099-04-09T16:30:16+08:00"))
+                .containsExactly(original);
+        for (var row : json.readTree(saved)) {
+            var url = "/api/policy-reviews/" + row.get("id").asText();
+            mvc.perform(get(url).param("submissionVersion", "1").session(owner))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.allowedActions").isEmpty());
+            mvc.perform(get(url).param("submissionVersion", "1").session(other))
+                    .andExpect(status().isNotFound());
+        }
     }
 
     @Test
@@ -4101,22 +4302,20 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isConflict());
         // 一张目标失去授权时，整个待审轮次均不能生效。
         assignPlatforms("batch-end-other", "BILLION:PDD");
-        approveProduct(requestId, 2, 1);
-        mvc.perform(reviewRound(requestId, 3, 1, "APPROVE"))
+        mvc.perform(reviewRound(requestId, 2, 1, "APPROVE"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("POLICY_RECONFIRM_REQUIRED"));
         for (var prior : expected.keySet()) {
             mvc.perform(get("/api/policies/" + prior).session(owner))
-                    .andExpect(jsonPath("$.approvedEnd").doesNotExist());
+                    .andExpect(jsonPath("$.timeHistory.changes").isEmpty());
         }
         assignPlatforms("batch-end-owner", "BILLION:PDD");
-        mvc.perform(reviewRound(requestId, 3, 1, "APPROVE")).andExpect(status().isOk());
+        mvc.perform(reviewRound(requestId, 2, 1, "APPROVE")).andExpect(status().isOk());
         for (var entry : expected.entrySet()) {
             var cut = entry.getValue();
             mvc.perform(get("/api/policies/" + entry.getKey()).session(owner))
-                    .andExpect(jsonPath("$.approvedEnd.actualEnd").value(cut.end()))
-                    .andExpect(jsonPath("$.approvedEnd.change.reason").value(cut.reason()))
-                    .andExpect(jsonPath("$.approvedEnd.change.attachmentInfo").doesNotExist());
+                    .andExpect(jsonPath("$.timeHistory.currentEnd").value(cut.end()))
+                    .andExpect(jsonPath("$.timeHistory.changes[0].reason").value(cut.reason()));
             mvc.perform(get("/api/policies/" + entry.getKey() + suffix).session(owner))
                     .andExpect(status().isNotFound());
         }
@@ -4167,443 +4366,96 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void standaloneShorteningRequiresReasonAndAuthorizesEvidenceWithoutAddingSubsidy()
-            throws Exception {
+    void standaloneAdjustmentsAuthorizeProofsAndKeepTheApprovedSnapshot() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "shorten-owner", "APPLICANT");
-        var other = session("test-tenant", "shorten-other", "APPLICANT");
-        assignPlatforms("shorten-owner", "BILLION:PDD", "BILLION:TAOBAO");
-        var original =
-                coveragePolicy(
-                        owner, good, "2096-02-01", "2096-02-28", "2026-01-11 00:00:00", true);
-        mvc.perform(reviewRound(original, 2, 1, "APPROVE")).andExpect(status().isOk());
-        var create = "/api/policies/" + original + "/time-adjustment-draft";
-        var previous = "2096-02-28T23:59:59+08:00";
-        var body =
-                json.createObjectNode()
-                        .put("recordVersion", 3)
-                        .put("expectedSourceEnd", previous)
-                        .put("endTime", "2096-02-01T08:59:59+08:00");
-        mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                .andExpect(status().isBadRequest());
-        body.put("reason", "  ");
-        mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                .andExpect(status().isBadRequest());
-        body.put("reason", "活动实际提前结束");
-        mvc.perform(policyRequest(post(create), other).content(body.toString()))
-                .andExpect(status().isNotFound());
-        mvc.perform(
-                        policyRequest(post(create), owner)
-                                .content(body.deepCopy().put("endTime", previous).toString()))
-                .andExpect(status().isBadRequest());
-        var evidence = uploadChangeFile(owner, "缩短活动证明.pdf");
-        body.putArray("attachmentInfo").addNull();
-        mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                .andExpect(status().isBadRequest());
-        var ref = body.putArray("attachmentInfo").addObject().put("type", "FILE");
-        ref.put("id", uploadChangeFile(other, "其他人的文件.pdf"));
-        mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                .andExpect(status().isNotFound());
-        ref.put("id", evidence).put("originalName", "伪造原名.pdf");
-        assignPlatforms("shorten-other", "BILLION:PDD", "BILLION:TAOBAO");
-        mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                .andExpect(status().isForbidden());
-        assignPlatforms("shorten-owner", "BILLION:PDD");
-        mvc.perform(
-                        policyRequest(post(create), owner)
-                                .content(
-                                        body.deepCopy()
-                                                .put("endTime", "2096-03-05T18:00:00+08:00")
-                                                .toString()))
-                .andExpect(status().isForbidden());
-        var created =
-                mvc.perform(policyRequest(post(create), owner).content(body.toString()))
-                        .andExpect(status().isOk())
-                        .andReturn();
-        var id = json.readTree(created.getResponse().getContentAsByteArray()).path("id").asText();
-        var path = "/api/policies/" + id;
-        String files = "/attachments/" + evidence + "/content";
-        mvc.perform(get(path).session(owner))
-                .andExpect(jsonPath("$.form.goodsForm.timeAdjustment.reason").value("活动实际提前结束"))
-                .andExpect(
-                        jsonPath("$.form.goodsForm.timeAdjustment.attachmentInfo[0].originalName")
-                                .value("缩短活动证明.pdf"));
-        mvc.perform(get(path + files).session(owner)).andExpect(status().isOk());
-        mvc.perform(get(path + files).session(other)).andExpect(status().isNotFound());
-        mvc.perform(policyRequest(delete("/api/attachments/" + evidence), owner))
-                .andExpect(status().isConflict());
-
-        String end = "2096-02-16T01:02:03+08:00";
-        body.put("recordVersion", 1).put("endTime", end).put("reason", "活动结单时间已核对");
-        mvc.perform(
-                        policyRequest(put(path + "/time-adjustment-date"), owner)
-                                .content(
-                                        body.deepCopy()
-                                                .put("endTime", "2096-03-05T18:00:00+08:00")
-                                                .toString()))
-                .andExpect(status().isBadRequest());
-        mvc.perform(
-                        policyRequest(put(path + "/time-adjustment-date"), owner)
-                                .content(body.toString()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.recordVersion").value(2));
-        var preview =
-                mvc.perform(
-                                get(path + "/submission-preview")
-                                        .session(owner)
-                                        .param("recordVersion", "2"))
-                        .andExpect(status().isOk())
-                        .andReturn();
-        var submit =
-                json.createObjectNode()
-                        .put("recordVersion", 2)
-                        .put(
-                                "confirmationToken",
-                                json.readTree(preview.getResponse().getContentAsByteArray())
-                                        .path("confirmationToken")
-                                        .asText());
-        mvc.perform(policyRequest(post(path + "/submit"), owner).content(submit.toString()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("PENDING"));
-        var route = workflowRoute(id);
-        assertThat(route.requiresProductReview()).isFalse();
-        assertThat(route.changes()).isEmpty();
-        assertThat(route.adjustments())
-                .singleElement()
-                .satisfies(
-                        adjustment -> {
-                            assertThat(adjustment.target().policyId()).isEqualTo(original);
-                            assertThat(adjustment.previousEnd()).isEqualTo(previous);
-                            assertThat(adjustment.endTime()).isEqualTo(end);
-                        });
-        assertThat(route.summary()).contains("采购直审", "2096-02-16 01:02:03");
-        assertThat(
-                        jdbc.queryForObject(
-                                "SELECT COUNT(*) FROM policy_goods_detail WHERE policy_id=?",
-                                Integer.class,
-                                id))
-                .isZero();
-        String log =
-                jdbc.queryForObject(
-                        "SELECT id FROM policy_audit_log WHERE policy_id=?", String.class, id);
-        var history = "/audit-logs/" + log + files;
-        mvc.perform(get("/api/admin/policies/" + id).session(admin))
-                .andExpect(status().isOk())
-                .andExpect(
-                        jsonPath("$.snapshot.form.goodsForm.timeAdjustment.target.policyId")
-                                .value(original))
-                .andExpect(jsonPath("$.snapshot.form.goodsForm.timeAdjustment.endTime").value(end));
-        mvc.perform(get(path + history).session(owner)).andExpect(status().isOk());
-        mvc.perform(get("/api/admin/policies/" + id + history).session(admin))
-                .andExpect(status().isOk());
-        var later = "2096-02-16T01:02:04+08:00";
-        var goodsId = good.path("id").asText();
-        assertThat(effectiveIds("BILLION", goodsId, "PDD", later)).containsExactly(original);
-        mvc.perform(reviewRound(id, 3, 1, "APPROVE")).andExpect(status().isOk());
-        assertThat(effectiveIds("BILLION", goodsId, "PDD", end)).containsExactly(original);
-        assertThat(effectiveIds("BILLION", goodsId, "PDD", later)).isEmpty();
-        assertThat(effectiveIds("BILLION", goodsId, "TAOBAO", later)).isEmpty();
-        // 同批其它目标或其它轮次的异常调整不应阻断这张政策的详情。
-        var adjustmentSnapshot =
-                (ObjectNode)
-                        json.readTree(
-                                jdbc.queryForObject(
-                                        "SELECT snapshot_data FROM policy_audit_log WHERE id=?",
-                                        String.class,
-                                        log));
-        var changes =
-                (com.fasterxml.jackson.databind.node.ArrayNode)
-                        adjustmentSnapshot.at("/consent/endAdjustments");
-        for (var invalidTarget : List.of(original, "99999999")) {
-            var invalid = changes.addObject();
-            invalid.putObject("target")
-                    .put("policyId", invalidTarget)
-                    .put("auditLogId", "99999999");
-            invalid.putObject("endTime");
-        }
-        jdbc.update(
-                "UPDATE policy_audit_log SET snapshot_data=? WHERE id=?",
-                adjustmentSnapshot.toString(),
-                log);
-        mvc.perform(get("/api/admin/policies/" + original).session(admin))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.approvedEnd.actualEnd").value(end));
-        mvc.perform(get("/api/policies/" + original).session(owner))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.approvedEnd.actualEnd").value(end))
-                .andExpect(jsonPath("$.approvedEnd.change.reason").value("活动结单时间已核对"))
-                .andExpect(jsonPath("$.form.endTime").value("2096-02-28T18:00:00+08:00"));
-        mvc.perform(policyRequest(delete("/api/attachments/" + evidence), owner))
-                .andExpect(status().isConflict());
-    }
-
-    @Test
-    void extensionUsesOnlyNewDatesAndGetsItsOwnApprovalAndConsent() throws Exception {
-        var good = importedGoodForEditing();
-        var owner = session("test-tenant", "extension-owner", "APPLICANT");
-        assignPlatforms("extension-owner", "BILLION:PDD");
-        var other = session("test-tenant", "extension-other", "APPLICANT");
-        String id =
+        var owner = session("test-tenant", "change-owner", "APPLICANT");
+        var other = session("test-tenant", "other-owner", "APPLICANT");
+        assignPlatforms("change-owner", "BILLION:PDD");
+        var id =
                 coveragePolicy(
                         owner, good, "2096-02-01", "2096-02-28", "2026-01-11 00:00:00", false);
-        String path = "/api/policies/" + id;
-        String draftPath = path + "/time-adjustment-draft";
-        String date =
-                "{\"recordVersion\":3,\"endTime\":\"2096-02-29T23:59:59+08:00\",\"reason\":\"活动排期延长\"}";
-        mvc.perform(policyRequest(post(draftPath), owner).content(date))
-                .andExpect(status().isConflict());
         mvc.perform(reviewRound(id, 2, 1, "APPROVE")).andExpect(status().isOk());
-        mvc.perform(policyRequest(post(draftPath), other).content(date))
-                .andExpect(status().isNotFound());
-        mvc.perform(
-                        policyRequest(post(draftPath), owner)
-                                .content(date.replace("2096-02-29", "2096-02-28")))
-                .andExpect(status().isBadRequest());
-        var original =
-                json.readTree(
-                        mvc.perform(get(path).session(owner))
-                                .andReturn()
-                                .getResponse()
-                                .getContentAsByteArray());
-        var created =
-                mvc.perform(policyRequest(post(draftPath), owner).content(date))
+        var endpoint = "/api/policies/time-adjustments";
+        var options =
+                mvc.perform(get(endpoint + "/options").session(owner))
                         .andExpect(status().isOk())
                         .andReturn();
-        var newId =
-                json.readTree(created.getResponse().getContentAsByteArray()).path("id").asText();
-        assertThat(newId).isNotEqualTo(id);
-        String next = "/api/policies/" + newId;
-        mvc.perform(policyRequest(post(draftPath), owner).content(date))
-                .andExpect(jsonPath("$.id").value(newId));
-        mvc.perform(get(next).session(owner))
-                .andExpect(
-                        jsonPath("$.sourcePolicyCode").value(original.path("policyCode").asText()))
-                .andExpect(jsonPath("$.form.startTime").value("2096-02-29T00:00:00+08:00"))
-                .andExpect(jsonPath("$.form.endTime").value("2096-02-29T23:59:59+08:00"));
-        mvc.perform(get(next + "/submission-preview").session(owner).param("recordVersion", "1"))
-                .andExpect(jsonPath("$.applicability.status").value("DIRECT"))
-                .andExpect(jsonPath("$.applicability.adjustmentOptions").isEmpty());
-        var ownSource = json.createObjectNode().put("recordVersion", 1);
-        var entry =
-                ownSource
-                        .putArray("endAdjustments")
+        var target = json.readTree(options.getResponse().getContentAsByteArray()).at("/0/target");
+        var body = json.createObjectNode();
+        var change =
+                body.putArray("endAdjustments")
                         .addObject()
-                        .put("endTime", "2096-02-20T10:00:00+08:00")
-                        .put("reason", "同单重复调整来源");
-        entry.putObject("target")
-                .put("policyId", id)
-                .put(
-                        "auditLogId",
-                        jdbc.queryForObject(
-                                "SELECT id FROM policy_audit_log WHERE policy_id=?",
-                                String.class,
-                                id))
-                .put("previousEnd", "2096-02-28T23:59:59+08:00");
-        mvc.perform(
-                        policyRequest(post(next + "/submission-preview"), owner)
-                                .content(ownSource.toString()))
+                        .put("endTime", "2096-02-28T18:00:01+08:00");
+        change.set("target", target);
+        mvc.perform(policyRequest(post(endpoint + "/preview"), owner).content(body.toString()))
                 .andExpect(status().isBadRequest());
-        mvc.perform(
-                        policyRequest(put(next + "/draft"), owner)
-                                .content("{\"recordVersion\":1,\"perspective\":\"RETAIL\"}"))
-                .andExpect(status().isBadRequest());
-
-        String cross =
-                coveragePolicy(
-                        owner, good, "2096-03-01", "2096-03-04", "2026-01-12 00:00:00", false);
-        mvc.perform(reviewRound(cross, 2, 1, "APPROVE")).andExpect(status().isOk());
-        String change =
-                "{\"recordVersion\":1,\"endTime\":\"2096-03-02T23:59:59+08:00\",\"reason\":\"活动排期延长\"}";
-        mvc.perform(policyRequest(put(next + "/time-adjustment-date"), owner).content(change))
-                .andExpect(jsonPath("$.recordVersion").value(2));
-        mvc.perform(policyRequest(put(next + "/time-adjustment-date"), owner).content(change))
-                .andExpect(status().isConflict());
-        mvc.perform(get(next + "/submission-preview").session(owner).param("recordVersion", "2"))
-                .andExpect(
-                        jsonPath("$.applicability.scopes[0].segments[0].from")
-                                .value("2096-03-01T09:00:00+08:00"))
-                .andExpect(
-                        jsonPath("$.applicability.scopes[0].segments[0].through")
-                                .value("2096-03-02T23:59:59+08:00"));
-        mvc.perform(policyRequest(post(next + "/submit"), owner).content("{\"recordVersion\":2}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("POLICY_CONFIRMATION_REQUIRED"));
-        mvc.perform(confirmedSubmission(next, owner, 2))
-                .andExpect(jsonPath("$.status").value("PENDING"));
-        var route = workflowRoute(newId);
-        assertThat(route.requiresProductReview()).isTrue();
-        assertThat(route.adjustments())
-                .singleElement()
-                .satisfies(
-                        adjustment -> {
-                            assertThat(adjustment.extension()).isTrue();
-                            assertThat(adjustment.target().policyId()).isEqualTo(id);
-                        });
-        assertThat(route.changes())
-                .allSatisfy(
-                        segment ->
-                                assertThat(segment.from())
-                                        .isAfterOrEqualTo(
-                                                LocalDateTime.parse("2096-02-29T00:00:00")));
-        assertThat(route.changes())
-                .anySatisfy(
-                        segment -> {
-                            assertThat(segment.kind()).isEqualTo(Kind.STACK);
-                            assertThat(segment.from()).isEqualTo("2096-03-01T09:00:00");
-                            assertThat(segment.before())
-                                    .extracting(Policy::policyId)
-                                    .containsExactly(cross);
-                            assertThat(segment.after())
-                                    .extracting(Policy::policyId)
-                                    .containsExactlyInAnyOrder(newId, cross);
-                        });
-        mvc.perform(get("/api/admin/policies/" + newId).session(admin))
-                .andExpect(
-                        jsonPath("$.snapshot.sourcePolicyCode")
-                                .value(original.path("policyCode").asText()));
-        approveProduct(newId, 3, 1);
-        mvc.perform(reviewRound(newId, 4, 1, "APPROVE")).andExpect(status().isOk());
-        mvc.perform(effectiveRequest(good.path("id").asText(), "PDD", "2096-02-28T23:59:59+08:00"))
-                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(id)));
-        mvc.perform(effectiveRequest(good.path("id").asText(), "PDD", "2096-02-29T00:00:00+08:00"))
-                .andExpect(jsonPath("$.policies[*].winner.id").value(contains(newId)));
-        var after =
-                json.readTree(
-                        mvc.perform(get(path).session(owner))
-                                .andReturn()
-                                .getResponse()
-                                .getContentAsByteArray());
-        assertThat(after).isEqualTo(original);
-        mvc.perform(policyRequest(post(draftPath), owner).content(date))
-                .andExpect(status().isConflict());
-    }
-
-    @Test
-    void concurrentExtensionCreationReusesOneDraftAndRejectionRetainsItsAttachment()
-            throws Exception {
-        var owner = session("test-tenant", "extension-file-owner", "APPLICANT");
-        assignPlatforms("extension-file-owner", "BILLION:PDD");
-        var good = importedGoodForEditing();
-        var file =
-                new MockMultipartFile(
-                        "file",
-                        "延期依据.pdf",
-                        "application/pdf",
-                        "%PDF-1.7".getBytes(StandardCharsets.UTF_8));
-        var upload =
+        change.put("reason", "活动延续一秒");
+        var attachment = change.putArray("attachmentInfo").addObject().put("type", "FILE");
+        attachment.put("id", uploadChangeFile(other, "另一账号的依据.pdf"));
+        mvc.perform(policyRequest(post(endpoint + "/preview"), owner).content(body.toString()))
+                .andExpect(status().isNotFound());
+        var evidence = uploadChangeFile(owner, "延续证明.pdf");
+        attachment.put("id", evidence);
+        var preview =
                 mvc.perform(
-                                multipart("/api/attachments")
-                                        .file(file)
-                                        .session(owner)
-                                        .header("Origin", "http://localhost:5173")
-                                        .header("X-Policy-Request", "1"))
-                        .andExpect(status().isCreated())
-                        .andReturn();
-        var fileId =
-                json.readTree(upload.getResponse().getContentAsByteArray()).path("id").asText();
-        var form = attachmentPolicyForm(good, fileId);
-        String source = createPolicy(owner, form.toString()).path("id").asText();
-        String path = "/api/policies/" + source;
-        mvc.perform(confirmedSubmission(path, owner, 1)).andExpect(status().isOk());
-        mvc.perform(reviewRound(source, 2, 1, "APPROVE")).andExpect(status().isOk());
-        var proofId = uploadChangeFile(owner, "本次延期的证明.pdf");
-        var extension =
-                json.createObjectNode()
-                        .put("recordVersion", 3)
-                        .put("endTime", "2099-12-02T23:59:59+08:00");
-        mvc.perform(
-                        policyRequest(post(path + "/time-adjustment-draft"), owner)
-                                .content(extension.toString()))
-                .andExpect(status().isBadRequest());
-        extension
-                .put("reason", "活动排期延长")
-                .putArray("attachmentInfo")
-                .addObject()
-                .put("type", "FILE")
-                .put("id", proofId);
-        var pool = Executors.newFixedThreadPool(2);
-        var start = new CountDownLatch(1);
-        java.util.concurrent.Callable<String> createExtension =
-                () -> {
-                    start.await(5, TimeUnit.SECONDS);
-                    var result =
-                            mvc.perform(
-                                            policyRequest(
-                                                            post(path + "/time-adjustment-draft"),
-                                                            owner)
-                                                    .content(extension.toString()))
-                                    .andExpect(status().isOk())
-                                    .andReturn();
-                    return json.readTree(result.getResponse().getContentAsByteArray())
-                            .path("id")
-                            .asText();
-                };
-        String child;
-        try {
-            var first = pool.submit(createExtension);
-            var second = pool.submit(createExtension);
-            start.countDown();
-            child = first.get(10, TimeUnit.SECONDS);
-            assertThat(second.get(10, TimeUnit.SECONDS)).isEqualTo(child);
-        } finally {
-            pool.shutdownNow();
-        }
-        var next = "/api/policies/" + child;
-        String changeFile = "/attachments/" + proofId + "/content";
-        mvc.perform(get(next + changeFile).session(owner)).andExpect(status().isOk());
-        mvc.perform(policyRequest(delete("/api/attachments/" + proofId), owner))
-                .andExpect(status().isConflict());
-        mvc.perform(get(next + "/attachments/" + fileId + "/content").session(owner))
-                .andExpect(status().isOk())
-                .andExpect(content().bytes(file.getBytes()));
-        mvc.perform(confirmedSubmission(next, owner, 1)).andExpect(status().isOk());
-        String firstAudit =
-                jdbc.queryForObject(
-                        "SELECT id FROM policy_audit_log WHERE policy_id=? AND version=1",
-                        String.class,
-                        child);
-        mvc.perform(reviewRound(child, 2, 1, "REJECT")).andExpect(status().isOk());
-        mvc.perform(
-                        policyRequest(put(next + "/time-adjustment-date"), owner)
-                                .content(
-                                        "{\"recordVersion\":3,\"endTime\":\"2099-12-03T14:15:16+08:00\",\"reason\":\"活动排期延长\"}"))
-                .andExpect(status().isOk());
-        mvc.perform(get(next + changeFile).session(owner)).andExpect(status().isNotFound());
-        String firstProof = "/audit-logs/" + firstAudit + changeFile;
-        mvc.perform(get(next + firstProof).session(owner)).andExpect(status().isOk());
-        mvc.perform(get("/api/admin/policies/" + child + firstProof).session(admin))
-                .andExpect(status().isOk());
-        mvc.perform(policyRequest(delete("/api/attachments/" + proofId), owner))
-                .andExpect(status().isConflict());
-        mvc.perform(confirmedSubmission(next, owner, 4))
-                .andExpect(jsonPath("$.submissionVersion").value(2));
-        mvc.perform(reviewRound(child, 5, 2, "APPROVE")).andExpect(status().isOk());
-        assertThat(
-                        effectiveIds(
-                                "BILLION",
-                                good.path("id").asText(),
-                                "PDD",
-                                "2099-12-03T14:15:16+08:00"))
-                .containsExactly(child);
-        assertThat(
-                        effectiveIds(
-                                "BILLION",
-                                good.path("id").asText(),
-                                "PDD",
-                                "2099-12-03T14:15:17+08:00"))
-                .isEmpty();
-        var further =
-                mvc.perform(
-                                policyRequest(post(next + "/time-adjustment-draft"), owner)
-                                        .content(
-                                                "{\"recordVersion\":6,\"endTime\":\"2099-12-04T23:59:59+08:00\",\"reason\":\"活动排期延长\"}"))
+                                policyRequest(post(endpoint + "/preview"), owner)
+                                        .content(body.toString()))
                         .andExpect(status().isOk())
                         .andReturn();
-        var third =
-                json.readTree(further.getResponse().getContentAsByteArray()).path("id").asText();
-        mvc.perform(get("/api/policies/" + third).session(owner))
-                .andExpect(jsonPath("$.form.startTime").value("2099-12-03T14:15:17+08:00"))
-                .andExpect(jsonPath("$.form.attachmentInfo[0].id").value(fileId));
+        body.put(
+                "confirmationToken",
+                json.readTree(preview.getResponse().getContentAsByteArray())
+                        .path("confirmationToken")
+                        .asText());
+        mvc.perform(
+                        policyRequest(post(endpoint), owner)
+                                .header("Idempotency-Key", UUID.randomUUID().toString())
+                                .content(body.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(id));
+        var detail =
+                mvc.perform(get("/api/policies/" + id).session(owner))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.form.endTime").value("2096-02-28T18:00:00+08:00"))
+                        .andExpect(
+                                jsonPath("$.timeHistory.currentEnd")
+                                        .value("2096-02-28T18:00:01+08:00"))
+                        .andExpect(
+                                jsonPath("$.timeHistory.changes[0].attachmentInfo[0].originalName")
+                                        .value("延续证明.pdf"))
+                        .andReturn();
+        var changeId =
+                json.readTree(detail.getResponse().getContentAsByteArray())
+                        .at("/timeHistory/changes/0/id")
+                        .asText();
+        var url =
+                "/api/policy-reviews/"
+                        + id
+                        + "/time-changes/"
+                        + changeId
+                        + "/attachments/"
+                        + evidence
+                        + "/content";
+        mvc.perform(get(url).param("submissionVersion", "1").session(owner))
+                .andExpect(status().isOk());
+        mvc.perform(get(url).param("submissionVersion", "1").session(other))
+                .andExpect(status().isNotFound());
+        mvc.perform(policyRequest(delete("/api/attachments/" + evidence), owner))
+                .andExpect(status().isConflict());
+        assertThat(
+                        effectiveIds(
+                                "BILLION",
+                                good.path("id").asText(),
+                                "PDD",
+                                "2096-02-28T18:00:01+08:00"))
+                .containsExactly(id);
+        assertThat(
+                        effectiveIds(
+                                "BILLION",
+                                good.path("id").asText(),
+                                "PDD",
+                                "2096-02-28T18:00:02+08:00"))
+                .isEmpty();
     }
 
     private MockHttpServletRequestBuilder timelineRequest(JsonNode good, String from, String to) {

@@ -2,6 +2,7 @@ package com.company.policy.support.policy;
 
 import com.company.policy.vo.PolicyApplicability.Policy;
 import com.company.policy.vo.PolicyApplicability.Scope;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Comparator;
@@ -21,7 +22,9 @@ public record PolicyExecutionChange(
         List<Policy> removed,
         List<Policy> retained,
         Kind kind,
-        List<Policy> candidates) {
+        List<Policy> candidates,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Boolean matchingConfigurations,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Boolean matchingRoundGoods) {
     public PolicyExecutionChange {
         // 按已冻结的内容展示，未记录候选时不推导当时的可选政策。
         candidates = candidates == null ? List.of() : List.copyOf(candidates);
@@ -61,6 +64,18 @@ public record PolicyExecutionChange(
             List<Policy> before,
             List<Policy> after,
             List<Policy> candidates) {
+        return compare(perspective, scope, from, through, before, after, candidates, false);
+    }
+
+    public static PolicyExecutionChange compare(
+            String perspective,
+            Scope scope,
+            LocalDateTime from,
+            LocalDateTime through,
+            List<Policy> before,
+            List<Policy> after,
+            List<Policy> candidates,
+            boolean matchingRoundGoods) {
         if (from.isAfter(through)) throw new IllegalArgumentException("执行段的开始晚于截止。");
         var original = byRound(before);
         var proposed = byRound(after);
@@ -82,12 +97,63 @@ public record PolicyExecutionChange(
                 removed,
                 retained,
                 classify(added, removed, retained),
-                List.copyOf(byRound(candidates).values()));
+                List.copyOf(byRound(candidates).values()),
+                null,
+                matchingRoundGoods);
+    }
+
+    public boolean stackedSelection() {
+        return !candidates.isEmpty() && after.size() >= 2;
     }
 
     public boolean requiresProductReview() {
-        // 只有申请人本轮在确认窗口核对的时段才有这份候选名单。
-        return !candidates.isEmpty();
+        if (matchingRoundGoods != null) return matchingRoundGoods && stackedSelection();
+        // 历史在途卡按当轮冻结的机型配置或更早的交叉确认依据展示。
+        if (matchingConfigurations == null) return !candidates.isEmpty();
+        return matchingConfigurations && stackedSelection();
+    }
+
+    PolicyExecutionChange withThrough(LocalDateTime end) {
+        return copy(end, matchingRoundGoods);
+    }
+
+    PolicyExecutionChange withProposedPolicies(List<Policy> selected, List<Policy> eligible) {
+        var change = compare(perspective, scope, from, through, before, selected, eligible);
+        return new PolicyExecutionChange(
+                perspective,
+                scope,
+                from,
+                through,
+                change.before,
+                change.after,
+                change.added,
+                change.removed,
+                change.retained,
+                change.kind,
+                change.candidates,
+                matchingConfigurations,
+                matchingRoundGoods);
+    }
+
+    PolicyExecutionChange withMatchingRoundGoods() {
+        return copy(through, true);
+    }
+
+    private PolicyExecutionChange copy(LocalDateTime end, Boolean goodsMatch) {
+        return new PolicyExecutionChange(
+                perspective,
+                scope,
+                from,
+                end,
+                before,
+                after,
+                added,
+                removed,
+                retained,
+                kind,
+                candidates,
+                matchingConfigurations,
+                goodsMatch);
     }
 
     static boolean sameMembers(List<Policy> left, List<Policy> right) {

@@ -240,6 +240,17 @@ public interface CatalogGoodsMapper {
     @Select(
             """
         <script>
+        SELECT id FROM goods WHERE status = 1 AND (spu_id, ram, rom) IN
+        <foreach collection="configurations" item="c" open="(" separator="," close=")">
+          (#{c.spuId}, #{c.ram}, #{c.rom})
+        </foreach>
+        </script>
+        """)
+    List<Long> onSaleConfigurationGoods(List<CatalogGoodsQuery.Configuration> configurations);
+
+    @Select(
+            """
+        <script>
         SELECT id FROM goods WHERE id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         ORDER BY id FOR UPDATE

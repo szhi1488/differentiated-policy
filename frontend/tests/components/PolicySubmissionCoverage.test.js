@@ -381,7 +381,7 @@ it('跨搜索勾选多张旧单一次添加，同批分别缩短和延长，按�
   ])
 })
 
-it('主申请与拟议延期在同段可区分并按拟议 ID 提交决定', async () => {
+it('只命中延期区间时显示原单号，提交对应的延期区间决定', async () => {
   const applicability = matchedPreview()
   const { policies, segments } = applicability.scopes[0]
   const synthetic = 'extension:321:500'
@@ -394,10 +394,9 @@ it('主申请与拟议延期在同段可区分并按拟议 ID 提交决定', asy
   expect(headings.some((text) => text.includes('本次申请') && text.includes('ZC-000321'))).toBe(
     true,
   )
-  expect(
-    headings.some((text) => text.includes('拟延期') && text.includes('ZC-000500（延期）')),
-  ).toBe(true)
-  await first.get('input[value="' + synthetic + '"]').setValue(true)
+  expect(headings.some((text) => text.includes('已通过') && text.includes('ZC-000500'))).toBe(true)
+  expect(first.text()).not.toContain('ZC-000500（延期）')
+  await first.get('input[value="500"]').setValue(true)
   await second.get('input[value="119"]').setValue(true)
   await button('确认整单并提交').trigger('click')
   await button('确认提交').trigger('click')

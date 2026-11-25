@@ -16,15 +16,15 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 
-/** 已通过的整单提前结束决定按旧单审核轮次索引，原快照继续供历史回查。 */
+/** 核对本次改期，并在试算中应用尚未获批的拟定截止。 */
 public final class PolicyEndTimes {
     private final Map<String, LocalDateTime> cutoffs = new HashMap<>();
 
-    void cap(String auditLogId, LocalDateTime through) {
+    private void cap(String auditLogId, LocalDateTime through) {
         cutoffs.merge(auditLogId, through, (a, b) -> a.isBefore(b) ? a : b);
     }
 
-    LocalDateTime through(String auditLogId, LocalDateTime original) {
+    private LocalDateTime through(String auditLogId, LocalDateTime original) {
         var cap = cutoffs.get(auditLogId);
         return cap != null && cap.isBefore(original) ? cap : original;
     }
@@ -36,8 +36,13 @@ public final class PolicyEndTimes {
                         r -> {
                             if (r.policy().proposed()) return r;
                             var end = through(r.policy().auditLogId(), r.window().through());
-                            if (end.equals(r.window().through())) return r;
                             var p = r.policy();
+                            var displayEnd =
+                                    through(
+                                            p.auditLogId(),
+                                            PolicyFormValidation.time(p.effectiveThrough()));
+                            if (end.equals(r.window().through())
+                                    && time(displayEnd).equals(p.effectiveThrough())) return r;
                             var adjusted =
                                     new Policy(
                                             p.policyId(),
@@ -48,32 +53,28 @@ public final class PolicyEndTimes {
                                             p.submittedAt(),
                                             p.approvedAt(),
                                             p.effectiveFrom(),
-                                            time(end),
+                                            time(displayEnd),
                                             p.verifyType(),
                                             p.sceneTypes(),
                                             p.selections());
                             return new Round(
                                     adjusted,
                                     new Window(r.window().from(), end),
-                                    new Window(
-                                            r.original().from(),
-                                            end.isBefore(r.original().through())
-                                                    ? end
-                                                    : r.original().through()),
+                                    r.original(),
+                                    r.visibleFrom(),
                                     r.estimated(),
                                     r.submittedAt(),
                                     r.auditOrder(),
+                                    r.timeChange(),
                                     r.decisions(),
-                                    r.batchKey());
+                                    r.goodsIds());
                         })
                 .toList();
     }
 
-    PolicyEndTimes withProposals(
+    static PolicyEndTimes withProposals(
             List<EndAdjustment> proposedCuts, Map<Target, AdjustmentOption> options) {
-        if (proposedCuts.isEmpty()) return this;
         var updated = new PolicyEndTimes();
-        updated.cutoffs.putAll(cutoffs);
         var seen = new HashSet<Target>();
         for (var change : proposedCuts) {
             if (change == null
@@ -90,17 +91,14 @@ public final class PolicyEndTimes {
                 throw new ApiException(
                         HttpStatus.CONFLICT,
                         "POLICY_ADJUSTMENT_CHANGED",
-                        "旧政策的截止时间、状态或负责平台已变化，请重新选择。");
+                        "政策时间、状态或负责平台已变化，请重新选择并核对原政策。");
             var end = PolicyFormValidation.time(change.endTime());
             if (isExtension(change)) {
                 if (!option.canExtend())
                     throw new ApiException(
                             HttpStatus.CONFLICT,
                             "POLICY_ADJUSTMENT_CHANGED",
-                            "仅原提交人仍负责全部原单平台且尚无延期申请时可延长。");
-                if (!end.isAfter(PolicyFormValidation.time(target.previousEnd()).plusSeconds(1))) {
-                    throw PolicyFormValidation.invalid("新截止须晚于延长段开始时刻。");
-                }
+                            "仅原提交人仍负责原单全部平台时可延期。");
                 continue;
             }
             if (end == null
@@ -116,7 +114,7 @@ public final class PolicyEndTimes {
 
     public static void validate(
             List<EndAdjustment> changes, Map<Target, AdjustmentOption> options) {
-        new PolicyEndTimes().withProposals(changes, options);
+        withProposals(changes, options);
     }
 
     public static boolean isExtension(EndAdjustment change) {

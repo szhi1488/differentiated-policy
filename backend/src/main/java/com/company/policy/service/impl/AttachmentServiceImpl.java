@@ -251,6 +251,23 @@ public class AttachmentServiceImpl implements AttachmentService {
         return historicalContent(id, user.getTenantKey(), membership);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Download downloadTimeChange(
+            long policyId, int version, long changeId, String fileId, CurrentUserResponse session) {
+        var user = access.requireActive(session);
+        var membership =
+                policies.changeFile(
+                        user.getTenantKey(),
+                        user.getId(),
+                        policyId,
+                        version,
+                        changeId,
+                        fileReference(fileId));
+        if (membership == null) throw notFound();
+        return historicalContent(fileId, user.getTenantKey(), membership);
+    }
+
     private Download historicalContent(String id, String tenantKey, Membership membership) {
         if (membership.auditId() == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");

@@ -3,6 +3,8 @@ package com.company.policy.support.policy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.company.policy.dto.PolicyDraftRequest.SubsidyPlan;
+import com.company.policy.entity.PolicyConsent.Target;
+import com.company.policy.support.policy.PolicyWorkflowProposals.Adjustment;
 import com.company.policy.vo.PolicyApplicability.Policy;
 import com.company.policy.vo.PolicyApplicability.Product;
 import com.company.policy.vo.PolicyApplicability.Scope;
@@ -13,6 +15,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PolicyRouteSummaryTest {
     private static final LocalDateTime START = LocalDateTime.of(2026, 12, 1, 0, 0);
@@ -26,13 +29,15 @@ class PolicyRouteSummaryTest {
     @ParameterizedTest
     @CsvSource({
         "'',B,B,'','',ORDINARY_ADDITION,'',false",
-        "'',B,B,'','',ORDINARY_ADDITION,B,true",
+        "'',B,B,'','',ORDINARY_ADDITION,B,false",
         "A,A,'','',A,UNCHANGED,'',false",
-        "A,A,'','',A,UNCHANGED,AB,true",
+        "A,A,'','',A,UNCHANGED,AB,false",
         "A,AB,B,'',A,STACK,AB,true",
-        "A,B,B,A,'',REPLACEMENT,AB,true",
-        "AB,A,'',B,A,REMOVE_STACK,ABC,true",
+        "A,B,B,A,'',REPLACEMENT,AB,false",
+        "AB,A,'',B,A,REMOVE_STACK,ABC,false",
         "AC,BC,B,A,C,REPLACEMENT,ABC,true",
+        "AB,AB,'','',AB,UNCHANGED,ABC,true",
+        "AB,AB,'','',AB,UNCHANGED,'',false",
         "'',AB,AB,'','',STACK,AB,true",
         "'','','','','',UNCHANGED,'',false",
         "A,'','',A,'',REMOVAL,'',false"
@@ -54,7 +59,8 @@ class PolicyRouteSummaryTest {
                         END,
                         policies(before),
                         policies(after),
-                        policies(candidates));
+                        policies(candidates),
+                        true);
         assertThat(change.added())
                 .extracting(Policy::policyId)
                 .containsExactlyElementsOf(ids(added));
@@ -113,7 +119,7 @@ class PolicyRouteSummaryTest {
                         null);
         var jd =
                 PolicyExecutionChange.compare(
-                        "RETAIL", JD, START, END, List.of(a), List.of(b, a), List.of(a, b));
+                        "RETAIL", JD, START, END, List.of(a), List.of(b, a), List.of(a, b), true);
         var tb =
                 PolicyExecutionChange.compare(
                         "RETAIL",
@@ -141,7 +147,7 @@ class PolicyRouteSummaryTest {
                         "数量未填写",
                         "国补+地补",
                         "销售维度")
-                .doesNotContain("淘宝", "合计");
+                .doesNotContain("合计");
     }
 
     @Test
@@ -159,7 +165,8 @@ class PolicyRouteSummaryTest {
                         START.plusHours(1).minusSeconds(1),
                         before,
                         List.of(b, c),
-                        List.of(a, b, c));
+                        List.of(a, b, c),
+                        true);
         var later =
                 PolicyExecutionChange.compare(
                         "RETAIL",
@@ -168,7 +175,8 @@ class PolicyRouteSummaryTest {
                         END,
                         before,
                         List.of(c, b),
-                        List.of(a, b, c));
+                        List.of(a, b, c),
+                        true);
         var different =
                 PolicyExecutionChange.compare(
                         "RETAIL",
@@ -177,7 +185,8 @@ class PolicyRouteSummaryTest {
                         END.plusSeconds(2),
                         before,
                         List.of(bOther, c),
-                        List.of(a, bOther, c));
+                        List.of(a, bOther, c),
+                        true);
         var gap =
                 PolicyExecutionChange.compare(
                         "RETAIL",
@@ -186,15 +195,90 @@ class PolicyRouteSummaryTest {
                         END.plusSeconds(6),
                         before,
                         List.of(bOther, c),
-                        List.of(a, bOther, c));
+                        List.of(a, bOther, c),
+                        true);
         var summary = PolicyRouteSummary.from(List.of(later, early, gap, different), List.of());
         assertThat(summary.triggerSegments()).isEqualTo(3);
-        assertThat(summary.stackSegments()).isEqualTo(3);
+        assertThat(summary.stackSegments()).isZero();
         assertThat(summary.replaceSegments()).isEqualTo(3);
         assertThat(summary.removeStackSegments()).isEqualTo(3);
         assertThat(summary.changes().get(0).from()).isEqualTo(START);
         assertThat(summary.changes().get(0).through()).isEqualTo(END);
         assertThat(summary.summary()).contains("拟以B", "替换A", "继续与C", "固定补贴合计 40.2 元/台");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void shorteningOnlyRemovesTheOldDeadlineBoundaryWhenOtherExecutionContinues(
+            boolean otherPolicySwitches) {
+        var shortenedEnd = START.plusDays(1);
+        var originalEnd = START.plusDays(3);
+        var shortened = timedPolicy("27", "127", originalEnd);
+        var application = timedPolicy("30", null, END);
+        var continuing = timedPolicy("31", "131", END);
+        var alternate = timedPolicy("32", "132", END);
+        var selected = List.of(application, continuing);
+        var candidates =
+                otherPolicySwitches ? List.of(application, continuing, alternate) : selected;
+        var first =
+                PolicyExecutionChange.compare(
+                        "RETAIL",
+                        JD,
+                        shortenedEnd.plusSeconds(1),
+                        originalEnd,
+                        List.of(shortened, continuing),
+                        selected,
+                        candidates,
+                        true);
+        var next =
+                PolicyExecutionChange.compare(
+                        "RETAIL",
+                        JD,
+                        originalEnd.plusSeconds(1),
+                        END,
+                        List.of(otherPolicySwitches ? alternate : continuing),
+                        selected,
+                        candidates,
+                        true);
+        var adjustment =
+                new Adjustment(
+                        new Target("27", "127", PolicyApplicabilityEvaluator.time(originalEnd), 3),
+                        shortened.policyCode(),
+                        PolicyApplicabilityEvaluator.time(shortenedEnd),
+                        false,
+                        true);
+        var summary =
+                PolicyRouteSummary.forApplication(
+                        application.policyId(), List.of(first, next), List.of(adjustment));
+        assertThat(summary.adjustments()).containsExactly(adjustment);
+        assertThat(summary.requiresProductReview()).isTrue();
+        assertThat(summary.triggerSegments()).isEqualTo(otherPolicySwitches ? 2 : 1);
+        assertThat(summary.changes())
+                .extracting(PolicyExecutionChange::through)
+                .isEqualTo(otherPolicySwitches ? List.of(originalEnd, END) : List.of(END));
+        assertThat(summary.changes().get(0).from()).isEqualTo(shortenedEnd.plusSeconds(1));
+        assertThat(summary.changes())
+                .allSatisfy(
+                        change ->
+                                assertThat(change.after())
+                                        .containsExactlyInAnyOrderElementsOf(selected));
+    }
+
+    private static Policy timedPolicy(String id, String auditId, LocalDateTime end) {
+        var policy = policy(id, 1, FIXED, 0);
+        return new Policy(
+                id,
+                PolicyBatchExtensions.policyCode(Long.parseLong(id)),
+                1,
+                auditId,
+                auditId == null,
+                null,
+                null,
+                PolicyApplicabilityEvaluator.time(START),
+                PolicyApplicabilityEvaluator.time(end),
+                policy.verifyType(),
+                policy.sceneTypes(),
+                policy.selections());
     }
 
     @Test
@@ -227,7 +311,7 @@ class PolicyRouteSummaryTest {
                                 kept,
                                 policies("AC")));
         var summary = PolicyRouteSummary.from(changes, List.of());
-        assertThat(summary.triggerSegments()).isEqualTo(2);
+        assertThat(summary.triggerSegments()).isZero();
         assertThat(summary.stackSegments()).isZero();
         assertThat(summary.replaceSegments()).isZero();
         assertThat(summary.removeStackSegments()).isZero();
@@ -277,7 +361,7 @@ class PolicyRouteSummaryTest {
                 null,
                 "SALES",
                 List.of("NATIONAL_SUB", "LOCAL_SUB"),
-                List.of(new Selection("SPECIFIED", List.of(WHITE), plan, quantity)));
+                List.of(new Selection("SPECIFIED", List.of(WHITE), plan, quantity, null)));
     }
 
     private static List<Policy> policies(String members) {

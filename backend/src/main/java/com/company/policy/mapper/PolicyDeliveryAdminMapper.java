@@ -15,6 +15,7 @@ public interface PolicyDeliveryAdminMapper {
             String eventKey,
             String actionType,
             long recipientKey,
+            String groupCode,
             String displayName,
             String deliveryStatus,
             int attempts,
@@ -25,7 +26,7 @@ public interface PolicyDeliveryAdminMapper {
 
     String ROWS =
             """
-            SELECT d.id,COALESCE(d.policy_id,0) AS policy_id,COALESCE(d.version,0) AS version,d.event_key,d.action_type,d.recipient_key,m.display_name,
+            SELECT d.id,COALESCE(d.policy_id,0) AS policy_id,COALESCE(d.version,0) AS version,d.event_key,d.action_type,d.recipient_key,m.group_code,m.display_name,
                    d.delivery_status,d.attempts,d.next_attempt_at,d.receipt_id,d.last_error,d.payload_json
             FROM policy_review_delivery d
             LEFT JOIN policy_apply p ON p.id=d.policy_id AND p.tenant_key=d.tenant_key AND p.is_deleted=0

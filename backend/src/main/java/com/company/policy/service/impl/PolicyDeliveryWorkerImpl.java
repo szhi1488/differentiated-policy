@@ -5,6 +5,7 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.now;
 import com.company.policy.mapper.PolicyDeliveryAdminMapper;
 import com.company.policy.mapper.PolicyDeliveryMapper;
 import com.company.policy.mapper.PolicyDeliveryMapper.Item;
+import com.company.policy.mapper.PolicyReviewWorkflowMapper;
 import com.company.policy.service.PolicyDeliveryWorker;
 import com.company.policy.service.PolicyFeishuSender;
 import com.company.policy.service.PolicyFeishuSender.Delivery;
@@ -14,6 +15,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -25,6 +27,7 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
     private final String tenant;
     private final PolicyDeliveryMapper queue;
     private final PolicyDeliveryAdminMapper admin;
+    private final PolicyReviewWorkflowMapper workflow;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private final PolicyFeishuSender sender;
@@ -33,12 +36,14 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
             @Value("${feishu.tenant-key:}") String tenant,
             PolicyDeliveryMapper queue,
             PolicyDeliveryAdminMapper admin,
+            PolicyReviewWorkflowMapper workflow,
             TransactionTemplate tx,
             ObjectMapper json,
             PolicyFeishuSender sender) {
         this.tenant = tenant;
         this.queue = queue;
         this.admin = admin;
+        this.workflow = workflow;
         this.tx = tx;
         this.json = json;
         this.sender = sender;
@@ -87,7 +92,10 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
 
     private PolicyDeliveryAdminMapper.Row originalCard(long id, int version, String key) {
         return admin.list(tenant, id, version).stream()
-                .filter(row -> "SEND_CARD".equals(row.actionType()))
+                .filter(
+                        row ->
+                                "SEND_CARD".equals(row.actionType())
+                                        && "PRODUCT".equals(row.groupCode()))
                 .filter(
                         row ->
                                 PolicyFeishuSender.idempotencyKey(
@@ -183,12 +191,27 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
         }
         if (item.deleted() != 0 && !isClosing(action))
             return stop(id, uncertain, "申请已移除。", "CANCELLED");
-        if (create && !active(item)) return stop(id, uncertain, "本轮节点已结束或该指派已撤销。", "CANCELLED");
+        if (item.policyId() == 0 && "NEAR".equals(payload.path("kind").asText())) {
+            if (!uncertain && queue.deleteUnsentLegacyNear(tenant, id) == 1)
+                return COMPLETED_LOCALLY;
+            return stop(id, uncertain, "旧临期群提醒已移除，保留原投递记录供核对。", "CANCELLED");
+        }
+        if (item.policyId() != 0
+                && "GROUP_MESSAGE".equals(action)
+                && !("PURCHASE_DECIDED".equals(item.eventKey())
+                        && "APPROVE".equals(payload.path("decision").asText()))) {
+            redirectPendingGroup(item, payload);
+            return stop(id, uncertain, "此审核节点已改为机器人私聊。", "CANCELLED");
+        }
+        boolean removalNotice = removalNotice(item, payload);
+        if (create && !removalNotice && !active(item))
+            return stop(id, uncertain, "本轮节点已结束或该指派已撤销。", "CANCELLED");
 
         if (create
                 && (item.openId() == null
                         || item.openId().isBlank()
                         || ("PURCHASE".equals(item.groupCode())
+                                && !removalNotice
                                 && !"ADMIN".equals(item.roleType()))))
             return stop(id, uncertain, "收件人缺少有效飞书身份或对应岗位资格。", "FAILED");
         String prior = null;
@@ -248,6 +271,36 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
         return new Claim(delivery, owner, item.attempts() + 1, uncertain, first);
     }
 
+    private void redirectPendingGroup(Item item, ObjectNode payload) {
+        // 切换前已登记的办理群通知改按同一事件的指派私发。保留原请求的未知回执供人工核对。
+        for (var member :
+                queue.legacyNoticeMembers(
+                        tenant, item.policyId(), item.version(), item.eventKey())) {
+            var notice = json.createObjectNode();
+            for (String field : List.of("stage", "reason", "actorId"))
+                if (payload.has(field)) notice.set(field, payload.get(field));
+            if ("CLOSE_TASK".equals(member.actionType())) notice.put("outcome", "REMOVED");
+            workflow.register(
+                    tenant,
+                    item.policyId(),
+                    item.version(),
+                    item.eventKey(),
+                    "SEND_CARD",
+                    member.recipientKey(),
+                    notice.toString(),
+                    item.createdAt());
+        }
+    }
+
+    static boolean removalNotice(Item item, ObjectNode payload) {
+        String action = item.actionType();
+        return "SEND_CARD".equals(action)
+                && item.eventKey().startsWith("REASSIGNED_")
+                && "PURCHASE".equals(item.groupCode())
+                && "REMOVED".equals(item.memberStatus())
+                && "REMOVED".equals(payload.path("outcome").asText());
+    }
+
     private Claim stop(long id, boolean uncertain, String reason, String status) {
         queue.stopLocked(id, uncertain ? "UNKNOWN" : status, reason);
         return COMPLETED_LOCALLY;
@@ -261,7 +314,7 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
         return "UPDATE_CARD".equals(action) || "CLOSE_TASK".equals(action);
     }
 
-    private static boolean active(Item item) {
+    static boolean active(Item item) {
         if (!"ACTIVE".equals(item.memberStatus()) || item.version() != item.currentVersion())
             return false;
         return switch (item.groupCode()) {

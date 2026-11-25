@@ -25,8 +25,6 @@ public record PolicyResponse(
             String createdAt,
             String updatedAt,
             String endTime,
-            String sourcePolicyCode,
-            boolean adjustmentOnly,
             String earliestEnd,
             boolean canExtend,
             boolean canShorten,
@@ -41,18 +39,24 @@ public record PolicyResponse(
             String applicantName,
             PolicyDraftRequest form,
             List<ApplicantCatalogResponse> goods,
-            String sourcePolicyCode,
             List<PolicyConsent.EndAdjustment> endAdjustments,
-            ApprovedEnd approvedEnd,
-            String adjustmentSourceEnd,
+            TimeHistory timeHistory,
             String reviewStage) {}
 
-    public record ApprovedEnd(
-            String requestPolicyCode,
-            String targetAuditId,
+    public record TimeHistory(String initialEnd, String currentEnd, List<TimeChange> changes) {}
+
+    public record TimeChange(
+            String id,
+            String direction,
+            String previousEnd,
+            String requestedEnd,
             String actualEnd,
-            String approvedAt,
-            PolicyConsent.EndAdjustment change) {}
+            String effectiveAt,
+            String changedAt,
+            String actorName,
+            String reason,
+            String sourcePolicyCode,
+            List<PolicyDraftRequest.Link> attachmentInfo) {}
 
     public record Snapshot(
             String id,
@@ -63,7 +67,8 @@ public record PolicyResponse(
             PolicyDraftRequest form,
             List<ApplicantCatalogResponse> goods,
             @JsonInclude(JsonInclude.Include.NON_NULL) PolicyConsent consent,
-            @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) String sourcePolicyCode,
+            @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean wholeConfigurationSelection) {
         public Snapshot(
                 String id,
                 String policyCode,
@@ -81,7 +86,8 @@ public record PolicyResponse(
                     form,
                     goods,
                     null,
-                    null);
+                    null,
+                    false);
         }
 
         public Snapshot(
@@ -102,7 +108,8 @@ public record PolicyResponse(
                     form,
                     goods,
                     consent,
-                    null);
+                    null,
+                    false);
         }
 
         public Snapshot withConsent(PolicyConsent value) {
@@ -115,7 +122,8 @@ public record PolicyResponse(
                     form,
                     goods,
                     value,
-                    sourcePolicyCode);
+                    sourcePolicyCode,
+                    wholeConfigurationSelection);
         }
     }
 

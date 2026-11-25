@@ -6,7 +6,6 @@ import {
   previewPolicySubmission,
   previewPolicyAdjustments,
   savePolicyDraft,
-  savePolicyAdjustmentDate,
   submitPolicy,
 } from '../api/policies'
 import { policyIsEditable, policyStatusLabel } from '../constants/policy'
@@ -18,7 +17,7 @@ import { policyDraft, restorePolicyForm } from '../utils/policy-draft'
 const uncertain = (error) =>
   ['timeout', 'network', 'parse'].includes(error.kind) || error.status >= 500
 
-export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, adjustmentUploads) {
+export function usePolicyDraft(form, confirming, attachments, refreshPlatforms) {
   const record = ref(null)
   const loading = ref(false)
   const writing = ref('')
@@ -27,11 +26,7 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
   const loadError = ref('')
   const conflict = ref(false)
   const busy = computed(
-    () =>
-      loading.value ||
-      Boolean(writing.value) ||
-      Boolean(attachments?.attachmentsBusy.value) ||
-      Boolean(adjustmentUploads?.attachmentsBusy.value),
+    () => loading.value || Boolean(writing.value) || Boolean(attachments?.attachmentsBusy.value),
   )
   const readOnly = computed(() => Boolean(record.value && !policyIsEditable(record.value.status)))
   const locked = computed(() => busy.value || readOnly.value || Boolean(loadError.value))
@@ -49,7 +44,7 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     return (
       JSON.stringify(form.value) !== savedForm ||
       Boolean(pendingCreate) ||
-      Boolean(attachments?.attachmentsFailed.value || adjustmentUploads?.attachmentsFailed.value)
+      Boolean(attachments?.attachmentsFailed.value)
     )
   }
 
@@ -127,7 +122,6 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
         }
         form.value = restorePolicyForm(detail)
         attachments?.restore(form.value.attachments)
-        adjustmentUploads?.restore(form.value.adjustmentFiles)
         record.value = detail
         loadError.value = ''
         conflict.value = false
@@ -157,7 +151,7 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     if (locked.value || confirming.value || conflict.value) {
       return
     }
-    if (attachments?.attachmentsFailed.value || adjustmentUploads?.attachmentsFailed.value) {
+    if (attachments?.attachmentsFailed.value) {
       show('有文件上传失败，请重试或移除后再保存或提交。')
       return
     }
@@ -169,58 +163,15 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     try {
       if (record.value) {
         const current = record.value
-        const adjustment = current.form?.goodsForm?.timeAdjustment
-        const isAdjustment = Boolean(current.sourcePolicyCode || adjustment)
-        const saved = isAdjustment
-          ? await savePolicyAdjustmentDate(
-              current.id,
-              current.recordVersion,
-              form.value.endTime,
-              {
-                reason: form.value.adjustmentReason?.trim(),
-                attachmentInfo: form.value.adjustmentFiles ?? [],
-                expectedSourceEnd: current.adjustmentSourceEnd,
-              },
-              controller.signal,
-            )
-          : await savePolicyDraft(
-              current.id,
-              policyDraft(form.value, current.recordVersion),
-              controller.signal,
-            )
+        const saved = await savePolicyDraft(
+          current.id,
+          policyDraft(form.value, current.recordVersion),
+          controller.signal,
+        )
         if (controller.signal.aborted) {
           return
         }
-        record.value = isAdjustment
-          ? {
-              ...current,
-              ...saved,
-              form: {
-                ...current.form,
-                endTime: current.sourcePolicyCode
-                  ? form.value.endTime + '+08:00'
-                  : current.form.endTime,
-                goodsForm: {
-                  ...current.form.goodsForm,
-                  ...(adjustment
-                    ? {
-                        timeAdjustment: {
-                          ...adjustment,
-                          target: {
-                            ...adjustment.target,
-                            previousEnd:
-                              current.adjustmentSourceEnd ?? adjustment.target.previousEnd,
-                          },
-                          endTime: form.value.endTime + '+08:00',
-                          reason: form.value.adjustmentReason.trim(),
-                          attachmentInfo: form.value.adjustmentFiles,
-                        },
-                      }
-                    : {}),
-                },
-              },
-            }
-          : { ...saved, endAdjustments: current.endAdjustments }
+        record.value = { ...saved, endAdjustments: current.endAdjustments }
       } else {
         const body = policyDraft(form.value)
         pendingCreate ??= { key: createRequestId(), body }
@@ -248,21 +199,13 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
       }
       markSaved()
       attachments?.markBound()
-      adjustmentUploads?.markBound()
       if (action === 'save') {
         return true
       }
       let changed = false
       // 驳回后保存只返回版本摘要，仍须用上次正式提交的批量调整重新核对本轮。
-      const ownTarget = record.value.sourcePolicyCode
-        ? null
-        : record.value.form?.goodsForm?.timeAdjustment?.target.policyId
       let previousAdjustments =
-        record.value.status === 'REJECTED'
-          ? (record.value.endAdjustments ?? []).filter(
-              (change) => change.target.policyId !== ownTarget,
-            )
-          : []
+        record.value.status === 'REJECTED' ? (record.value.endAdjustments ?? []) : []
       let retriedDirect = false
       let submitted
       while (true) {
@@ -274,23 +217,16 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
         }
         const scopePreview = readSubmissionPreview(preview)
         const request = { recordVersion }
-        if (record.value.form?.goodsForm?.timeAdjustment && !record.value.sourcePolicyCode) {
-          request.confirmationToken = preview.confirmationToken
-        }
         const options = preview.applicability.adjustmentOptions || []
-        const openEndEditor = action === 'adjust' && !changed
-        if (openEndEditor && !options.length && !previousAdjustments.length) {
-          show('当前没有可调整时间的政策。', 'info')
-          return
-        }
-        if (scopePreview || openEndEditor || previousAdjustments.length) {
+        if (scopePreview || previousAdjustments.length) {
           const changedTargets = previousAdjustments.some(
             ({ target }) =>
               !options.some(
                 (option) =>
                   option.target.policyId === target.policyId &&
                   option.target.auditLogId === target.auditLogId &&
-                  option.target.previousEnd === target.previousEnd,
+                  option.target.previousEnd === target.previousEnd &&
+                  option.target.recordVersion === target.recordVersion,
               ),
           )
           if (changedTargets) {
@@ -317,7 +253,6 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
             submissionPreview.value = {
               ...(scopePreview ?? { scopes: [], ranges: [] }),
               changed: changed || changedTargets,
-              openEndEditor,
               previousAdjustments,
               options,
               recalculate,
@@ -425,7 +360,6 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
         }
       }
       if (
-        error.code === 'POLICY_EXTENSION_SOURCE_CHANGED' ||
         error.code === 'POLICY_VERSION_CONFLICT' ||
         error.code === 'POLICY_STATE_CONFLICT' ||
         error.code === 'POLICY_CREATE_CONFLICT' ||
@@ -511,6 +445,6 @@ export function usePolicyDraft(form, confirming, attachments, refreshPlatforms, 
     hasUnsavedChanges,
     saveDraft: () => persist('save'),
     deleteDraft,
-    submit: (withEndAdjustment = false) => persist(withEndAdjustment ? 'adjust' : 'submit'),
+    submit: () => persist('submit'),
   }
 }

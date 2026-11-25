@@ -1,5 +1,5 @@
 -- 清空所有申请人的政策及本轮工作流记录，保留企业审核名单、用户、分工、商品和磁盘附件。
--- 适用于完成延期升级的十五表库或完整的二十二表库。先停写、备份并在 Navicat 选库。
+-- 适用于完成延期升级的十五表库或采用审核工作流的二十二、二十三表库。先停写、备份并在 Navicat 选库。
 -- 若正在投递飞书动作，应先停用并核对尚未结办的外部待办。脚本不会撤回外部消息。
 SET @review_table_count=(SELECT COUNT(*) FROM information_schema.tables
   WHERE table_schema=DATABASE() AND table_name IN ('policy_review_settings','policy_review_setting_member','policy_review_round','policy_review_member',
@@ -40,6 +40,11 @@ SET @review_clear=IF(@workflow_ready,'DELETE FROM policy_review_round','SELECT 0
 PREPARE review_delete FROM @review_clear;
 EXECUTE review_delete;
 DEALLOCATE PREPARE review_delete;
+SET @has_time_changes=(SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='policy_time_change');
+SET @change_clear=IF(@has_time_changes=1,'DELETE FROM policy_time_change WHERE @clear_ready','SELECT 0 AS change_rows_to_clear');
+PREPARE change_delete FROM @change_clear;
+EXECUTE change_delete;
+DEALLOCATE PREPARE change_delete;
 DELETE FROM policy_goods_detail WHERE @clear_ready;
 DELETE FROM policy_audit_log WHERE @clear_ready;
 UPDATE policy_apply SET extension_source_id=NULL WHERE @clear_ready AND extension_source_id IS NOT NULL;

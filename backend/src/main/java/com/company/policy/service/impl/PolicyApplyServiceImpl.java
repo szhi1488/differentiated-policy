@@ -4,6 +4,7 @@ import static com.company.policy.support.policy.PolicyFormValidation.entries;
 import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 
 import com.company.policy.common.exception.ApiException;
+import com.company.policy.dto.CatalogGoodsQuery.Configuration;
 import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.GoodsForm;
@@ -25,7 +26,6 @@ import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyApplyService;
 import com.company.policy.service.PolicyCoverageService;
 import com.company.policy.service.PolicyReviewWorkflow;
-import com.company.policy.support.policy.PolicyApplicabilityEvaluator;
 import com.company.policy.support.policy.PolicyConfirmation;
 import com.company.policy.support.policy.PolicyFormValidation;
 import com.company.policy.support.policy.PolicyScenes;
@@ -34,7 +34,6 @@ import com.company.policy.vo.ApplicantCatalogResponse;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.PolicyApplicability;
 import com.company.policy.vo.PolicyResponse;
-import com.company.policy.vo.PolicyResponse.ApprovedEnd;
 import com.company.policy.vo.PolicyResponse.AuditDetail;
 import com.company.policy.vo.PolicyResponse.AuditSummary;
 import com.company.policy.vo.PolicyResponse.Detail;
@@ -47,14 +46,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -80,6 +78,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private final ObjectMapper json;
     private final PolicySnapshotCodec snapshots;
     private final AttachmentService attachments;
+    private final PolicyTimeHistory history;
 
     PolicyApplyServiceImpl(
             PolicyCoverageService coverage,
@@ -90,7 +89,9 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             ObjectMapper json,
             PolicySnapshotCodec snapshots,
             AttachmentService attachments,
-            PolicyReviewWorkflow workflow) {
+            PolicyReviewWorkflow workflow,
+            PolicyTimeHistory history) {
+        this.history = history;
         this.coverage = coverage;
         this.workflow = workflow;
         this.access = access;
@@ -149,182 +150,10 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public PolicyResponse adjustTime(
-            CurrentUserResponse session,
-            long id,
-            PolicyDraftRequest.TimeAdjustment request,
-            String requestKey) {
-        var owner = access.requireApplicant(session);
-        var source = owned(owner, id);
-        checkVersion(source, request.recordVersion());
-        var basis = adjustmentBasis(owner, source);
-        var end = requestedEnd(request);
-        var previousEnd = basis.target().previousEnd();
-        if (request.expectedSourceEnd() != null
-                && !previousEnd.equals(request.expectedSourceEnd())) {
-            throw conflict("POLICY_EXTENSION_SOURCE_CHANGED", "原政策实际截止已变化，请刷新列表后重新选择。");
-        }
-        boolean extend = end.isAfter(PolicyFormValidation.time(previousEnd));
-        var change = checkedChange(owner, session, basis, request, end, extend);
-        var form = basis.snapshot().form().withTimeAdjustment(change);
-        var entry = newDraft(owner, requestKey, form, session);
-        if (extend) {
-            entry.setEndTime(end);
-            var start = PolicyFormValidation.time(previousEnd).plusSeconds(1);
-            var existing = policies.findExtension(id, owner.getTenantKey(), owner.getId());
-            if (existing != null) {
-                if ("DRAFT".equals(existing.getStatus())
-                        && existing.getEndTime().equals(end)
-                        && existing.getStartTime().equals(start)
-                        && change.equals(readForm(existing).goodsForm().timeAdjustment())) {
-                    return response(existing);
-                }
-                throw conflict(
-                        "POLICY_EXTENSION_EXISTS",
-                        "该政策已有延期申请 " + policyNumber(existing.getId()) + "，请在「我的提交」查看该单。");
-            }
-            entry.setExtensionSourceId(id);
-            entry.setStartTime(start);
-        }
-        if (requestKey != null) {
-            var previous =
-                    policies.findByCode(entry.getPolicyNo(), owner.getTenantKey(), owner.getId());
-            if (previous != null) {
-                if ("DRAFT".equals(previous.getStatus())
-                        && readForm(entry).equals(readForm(previous))) return response(previous);
-                throw conflict("POLICY_CREATE_CONFLICT", "创建标识已使用，请核对原申请。");
-            }
-        }
-        checkUpdated(policies.insert(entry, now()));
-        return response(entry);
-    }
-
-    private record AdjustmentBasis(
-            Snapshot snapshot, PolicyConsent.Target target, LocalDateTime earliestEnd) {}
-
-    private AdjustmentBasis adjustmentBasis(UserInfo owner, PolicyApply source) {
-        if (!"APPROVED".equals(source.getStatus()))
-            throw conflict("POLICY_STATE_CONFLICT", "只可调整已通过政策的时间。");
-        if (platforms.lockApplicant(owner.getTenantKey(), owner.getId()) == null)
-            throw conflict("POLICY_STATE_CONFLICT", "申请人状态已变化。");
-        var logs = policies.listAuditLogs(source.getId(), source.getTenantKey(), 1, 0);
-        if (logs.isEmpty()
-                || !"APPROVED".equals(logs.get(0).getAuditStatus())
-                || logs.get(0).getVersion() != source.getCurrentVersion())
-            throw conflict("POLICY_STATE_CONFLICT", "原政策已通过轮次已变化。");
-        var log = logs.get(0);
-        var snapshot =
-                snapshots.read(
-                        policies.findSnapshot(
-                                source.getId(), source.getTenantKey(), log.getVersion()));
-        var form = snapshot.form();
-        if (snapshot.sourcePolicyCode() == null && form.goodsForm().timeAdjustment() != null)
-            throw invalid("请从对应原政策发起时间调整。");
-        coverage.lockScope(source, form, List.of());
-        var actual = coverage.approvedEnd(owner.getTenantKey(), source.getId(), log.getId(), now());
-        var through =
-                actual == null
-                        ? formatTime(PolicyApplicabilityEvaluator.originalThrough(snapshot))
-                        : actual.actualEnd();
-        var start = PolicyFormValidation.time(form.startTime());
-        if (start.isBefore(log.getAuditTime())) start = log.getAuditTime();
-        return new AdjustmentBasis(
-                snapshot,
-                new PolicyConsent.Target(
-                        source.getId().toString(), log.getId().toString(), through),
-                start.minusSeconds(1));
-    }
-
-    private EndAdjustment checkedChange(
-            UserInfo owner,
-            CurrentUserResponse session,
-            AdjustmentBasis basis,
-            PolicyDraftRequest.TimeAdjustment request,
-            LocalDateTime end,
-            boolean extend) {
-        var previous = PolicyFormValidation.time(basis.target().previousEnd());
-        var form = basis.snapshot().form();
-        if (extend) {
-            requirePlatforms(owner, form, false);
-            if (!end.isAfter(previous.plusSeconds(1)) || end.isBefore(now()))
-                throw invalid("新到期时间须晚于延长段开始时刻，且不能早于当前北京时间。");
-        } else {
-            var assigned = platforms.assigned(owner.getTenantKey(), owner.getId());
-            var responsible =
-                    form.goodsForm().cards().stream()
-                            .flatMap(card -> card.platformAssignments().stream())
-                            .anyMatch(
-                                    item ->
-                                            assigned.contains(
-                                                    new ChannelPlatform(
-                                                            form.perspective(),
-                                                            item.platformCode())));
-            if (!responsible)
-                throw new ApiException(
-                        HttpStatus.FORBIDDEN, "POLICY_PLATFORM_FORBIDDEN", "该政策的实际使用平台已全部移交。");
-            if (previous.isBefore(now())
-                    || !end.isBefore(previous)
-                    || end.isBefore(basis.earliestEnd()))
-                throw invalid("截止须早于原截止，最早可选政策起效前一秒，已结束的政策不能再提前。");
-        }
-        var reason = request.reason() == null ? "" : request.reason().strip();
-        if (reason.isBlank() || reason.codePointCount(0, reason.length()) > 512)
-            throw invalid("请填写 1 至 512 字的调整原因。");
-        return new EndAdjustment(
-                basis.target(),
-                formatTime(end),
-                reason,
-                attachments.resolveChangeFiles(request.attachmentInfo(), session));
-    }
-
-    private static LocalDateTime requestedEnd(PolicyDraftRequest.TimeAdjustment request) {
-        var end = PolicyFormValidation.time(request.endTime());
-        if (end == null) throw invalid("请选择新的到期时间。");
-        return end;
-    }
-
-    @Override
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    public PolicyResponse saveTimeAdjustment(
-            CurrentUserResponse session, long id, PolicyDraftRequest.TimeAdjustment request) {
-        var owner = access.requireApplicant(session);
-        var entry = owned(owner, id);
-        checkEditable(entry, request.recordVersion());
-        var saved = readForm(entry);
-        var old = saved.goodsForm().timeAdjustment();
-        boolean extend = entry.getExtensionSourceId() != null;
-        if (!extend && old == null) throw invalid("请选择时间调整申请。");
-        var sourceId =
-                extend ? entry.getExtensionSourceId() : Long.valueOf(old.target().policyId());
-        var basis = adjustmentBasis(owner, owned(owner, sourceId));
-        var lastEnd =
-                old != null
-                        ? old.target().previousEnd()
-                        : formatTime(entry.getStartTime().minusSeconds(1));
-        var expected = request.expectedSourceEnd() == null ? lastEnd : request.expectedSourceEnd();
-        if (!basis.target().previousEnd().equals(expected)) {
-            throw conflict("POLICY_EXTENSION_SOURCE_CHANGED", "原政策截止已变化，请读取最新版本，核对后再保存。");
-        }
-        if (extend) entry.setStartTime(PolicyFormValidation.time(expected).plusSeconds(1));
-        var end = requestedEnd(request);
-        var change = checkedChange(owner, session, basis, request, end, extend);
-        entry.setGoodsFormJson(encode(saved.withTimeAdjustment(change).goodsForm()));
-        if (extend) entry.setEndTime(end);
-        checkUpdated(policies.updateDraft(entry, now()));
-        entry.setRecordVersion(entry.getRecordVersion() + 1);
-        return response(entry);
-    }
-
-    @Override
-    @Transactional(isolation = Isolation.READ_COMMITTED)
     public PolicyResponse save(CurrentUserResponse session, long id, PolicyDraftRequest request) {
         var owner = access.requireApplicant(session);
         var entry = owned(owner, id);
         checkEditable(entry, request.recordVersion());
-        if (entry.getExtensionSourceId() != null
-                || readForm(entry).goodsForm().timeAdjustment() != null) {
-            throw invalid("时间调整申请请通过调整政策时间入口保存。");
-        }
         var form = PolicyFormValidation.validate(request, false);
         requirePlatforms(owner, form, true);
         writeForm(entry, form);
@@ -471,35 +300,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
 
     private PreparedSubmission prepareSubmission(
             UserInfo owner, PolicyApply entry, List<EndAdjustment> changes, boolean writing) {
-        var saved = readForm(entry);
-        var change = saved.goodsForm().timeAdjustment();
-        if (entry.getExtensionSourceId() == null && change != null) {
-            if (!entries(changes).isEmpty() && !List.of(change).equals(changes))
-                throw invalid("单独提前结束申请仅可调整已选原单。");
-            if (writing) coverage.lockScope(entry, saved, List.of(change));
-            var source = owned(owner, Long.parseLong(change.target().policyId()));
-            var original =
-                    snapshots.read(
-                            policies.findSnapshot(
-                                    source.getId(),
-                                    source.getTenantKey(),
-                                    source.getCurrentVersion()));
-            return new PreparedSubmission(
-                    new Snapshot(
-                            entry.getId().toString(),
-                            policyNumber(entry.getId()),
-                            owner.getId().toString(),
-                            owner.getName(),
-                            entry.getCurrentVersion() + 1,
-                            saved,
-                            original.goods(),
-                            null,
-                            null),
-                    List.of());
-        }
-        if (entry.getExtensionSourceId() != null && change == null)
-            throw invalid("请先填写延期原因并保存时间调整申请。");
-        var form = PolicyFormValidation.validate(saved, true).withTimeAdjustment(change);
+        var form = PolicyFormValidation.validate(readForm(entry), true);
         requirePlatforms(owner, form, writing);
         var ids = targetIds(form);
         if (writing) {
@@ -534,6 +335,8 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             }
         }
 
+        requireCompleteCommonConfigurations(form);
+
         int version = entry.getCurrentVersion() + 1;
         var snapshot =
                 new Snapshot(
@@ -545,14 +348,13 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                         form,
                         ids.stream().map(goods::get).toList(),
                         null,
-                        sourcePolicyCode(entry));
+                        null,
+                        true);
         return new PreparedSubmission(snapshot, lines);
     }
 
     private Snapshot withAdjustments(
             Snapshot snapshot, List<EndAdjustment> changes, CurrentUserResponse session) {
-        var single = snapshot.form().goodsForm().timeAdjustment();
-        if (single != null && snapshot.sourcePolicyCode() == null) changes = List.of(single);
         var checked = new ArrayList<EndAdjustment>();
         for (var change : entries(changes)) {
             if (change == null || change.target() == null) throw invalid("请选择要调整时间的原政策。");
@@ -565,43 +367,20 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
 
     private String confirmationToken(
             PolicyApply entry, Snapshot snapshot, PolicyApplicability result) {
-        // 正在生效的首段按相对起点比较，用户阅读期间自然推进的秒数不会使确认失效。
-        var ranges =
-                PolicyConfirmation.ranges(result).stream()
-                        .map(
-                                d ->
-                                        List.of(
-                                                d.scope(),
-                                                d.from().equals(result.effectiveFrom())
-                                                        ? "START"
-                                                        : d.from(),
-                                                d.through(),
-                                                d.action(),
-                                                d.groups(),
-                                                d.eligiblePolicyIds()))
-                        .toList();
-        var contents =
-                encode(
-                        List.of(
-                                snapshot.id(),
-                                entry.getRecordVersion(),
-                                snapshot.goods(),
-                                snapshot.consent().endAdjustments(),
-                                result.status(),
-                                PolicyConfirmation.comparedRounds(result),
-                                ranges));
-        try {
-            var digest =
-                    MessageDigest.getInstance("SHA-256")
-                            .digest(contents.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException(error);
-        }
+        return PolicyConfirmation.fingerprint(
+                json,
+                List.of(
+                        snapshot.id(),
+                        entry.getRecordVersion(),
+                        snapshot.goods(),
+                        snapshot.consent().endAdjustments(),
+                        result.status(),
+                        PolicyConfirmation.comparedRounds(result),
+                        PolicyConfirmation.tokenRanges(result)));
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Detail detail(CurrentUserResponse session, long id) {
         var entry = owned(access.requireApplicant(session), id);
         PolicyDraftRequest form;
@@ -628,26 +407,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             form = snapshot.form();
             goods = snapshot.goods();
         }
-        var change = form.goodsForm().timeAdjustment();
-        String currentSourceEnd = null;
-        if (editable(entry) && (change != null || entry.getExtensionSourceId() != null)) {
-            var targetId =
-                    change != null
-                            ? change.target().policyId()
-                            : entry.getExtensionSourceId().toString();
-            var actual =
-                    coverage.approvedEnd(
-                            entry.getTenantKey(),
-                            Long.parseLong(targetId),
-                            change == null ? null : Long.valueOf(change.target().auditLogId()),
-                            now());
-            currentSourceEnd =
-                    actual != null
-                            ? actual.actualEnd()
-                            : change != null
-                                    ? change.target().previousEnd()
-                                    : formatTime(entry.getStartTime().minusSeconds(1));
-        }
         return new Detail(
                 Long.toString(id),
                 policyNumber(entry.getId()),
@@ -657,12 +416,11 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 entry.getApplicantName(),
                 form,
                 goods,
-                sourcePolicyCode(entry),
                 endAdjustments,
                 "APPROVED".equals(entry.getStatus())
-                        ? coverage.approvedEnd(entry.getTenantKey(), id, null, now())
+                        ? history.read(
+                                entry.getTenantKey(), id, entry.getCurrentVersion(), form.endTime())
                         : null,
-                currentSourceEnd,
                 entry.getReviewStage());
     }
 
@@ -675,16 +433,12 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         validateFilter(query.perspective(), PERSPECTIVES, "渠道");
         validateFilter(query.platformCode(), PolicyFormValidation.RETAIL, "平台");
         long total = policies.countMine(owner.getTenantKey(), owner.getId(), query);
-        var ends =
-                offset >= total
-                        ? Map.<String, ApprovedEnd>of()
-                        : coverage.approvedEnds(owner.getTenantKey(), now());
         var applicant = new PolicyApply();
         applicant.setApplicantId(owner.getId());
         applicant.setTenantKey(owner.getTenantKey());
         var options = new HashMap<String, PolicyApplicability.AdjustmentOption>();
         if (offset < total) {
-            for (var option : coverage.adjustableFor(applicant, now(), ends))
+            for (var option : coverage.adjustableFor(applicant, now()))
                 options.put(option.target().policyId(), option);
         }
         var items =
@@ -693,12 +447,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                         : policies
                                 .listMine(owner.getTenantKey(), owner.getId(), query, offset)
                                 .stream()
-                                .map(
-                                        entry ->
-                                                summary(
-                                                        entry,
-                                                        ends.get(entry.getId().toString()),
-                                                        options.get(entry.getId().toString())))
+                                .map(entry -> summary(entry, options.get(entry.getId().toString())))
                                 .toList();
         return new Page<>(items, total, query.page(), query.pageSize());
     }
@@ -732,10 +481,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return new AuditDetail(auditSummary(log), snapshots.read(log.getSnapshotData()));
     }
 
-    private Summary summary(
-            PolicyApply entry,
-            ApprovedEnd approvedEnd,
-            PolicyApplicability.AdjustmentOption option) {
+    private Summary summary(PolicyApply entry, PolicyApplicability.AdjustmentOption option) {
 
         return new Summary(
                 entry.getId().toString(),
@@ -747,16 +493,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 entries(decode(entry.getPlatforms(), new TypeReference<List<String>>() {})),
                 formatTime(entry.getCreatedAt()),
                 formatTime(entry.getUpdatedAt()),
-                approvedEnd != null
-                        ? approvedEnd.actualEnd()
-                        : formatTime(
-                                "APPROVED".equals(entry.getStatus())
-                                                && entry.getExtensionSourceId() == null
-                                                && entry.getEndTime() != null
-                                        ? entry.getEndTime().toLocalDate().atTime(23, 59, 59)
-                                        : entry.getEndTime()),
-                sourcePolicyCode(entry),
-                entry.isAdjustmentOnly(),
+                formatTime(entry.getEndTime()),
                 option == null ? null : option.earliestEnd(),
                 option != null && option.canExtend(),
                 option != null && option.canShorten(),
@@ -807,6 +544,30 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             }
         }
         return result;
+    }
+
+    private void requireCompleteCommonConfigurations(PolicyDraftRequest form) {
+        var configurations = new LinkedHashSet<Configuration>();
+        var selected = new HashSet<Long>();
+        for (var card : form.goodsForm().cards()) {
+            if (!"COMMON".equals(card.cardType())) continue;
+            for (var target : card.targets()) {
+                configurations.add(
+                        new Configuration(
+                                Long.parseLong(target.spuId()), target.ram(), target.rom()));
+                selected.add(Long.parseLong(target.goodsId()));
+            }
+        }
+        // 商品已逐件核验在售和配置归属，每个配置也已限定只归一张普通卡。
+        var groups = List.copyOf(configurations);
+        for (int i = 0; i < groups.size(); i += 500) {
+            var batch = groups.subList(i, Math.min(i + 500, groups.size()));
+            if (!selected.containsAll(catalog.onSaleConfigurationGoods(batch))) {
+                throw conflict(
+                        "POLICY_COMMON_SCOPE_CHANGED",
+                        "普通商品卡须包含所选配置的全部在售商品。请编辑卡片重新确认整组，或改用「指定适用机型」选择部分商品。");
+            }
+        }
     }
 
     private static boolean sameConfiguration(ApplicantCatalogResponse item, Target target) {
@@ -897,12 +658,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return String.format(Locale.ROOT, "ZC-%06d", id);
     }
 
-    private static String sourcePolicyCode(PolicyApply entry) {
-        return entry.getExtensionSourceId() == null
-                ? null
-                : policyNumber(entry.getExtensionSourceId());
-    }
-
     private static String creationCode(UserInfo owner, String key) {
         UUID token = UUID.randomUUID();
         if (key != null) {
@@ -929,7 +684,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return LocalDateTime.now(SHANGHAI).truncatedTo(ChronoUnit.SECONDS);
     }
 
-    private static PolicyResponse response(PolicyApply entry) {
+    static PolicyResponse response(PolicyApply entry) {
         return response(entry, null);
     }
 

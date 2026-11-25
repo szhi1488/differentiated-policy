@@ -4,9 +4,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
-import PolicyAdjustmentEvidence from './components/PolicyAdjustmentEvidence.vue'
+import PolicyEndAdjustmentEditor from './components/PolicyEndAdjustmentEditor.vue'
 import { createRequestId } from '../../utils/request-id'
-import { createPolicyTimeAdjustment } from '../../api/policies'
+import { RequestError } from '../../api/request'
+import {
+  applyPolicyTimeAdjustments,
+  listPolicyTimeAdjustmentOptions,
+  previewPolicyTimeAdjustments,
+} from '../../api/policies'
 import { usePolicySubmissions } from '../../composables/usePolicySubmissions'
 import {
   CHANNEL_LABELS,
@@ -17,8 +22,9 @@ import {
   policyIsEditable,
 } from '../../constants/policy'
 import { policyTime } from '../../utils/policy-adapter'
+import { readSubmissionPreview } from '../../utils/policy-applicability'
+import PolicySubmissionCoverage from './components/PolicySubmissionCoverage.vue'
 import PolicySubmissionDrawer from './components/PolicySubmissionDrawer.vue'
-import PolicyAdjustmentDate from './components/PolicyAdjustmentDate.vue'
 
 const router = useRouter()
 const { busy, confirming, writing, preparePolicyEdit, deleteDraft } = inject('policyForm')
@@ -26,20 +32,22 @@ const { filters, data, error, loading, refresh, setFilter } = usePolicySubmissio
 const selected = ref(null)
 const detailOpen = ref(false)
 const deleteTarget = ref(null)
-const adjustmentSource = ref(null)
-const evidence = ref(null)
-const reason = ref('')
-const proofFiles = ref([])
-const proofStatus = ref({})
-const validTime = ref(false)
-let createKey
-const endTime = ref('')
-const creatingAdjustment = ref(false)
-const adjustmentError = ref('')
+const adjustmentOptions = ref(null)
+const loadingOptions = ref(false)
+const applying = ref(false)
+const optionsError = ref('')
+const scopePreview = ref(null)
+let finishScope
+let approvalRequest
 let active = true
-onBeforeRouteLeave(() => !creatingAdjustment.value || !adjustmentSource.value)
+let optionsController
+let previewController
+onBeforeRouteLeave(() => !applying.value)
 onScopeDispose(() => {
   active = false
+  optionsController?.abort()
+  previewController?.abort()
+  finishScope?.(null)
 })
 watch(writing, (value, previous) => {
   if (previous === 'delete' && value !== 'delete') {
@@ -57,57 +65,101 @@ function openDetail(row) {
   detailOpen.value = true
 }
 
-function openAdjustment(row) {
-  createKey = createRequestId()
-  reason.value = ''
-  proofFiles.value = []
-  proofStatus.value = {}
-  validTime.value = false
-  adjustmentSource.value = row
-  endTime.value = ''
-  adjustmentError.value = ''
+async function loadAdjustmentOptions() {
+  optionsController = new AbortController()
+  const result = await listPolicyTimeAdjustmentOptions(optionsController.signal)
+  if (!Array.isArray(result)) {
+    throw new Error('未能读取可调整的政策，请重试。')
+  }
+  if (active) {
+    adjustmentOptions.value = result
+  }
 }
 
-async function createAdjustment() {
-  const source = adjustmentSource.value
-  if (
-    !source ||
-    !validTime.value ||
-    !reason.value.trim() ||
-    proofStatus.value.busy ||
-    proofStatus.value.failed ||
-    creatingAdjustment.value
-  ) {
+async function openAdjustment() {
+  if (loadingOptions.value || adjustmentOptions.value) {
     return
   }
-  creatingAdjustment.value = true
-  adjustmentError.value = ''
+  approvalRequest = null
+  loadingOptions.value = true
+  optionsError.value = ''
   try {
-    const draft = await createPolicyTimeAdjustment(
-      source,
-      endTime.value,
-      {
-        reason: reason.value.trim(),
-        attachmentInfo: proofFiles.value,
-      },
-      createKey,
-    )
-    evidence.value?.retainFiles()
-    if (active) {
-      adjustmentSource.value = null
-      ElMessage.success(`时间调整草稿 ${draft.policyCode} 已保存`)
-      void refresh()
-      await edit(draft)
-    }
+    await loadAdjustmentOptions()
   } catch (cause) {
     if (active) {
-      adjustmentError.value = cause.message
-      if (cause.code === 'POLICY_EXTENSION_SOURCE_CHANGED') {
-        void refresh()
-      }
+      optionsError.value = cause.message
     }
   } finally {
-    creatingAdjustment.value = false
+    loadingOptions.value = false
+  }
+}
+
+async function reviewAdjustments(changes) {
+  approvalRequest = null
+  previewController = new AbortController()
+  try {
+    const preview = await previewPolicyTimeAdjustments(changes, previewController.signal)
+    if (!active) {
+      return false
+    }
+    const coverage = readSubmissionPreview(preview)
+    if (!preview.confirmationToken) {
+      throw new Error('未收到本次调整的确认凭证，请重新核对。')
+    }
+    const decisions = coverage
+      ? await new Promise((resolve) => {
+          finishScope = resolve
+          scopePreview.value = coverage
+        })
+      : []
+    if (!decisions || !active) {
+      return false
+    }
+    approvalRequest = {
+      body: { endAdjustments: changes, confirmationToken: preview.confirmationToken, decisions },
+      key: createRequestId(),
+    }
+    return true
+  } catch (cause) {
+    if (cause.status === 409 && active) {
+      await loadAdjustmentOptions()
+    }
+    throw cause
+  }
+}
+
+function closeScope(decisions) {
+  scopePreview.value = null
+  finishScope(decisions)
+  finishScope = null
+}
+
+async function applyAdjustments() {
+  applying.value = true
+  try {
+    const { body, key } = approvalRequest
+    const approved = await applyPolicyTimeAdjustments(body, key)
+    if (
+      !Array.isArray(approved) ||
+      approved.length !== body.endAdjustments.length ||
+      !body.endAdjustments.every(({ target }) =>
+        approved.some((record) => record?.id === target.policyId && record.status === 'APPROVED'),
+      )
+    ) {
+      throw new RequestError('调整回执不完整。', 'parse')
+    }
+    ElMessage.success(`已通过 ${body.endAdjustments.length} 张政策的时间调整`)
+    void refresh()
+  } catch (cause) {
+    if (cause.status === 409) {
+      await loadAdjustmentOptions()
+    }
+    if (['network', 'timeout', 'parse'].includes(cause.kind) || cause.status >= 500) {
+      throw new Error('调整结果待核对。再次确认将使用同一个提交编号。')
+    }
+    throw cause
+  } finally {
+    applying.value = false
   }
 }
 
@@ -174,20 +226,24 @@ async function removeDraft(row) {
       >
         <el-option v-for="(name, value) in options" :key="value" :label="name" :value="value" />
       </el-select>
+      <el-button
+        class="submissions-adjust"
+        type="primary"
+        :loading="loadingOptions"
+        :disabled="busy || confirming"
+        @click="openAdjustment"
+      >
+        调整政策时间
+      </el-button>
     </div>
+    <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false" show-icon />
 
     <p v-if="loading" class="submissions-message" role="status">正在读取申请…</p>
     <el-alert v-else-if="error" type="error" :closable="false" show-icon :title="error.message" />
     <el-empty v-else-if="!data?.items.length" description="没有符合条件的申请" :image-size="90" />
     <template v-else>
       <el-table :data="data.items" row-key="id">
-        <el-table-column prop="policyCode" label="申请单号" min-width="196">
-          <template #default="{ row }">
-            {{ row.policyCode }}
-            <div v-if="row.sourcePolicyCode">延期自 {{ row.sourcePolicyCode }}</div>
-            <div v-else-if="row.adjustmentOnly">提前结束申请</div>
-          </template>
-        </el-table-column>
+        <el-table-column prop="policyCode" label="申请单号" min-width="196" />
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
             <el-tag :type="POLICY_STATUS_TYPES[row.status]">
@@ -211,15 +267,6 @@ async function removeDraft(row) {
         <el-table-column label="操作" fixed="right" width="195">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
-            <el-button
-              v-if="row.status === 'APPROVED' && (row.canExtend || row.canShorten)"
-              link
-              type="primary"
-              :disabled="busy || confirming"
-              @click="openAdjustment(row)"
-            >
-              调整政策时间
-            </el-button>
             <el-button
               v-if="policyIsEditable(row.status)"
               link
@@ -257,57 +304,21 @@ async function removeDraft(row) {
       </footer>
     </template>
 
-    <el-dialog
-      :model-value="Boolean(adjustmentSource)"
-      title="调整政策时间"
-      width="min(500px, calc(100% - 24px))"
-      align-center
-      :show-close="!creatingAdjustment"
-      :close-on-press-escape="!creatingAdjustment"
-      :close-on-click-modal="false"
-      @update:model-value="adjustmentSource = null"
-    >
-      <template v-if="adjustmentSource">
-        <p>
-          原政策 {{ adjustmentSource.policyCode }} 于
-          {{ policyTime(adjustmentSource.endTime).replace('T', ' ') }}
-          到期。调整申请将生成新单号，审核通过后生效。
-        </p>
-        <el-form
-          label-position="top"
-          :disabled="creatingAdjustment"
-          @submit.prevent="createAdjustment"
-        >
-          <PolicyAdjustmentDate
-            v-model="endTime"
-            :previous-end="adjustmentSource.endTime"
-            :earliest-end="adjustmentSource.earliestEnd"
-            :can-extend="adjustmentSource.canExtend"
-            :can-shorten="adjustmentSource.canShorten"
-            @validity="validTime = $event"
-          />
-          <PolicyAdjustmentEvidence
-            ref="evidence"
-            v-model:reason="reason"
-            v-model:attachment-info="proofFiles"
-            :disabled="creatingAdjustment"
-            @status-change="proofStatus = $event"
-          />
-        </el-form>
-        <el-alert v-if="adjustmentError" :title="adjustmentError" type="error" :closable="false" />
-      </template>
-      <template #footer>
-        <el-button :disabled="creatingAdjustment" @click="adjustmentSource = null">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="creatingAdjustment"
-          :disabled="!validTime || !reason.trim() || proofStatus.busy || proofStatus.failed"
-          @click="createAdjustment"
-        >
-          创建调整草稿
-        </el-button>
-      </template>
-    </el-dialog>
+    <PolicyEndAdjustmentEditor
+      v-if="adjustmentOptions"
+      :prepare-direct-approval="reviewAdjustments"
+      :options="adjustmentOptions"
+      :changes="[]"
+      :apply="applyAdjustments"
+      @close="adjustmentOptions = null"
+    />
+    <PolicySubmissionCoverage
+      v-if="scopePreview"
+      choosing-adjustment-scope
+      :preview="scopePreview"
+      @confirm="closeScope"
+      @edit="closeScope(null)"
+    />
     <el-drawer
       v-if="selected"
       v-model="detailOpen"
@@ -349,10 +360,23 @@ async function removeDraft(row) {
   font-size: 18px;
 }
 .submissions-filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(94px, 156px));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 18px 0;
+}
+.submissions-filters .el-select {
+  flex: 0 1 156px;
+  max-width: 100%;
+}
+.submissions-adjust {
+  margin-inline-start: auto;
+}
+@media (max-width: 660px) {
+  .submissions-filters .el-select {
+    flex: 1 1 120px;
+  }
 }
 .submissions-footer,
 .submissions-message {
