@@ -32,6 +32,7 @@ import org.springframework.test.web.servlet.ResultActions;
         })
 @AutoConfigureMockMvc
 class PolicyReviewRoundTest {
+    @Autowired com.company.policy.service.AuthorizationService roles;
     @TempDir static Path storage;
 
     @DynamicPropertySource
@@ -46,38 +47,43 @@ class PolicyReviewRoundTest {
 
     @BeforeEach
     void seed() {
+        jdbc.update("MERGE INTO brand(id,name) KEY(id) VALUES(80000,'测试品牌')");
+        jdbc.update("MERGE INTO series(id,brand_id,name) KEY(id) VALUES(80000,80000,'测试系列')");
         for (var table :
                 java.util.List.of(
                         "policy_review_decision",
                         "policy_review_member",
                         "policy_review_round",
                         "policy_time_change",
+                        "policy_round_platform",
                         "policy_audit_log",
                         "policy_apply",
+                        "sys_user_role",
                         "user_info")) jdbc.update("DELETE FROM " + table);
         for (int i = 1; i <= 7; i++) {
-            jdbc.update(
-                    "INSERT INTO user_info(id, tenant_key, open_id, name, role_type) VALUES(?,?,?,?,?)",
+            com.company.policy.ReviewAccounts.create(
+                    jdbc,
+                    roles,
                     i,
                     i == 7 ? "outside" : "company",
                     "user-" + i,
                     "成员" + i,
-                    i == 4 || i == 6 ? "ADMIN" : "APPLICANT");
+                    fixtureRole(i));
         }
         jdbc.update(
                 """
-                INSERT INTO policy_apply(id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
-                VALUES(101,'company','first',1,'申请人','RETAIL','PENDING',1,2)
+                INSERT INTO policy_apply(brand_id,series_id,id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
+                VALUES(80000,80000,101,'company','first',1,'申请人','RETAIL','PENDING',1,2)
                 """);
         round(1);
         assign(1, 2, "PRODUCT", "ACTIVE");
-        assign(1, 3, "PRODUCT", "ACTIVE");
+        assign(1, 3, "PRODUCT", "REMOVED");
         assign(1, 4, "PURCHASE", "ACTIVE");
     }
 
     private void round(int version) {
         jdbc.update(
-                "INSERT INTO policy_audit_log(tenant_key,policy_id,version,snapshot_data,workflow_version) VALUES('company',101,?,?,1)",
+                "INSERT INTO policy_audit_log(brand_id,series_id,perspective,tenant_key,policy_id,version,snapshot_data) VALUES(80000,80000,'RETAIL','company',101,?,?)",
                 version,
                 "{\"id\":\"101\",\"submissionVersion\":"
                         + version
@@ -112,11 +118,21 @@ class PolicyReviewRoundTest {
                         "user-" + user,
                         user == 7 ? "outside" : "company",
                         "成员" + user,
-                        user == 4 || user == 6 ? "ADMIN" : "APPLICANT",
+                        java.util.List.of(fixtureRole(user)),
+                        java.util.List.of(),
                         null);
         sessions.establish(
                 request, new AuthSessionResponse(account, Instant.now().plusSeconds(600)));
         return (MockHttpSession) request.getSession();
+    }
+
+    private static String fixtureRole(int user) {
+        return switch (user) {
+            case 1 -> "OPERATIONS";
+            case 4 -> "PURCHASE";
+            case 6 -> "ADMIN";
+            default -> "PRODUCT_OPS";
+        };
     }
 
     private ResultActions detail(int user, int version) throws Exception {
@@ -135,6 +151,7 @@ class PolicyReviewRoundTest {
 
     @Test
     void aDirectSubmissionShowsItsRecordedPurchaseStage() throws Exception {
+        jdbc.update("DELETE FROM policy_review_member WHERE group_code='PRODUCT'");
         jdbc.update(
                 """
                 UPDATE policy_review_round SET stage='PURCHASE_REVIEW', route_json=? WHERE policy_id=101 AND version=1
@@ -157,17 +174,19 @@ class PolicyReviewRoundTest {
 
     @Test
     void detailReflectsCurrentAuthorityAndReadOnlyRoles() throws Exception {
-        detail(2, 1)
+        detail(2, 1).andExpect(status().isNotFound());
+        detail(6, 1)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changeSummary.summary").value("京东替换"))
-                .andExpect(jsonPath("$.allowedActions.length()").value(2))
+                .andExpect(jsonPath("$.allowedActions.length()").value(0))
                 .andExpect(jsonPath("$.productReviewers.length()").value(2))
                 .andExpect(jsonPath("$.purchaseReviewers[0].userId").value("4"));
-        for (int reader : new int[] {1, 4, 6}) {
+        for (int reader : new int[] {1, 6}) {
             detail(reader, 1)
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.allowedActions").isEmpty());
         }
+        detail(4, 1).andExpect(status().isNotFound());
         detail(5, 1).andExpect(status().isNotFound());
         detail(7, 1).andExpect(status().isForbidden());
         detail(2, 2).andExpect(status().isNotFound());
@@ -189,7 +208,16 @@ class PolicyReviewRoundTest {
                 SELECT policy_id,version,tenant_key,group_code,id,'APPROVE' FROM policy_review_member WHERE user_id=2
                 """);
         jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
-        for (int user : new int[] {2, 3}) {
+        mvc.perform(get("/api/policy-reviews/my-product-decisions").session(session(2)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(1))
+                .andExpect(jsonPath("$.items[0].decision").value("APPROVE"));
+        mvc.perform(get("/api/policy-reviews/my-product-decisions").session(session(3)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        detail(3, 1).andExpect(status().isNotFound());
+        for (int user : new int[] {2}) {
             detail(user, 1)
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.allowedActions").isEmpty())
@@ -199,7 +227,7 @@ class PolicyReviewRoundTest {
                             jsonPath("$.productReviewers[1].memberStatus").value("PEER_HANDLED"));
         }
         detail(4, 1).andExpect(jsonPath("$.allowedActions.length()").value(2));
-        jdbc.update("UPDATE user_info SET role_type='APPLICANT' WHERE id=4");
+        jdbc.update("DELETE FROM sys_user_role WHERE user_id=4");
         detail(4, 1).andExpect(status().isNotFound());
     }
 
@@ -230,6 +258,10 @@ class PolicyReviewRoundTest {
                 end);
         jdbc.update("UPDATE policy_review_round SET stage='FINISHED' WHERE policy_id=101");
         jdbc.update(
+                "UPDATE policy_review_member SET member_status='HANDLED' WHERE policy_id=101 AND user_id IN (2,4)");
+        jdbc.update(
+                "INSERT INTO policy_review_decision(policy_id,version,tenant_key,group_code,member_id,decision) SELECT policy_id,version,tenant_key,group_code,id,'APPROVE' FROM policy_review_member WHERE policy_id=101 AND user_id IN (2,4)");
+        jdbc.update(
                 """
                 UPDATE policy_audit_log SET audit_status='APPROVED', auditor_id=4, auditor_name='采购',
                     audit_time=CURRENT_TIMESTAMP, snapshot_data=? WHERE policy_id=101
@@ -253,7 +285,7 @@ class PolicyReviewRoundTest {
                         java.util.List.of(
                                 java.util.Map.of(
                                         "type", "FILE", "id", fileId, "originalName", "证明.pdf"))));
-        for (int reader : new int[] {1, 2, 4}) {
+        for (int reader : new int[] {1, 4}) {
             detail(reader, 1)
                     .andExpect(status().isOk())
                     .andExpect(
@@ -297,10 +329,13 @@ class PolicyReviewRoundTest {
         jdbc.update("UPDATE policy_review_round SET stage='FINISHED' WHERE version=1");
         jdbc.update("UPDATE policy_review_member SET member_status='HANDLED' WHERE user_id=2");
         jdbc.update("UPDATE policy_apply SET current_version=2,record_version=5 WHERE id=101");
+        jdbc.update(
+                "INSERT INTO policy_review_decision(policy_id,version,tenant_key,group_code,member_id,decision,reason) SELECT policy_id,version,tenant_key,group_code,id,'REJECT','重新核对' FROM policy_review_member WHERE user_id=2 AND version=1");
         round(2);
         assign(2, 3, "PRODUCT", "ACTIVE");
-        for (int user : new int[] {1, 2, 4, 6})
+        for (int user : new int[] {1, 2, 6})
             file(user, 1, id).andExpect(status().isOk()).andExpect(content().bytes(bytes));
+        file(4, 1, id).andExpect(status().isNotFound());
         file(2, 2, id).andExpect(status().isNotFound());
         file(3, 2, id).andExpect(status().isNotFound());
         file(5, 1, id).andExpect(status().isNotFound());

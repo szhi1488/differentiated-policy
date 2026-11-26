@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { roleSession } from '../fixtures/role-session'
 import { RETAIL_PLATFORMS, BILLION_PLATFORMS } from '../../src/constants/policy'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -12,6 +13,7 @@ import {
   ElUpload,
 } from 'element-plus'
 import ApplicantLayout from '../../src/layouts/ApplicantLayout.vue'
+import PolicyReviewMembers from '../../src/components/PolicyReviewMembers.vue'
 import { createWorkspaceRouter } from '../../src/router'
 import { createMemoryHistory } from 'vue-router'
 import { createAuthSession, authSession } from '../../src/composables/useAuthSession'
@@ -28,7 +30,9 @@ const crossChannel = [
 let permitted
 let wrapper
 
-const active = catalogCenterSamples.filter(({ status }) => status === 'active')
+const active = catalogCenterSamples.filter(
+  ({ status, model }) => status === 'active' || model === 'Find X7',
+)
 const idFor = (value, values) => String(values.indexOf(value) + 1)
 const unique = (values) => [...new Set(values)]
 const brands = unique(active.map(({ brand }) => brand))
@@ -249,6 +253,9 @@ beforeEach(() => {
         ...record(),
         form: draft,
         goods: rows,
+        reviewProgress:
+          auditRounds.find(({ log }) => log.submissionVersion === submissionVersion)
+            ?.reviewProgress ?? null,
         endAdjustments: savedStatus === 'REJECTED' ? rejectedAdjustments : [],
       })
     }
@@ -298,9 +305,9 @@ async function openGoodsPicker(specified = false) {
   }
 }
 
-async function addModel() {
+async function addModel(item = catalog[0]) {
   await openGoodsPicker()
-  const { spuId, ram, rom } = catalog[0]
+  const { spuId, ram, rom } = item
   await chooseGoodsFilter('商品配置', [[spuId, ram, rom].join('/')])
   document.querySelector('.policy-picker-footer button.el-button--primary').click()
   await flushPromises()
@@ -315,6 +322,9 @@ async function chooseGoodsFilter(label, value) {
 }
 
 async function render(path = '/apply') {
+  if (!authSession.user.value) {
+    authSession.setLogin({ user: { id: 'owner', ...roleSession('OPERATIONS') } })
+  }
   const router = createWorkspaceRouter(createMemoryHistory(), createAuthSession())
   await router.push(path)
   await router.isReady()
@@ -1144,6 +1154,7 @@ describe('申请人工作台组件协作', () => {
     await button('详情').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('国补、自补')
+    expect(wrapper.findComponent(PolicyReviewMembers).exists()).toBe(false)
   })
 
   it.each(['同一轮次', '已变更截止', '已无分工'])(
@@ -1243,6 +1254,7 @@ describe('申请人工作台组件协作', () => {
           auditStatus: 'REJECTED',
           auditorName: '采购审核人',
           auditComment: '请核对活动说明',
+          rejectedAtStage: 'PURCHASE_REVIEW',
           submittedAt: '2026-11-14T09:00:00+08:00',
           auditTime: '2026-11-14T11:20:30+08:00',
         },
@@ -1253,13 +1265,37 @@ describe('申请人工作台组件协作', () => {
         },
       },
     ]
+    const { log } = auditRounds[0]
+    auditRounds[0].reviewProgress = {
+      submissionVersion: 1,
+      status: 'REJECTED',
+      applicantName: '申请人',
+      submittedAt: log.submittedAt,
+      rejectedAtStage: log.rejectedAtStage,
+      requiresProductReview: false,
+      productReviewers: [],
+      purchaseReviewers: [
+        {
+          assignmentId: '10',
+          name: log.auditorName,
+          memberStatus: 'HANDLED',
+          decision: 'REJECT',
+          reason: log.auditComment,
+          decidedAt: log.auditTime,
+        },
+      ],
+    }
     const router = await render('/apply/submissions')
     await vi.waitFor(() => expect(wrapper.text()).toContain('QA-321'))
     expect(wrapper.text()).not.toContain('提交轮次')
     await button('详情').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('当前可编辑说明')
-    expect(wrapper.get('.policy-rejection').text()).toContain('请核对活动说明')
+    const progress = wrapper.getComponent(PolicyReviewMembers).text()
+    expect(progress).toContain('请核对活动说明')
+    expect(progress).toContain('采购审核人')
+    expect(progress).toContain('2026-11-14 11:20:30')
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/audit-logs'))).toBe(false)
     expect(wrapper.text()).not.toContain('历轮审核')
     expect(wrapper.text()).not.toContain('提交快照')
     expect(wrapper.text()).not.toContain('第 1 轮')
@@ -1284,6 +1320,25 @@ describe('申请人工作台组件协作', () => {
     await vi.waitFor(() => expect(wrapper.find('.submissions-panel').exists()).toBe(true))
     await vi.waitFor(() => expect(wrapper.text()).toContain('待审核'))
     expect(wrapper.text()).not.toContain('继续编辑')
+    auditRounds.unshift({
+      log: { submissionVersion: 2 },
+      reviewProgress: {
+        submissionVersion: 2,
+        status: 'PENDING',
+        applicantName: '申请人',
+        submittedAt: '2026-11-15T09:00:00+08:00',
+        reviewStage: 'PURCHASE_REVIEW',
+        requiresProductReview: false,
+        productReviewers: [],
+        purchaseReviewers: [{ assignmentId: '11', name: '重提后的采购', memberStatus: 'ACTIVE' }],
+      },
+    })
+    await button('详情').trigger('click')
+    await flushPromises()
+    const resubmitted = wrapper.getComponent(PolicyReviewMembers).text()
+    expect(resubmitted).toContain('重提后的采购')
+    expect(resubmitted).not.toContain(log.auditComment)
+    expect(resubmitted).not.toContain(log.auditorName)
   })
 
   it('打开另一份草稿前确认，取消后菜单返回仍保留未保存内容', async () => {
@@ -1547,6 +1602,35 @@ describe('申请人工作台组件协作', () => {
     )
   })
 
+  it('跨系列批选被拦截；已有商品时普通与指定商品都锁定品牌系列', async () => {
+    await render()
+    await selectPlatform('京东')
+    await openGoodsPicker()
+    const other = catalog.find(
+      (item) => item.brandId === white.brandId && item.seriesId !== white.seriesId,
+    )
+    await chooseGoodsFilter('商品配置', [
+      whiteConfig,
+      [other.spuId, other.ram, other.rom].join('/'),
+    ])
+    expect(document.body.textContent).toContain('每张政策只能申报一个品牌下的一个系列')
+    const picker = document.querySelector('.policy-goods-picker')
+    expect(picker.querySelector('.policy-picker-footer .el-button--primary').disabled).toBe(true)
+    await chooseGoodsFilter('商品配置', [whiteConfig])
+    picker.querySelector('.policy-picker-footer .el-button--primary').click()
+    await flushPromises()
+    await openGoodsPicker(true)
+    const selects = wrapper.findAllComponents(ElSelect)
+    for (const [label, id] of [
+      ['商品品牌', white.brandId],
+      ['商品系列', white.seriesId],
+    ]) {
+      const select = selects.find((item) => item.props('ariaLabel') === label)
+      expect(select.props('disabled')).toBe(true)
+      expect(select.props('modelValue')).toBe(id)
+    }
+  })
+
   it('配置可整组多选或全选，全部配置遵循当前机型范围', async () => {
     await render()
     await selectPlatform('京东')
@@ -1555,7 +1639,9 @@ describe('申请人工作台组件协作', () => {
     const another = catalog.find(
       (item) => item.spuId === white.spuId && (item.ram !== white.ram || item.rom !== white.rom),
     )
-    const otherModel = catalog.find((item) => item.spuId !== white.spuId)
+    const otherModel = catalog.find(
+      (item) => item.spuId !== white.spuId && item.seriesId === white.seriesId,
+    )
     const anotherConfig = [another.spuId, another.ram, another.rom].join('/')
     const otherConfig = [otherModel.spuId, otherModel.ram, otherModel.rom].join('/')
     await chooseGoodsFilter('商品配置', [whiteConfig, otherConfig])
@@ -1587,7 +1673,7 @@ describe('申请人工作台组件协作', () => {
   it('只有指定适用机型可填写数量，支持填写和留空', async () => {
     await render()
     await selectPlatform('京东')
-    await addModel()
+    await addModel(white)
     await openGoodsPicker(true)
     const drawer = document.querySelector('.policy-goods-picker')
     await chooseGoodsFilter('商品机型', white.spuId)
@@ -1682,7 +1768,10 @@ describe('申请人工作台组件协作', () => {
     await chooseGoodsFilter('商品配置', [whiteConfig])
     document.querySelector('.policy-picker-footer .el-button--primary').click()
     await flushPromises()
-    await addModel()
+    const secondModel = catalog.find(
+      (item) => item.seriesId === white.seriesId && item.spuId !== white.spuId,
+    )
+    await addModel(secondModel)
     const [first, second] = wrapper.findAll('.policy-model-card')
     await first.get('[aria-label="方案 1 补贴金额"]').setValue('50.00')
     await second.get('[aria-label="方案 1 补贴金额"]').setValue('20.00')
@@ -1737,7 +1826,7 @@ describe('申请人工作台组件协作', () => {
       },
       {
         cardType: 'COMMON',
-        goodsIds: [catalog[0].goodsId],
+        goodsIds: [secondModel.goodsId],
         amount: '20.00',
         platforms: ['JD', 'PDD'],
       },
@@ -1970,7 +2059,9 @@ describe('申请人工作台组件协作', () => {
     expect(draft.attachmentInfo).toEqual([])
   })
   it('身份变化或退出清除已填数据和暂存附件，同一用户刷新身份保持表单', async () => {
-    authSession.setLogin({ user: { id: 'owner', tenantKey: 'tenant' } })
+    authSession.setLogin({
+      user: { id: 'owner', tenantKey: 'tenant', ...roleSession('OPERATIONS') },
+    })
     await render()
     await selectPlatform('京东')
     await addModel()
@@ -1981,10 +2072,14 @@ describe('申请人工作台组件协作', () => {
     await input.trigger('change')
     await flushPromises()
     expect(wrapper.text()).toContain('本人附件.pdf')
-    authSession.setLogin({ user: { id: 'owner', tenantKey: 'tenant', name: '姓名刷新' } })
+    authSession.setLogin({
+      user: { id: 'owner', tenantKey: 'tenant', ...roleSession('OPERATIONS'), name: '姓名刷新' },
+    })
     await flushPromises()
     expect(wrapper.text()).toContain('OPPO / Reno 系列 / Reno12')
-    authSession.setLogin({ user: { id: 'another', tenantKey: 'tenant' } })
+    authSession.setLogin({
+      user: { id: 'another', tenantKey: 'tenant', ...roleSession('OPERATIONS') },
+    })
     await flushPromises()
     expect(wrapper.find('.policy-model-card').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('本人附件.pdf')

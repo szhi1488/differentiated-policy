@@ -7,6 +7,7 @@ import static com.company.policy.support.policy.PolicyFormValidation.invalid;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.mapper.PolicyPurchaseReviewMapper;
 import com.company.policy.mapper.PolicyReviewRoundMapper;
+import com.company.policy.mapper.PolicyReviewRoundMapper.ProgressRow;
 import com.company.policy.mapper.PolicyReviewRoundMapper.Round;
 import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.PolicyReviewRoundService;
@@ -34,6 +35,32 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
     private final PolicySnapshotCodec snapshots;
     private final ObjectMapper json;
     private final PolicyTimeHistory history;
+    private final PolicyReviewProgressReader progress;
+
+    @Override
+    public com.company.policy.vo.PageResponse<SignedDecision> signed(
+            CurrentUserResponse session, int page, int pageSize) {
+        var user = access.requirePermission(session, "policy.product.read_own_decisions");
+        long offset = PolicyApplyServiceImpl.offset(page, pageSize);
+        var count = rounds.signedCount(user.getTenantKey(), user.getId());
+        var items =
+                offset >= count
+                        ? List.<SignedDecision>of()
+                        : rounds
+                                .signed(user.getTenantKey(), user.getId(), pageSize, offset)
+                                .stream()
+                                .map(
+                                        m ->
+                                                new SignedDecision(
+                                                        Long.toString(m.policyId()),
+                                                        policyNumber(m.policyId()),
+                                                        m.submissionVersion(),
+                                                        m.decision(),
+                                                        m.reason(),
+                                                        formatTime(m.decidedAt())))
+                                .toList();
+        return new com.company.policy.vo.PageResponse<>(items, count);
+    }
 
     @Override
     public PolicyReviewRoundResponse detail(CurrentUserResponse session, long id, int version) {
@@ -47,24 +74,21 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
         if (row.stage() == null)
             throw new ApiException(
                     HttpStatus.CONFLICT, "POLICY_REVIEW_ROUND_MISSING", "本轮缺少审核阶段，请联系管理员核对。");
-        boolean pending = "SUBMITTED".equals(row.auditStatus());
-        String stage = pending ? row.stage() : null;
-        boolean current = pending && version == row.currentVersion();
-        var members = rounds.members(tenant, id, version);
-        String rejected = null;
-        if ("REJECTED".equals(row.auditStatus())) {
-            rejected =
-                    members.stream()
-                            .filter(m -> "REJECT".equals(m.decision()))
-                            .map(
-                                    m ->
-                                            "PRODUCT".equals(m.groupCode())
-                                                    ? "PRODUCT_REVIEW"
-                                                    : "PURCHASE_REVIEW")
-                            .findFirst()
-                            .orElse(null);
-        }
-        var route = readRoute(row, id);
+        var frozenRoute = readRoute(row);
+        var route = frozenRoute == null ? null : frozenRoute.forDisplay(Long.toString(id));
+        var flow =
+                progress.read(
+                        tenant,
+                        id,
+                        version,
+                        new ProgressRow(
+                                row.stage(),
+                                row.auditStatus(),
+                                snapshot.applicantName(),
+                                row.submittedAt(),
+                                frozenRoute != null && frozenRoute.requiresProductReview()));
+        String stage = flow.reviewStage();
+        boolean current = stage != null && version == row.currentVersion();
         var summary =
                 route == null
                         ? null
@@ -98,17 +122,24 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
                 Long.toString(id),
                 policyNumber(id),
                 version,
-                row.currentVersion(),
-                row.recordVersion(),
-                pending ? "PENDING" : row.auditStatus(),
+                version == row.currentVersion()
+                        ? version
+                        : rounds.latestVisibleVersion(tenant, user.getId(), id),
+                current || access.hasPermission(user, "policy.read.company_submitted")
+                        ? row.recordVersion()
+                        : null,
+                flow.status(),
                 stage,
-                rejected,
+                flow.rejectedAtStage(),
+                flow.applicantName(),
+                flow.submittedAt(),
+                flow.requiresProductReview(),
                 row.settingsVersion(),
                 current && canDecide(tenant, user.getId(), id, version, stage)
                         ? List.of("APPROVE", "REJECT")
                         : List.of(),
-                members(members, "PRODUCT"),
-                members(members, "PURCHASE"),
+                flow.productReviewers(),
+                flow.purchaseReviewers(),
                 snapshot,
                 summary,
                 changes,
@@ -125,30 +156,11 @@ class PolicyReviewRoundServiceImpl implements PolicyReviewRoundService {
                 && !purchases.permissions(tenant, userId, List.of(id)).isEmpty();
     }
 
-    private PolicyRouteSummary readRoute(Round row, long id) {
+    private PolicyRouteSummary readRoute(Round row) {
         try {
-            var route = json.readValue(row.routeJson(), PolicyRouteSummary.class);
-            return route == null ? null : route.forDisplay(Long.toString(id));
+            return json.readValue(row.routeJson(), PolicyRouteSummary.class);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("无法还原本轮冻结的分流依据。", e);
         }
-    }
-
-    private static List<Member> members(List<PolicyReviewRoundMapper.Member> all, String group) {
-        return all.stream()
-                .filter(m -> group.equals(m.groupCode()))
-                .map(
-                        m ->
-                                new Member(
-                                        Long.toString(m.id()),
-                                        Long.toString(m.userId()),
-                                        m.displayName(),
-                                        m.department(),
-                                        m.assignmentNo(),
-                                        m.memberStatus(),
-                                        m.decision(),
-                                        m.reason(),
-                                        formatTime(m.decidedAt())))
-                .toList();
     }
 }

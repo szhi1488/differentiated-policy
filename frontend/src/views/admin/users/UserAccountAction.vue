@@ -1,17 +1,18 @@
 <script setup>
 import { computed, onScopeDispose, ref, watch } from 'vue'
-import { readUser, updateUserRole, updateUserStatus } from '../../../api/admin-users'
+import { readUser, updateUserRoles, updateUserStatus } from '../../../api/admin-users'
 import { useLatestQuery } from '../../../composables/useLatestQuery'
-import { USER_ROLE_LABELS, USER_ROLE_OPTIONS, USER_STATUS_LABELS } from '../../../constants/users'
+import { roleLabels, USER_STATUS_LABELS } from '../../../constants/users'
 
 const props = defineProps({
+  roles: { type: Array, required: true },
   id: { type: String, required: true },
   kind: { type: String, required: true },
   targetStatus: { type: String, required: true },
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
 const { data: user, loading, error, run } = useLatestQuery()
-const roleSelection = ref('')
+const roleSelection = ref(null)
 const writing = ref(false)
 const writeError = ref('')
 const controller = new AbortController()
@@ -25,17 +26,20 @@ const canConfirm = computed(
     user.value &&
     !writing.value &&
     (roleAction.value
-      ? roleSelection.value && roleSelection.value !== user.value.roleType
+      ? roleSelection.value && !sameRoles(roleSelection.value, user.value.roleCodes)
       : props.targetStatus !== user.value.status),
 )
 
+function sameRoles(a, b) {
+  return JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...(b ?? [])].sort())
+}
 function load() {
   return run((signal) => readUser(props.id, signal))
 }
 // 复核旧值时保留管理员最初选择的目标，避免把停用意图反转为启用。
 watch(user, (latest) => {
   if (latest && !roleSelection.value) {
-    roleSelection.value = latest.roleType
+    roleSelection.value = [...latest.roleCodes]
   }
 })
 void load()
@@ -48,7 +52,7 @@ async function confirm() {
   writeError.value = ''
   try {
     const updated = roleAction.value
-      ? await updateUserRole(user.value, roleSelection.value, controller.signal)
+      ? await updateUserRoles(user.value, roleSelection.value, controller.signal)
       : await updateUserStatus(user.value, props.targetStatus, controller.signal)
     if (controller.signal.aborted) {
       return
@@ -56,7 +60,7 @@ async function confirm() {
     if (
       updated?.id !== props.id ||
       (roleAction.value
-        ? updated.roleType !== roleSelection.value
+        ? !sameRoles(updated.roleCodes, roleSelection.value)
         : updated.status !== props.targetStatus)
     ) {
       throw new Error('服务端未返回预期的账号状态。')
@@ -115,33 +119,27 @@ async function confirm() {
         <div>
           <strong>{{ user.name }}</strong>
           <span>
-            {{ user.department || '部门未填写' }} · {{ USER_ROLE_LABELS[user.roleType] }} ·
+            {{ user.department || '部门未填写' }} · {{ roleLabels(user.roleCodes, roles) }} ·
             {{ USER_STATUS_LABELS[user.status] }}
           </span>
         </div>
       </div>
       <template v-if="roleAction">
-        <el-radio-group
+        <el-select
           v-model="roleSelection"
-          :disabled="writing"
-          class="admin-user-role-options"
+          multiple
           aria-label="选择系统角色"
+          :disabled="writing"
+          placeholder="选择该账号担任的岗位"
         >
-          <el-radio
-            v-for="option in USER_ROLE_OPTIONS"
-            :key="option.value"
-            :value="option.value"
-            border
-          >
-            <span>
-              <strong>{{ option.label }}</strong>
-              <small>{{ option.description }}</small>
-            </span>
-          </el-radio>
-        </el-radio-group>
-        <p class="admin-user-action-hint">
-          申请人升为管理员时，会释放其负责的平台。已有申请和审核历史继续保留。
-        </p>
+          <el-option
+            v-for="role in roles"
+            :key="role.id"
+            :value="role.roleCode"
+            :label="role.roleName"
+            :disabled="!role.enabled"
+          />
+        </el-select>
       </template>
       <el-alert
         v-else

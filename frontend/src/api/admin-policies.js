@@ -42,10 +42,19 @@ export async function readAdminPolicy(id, signal, linkedVersion) {
 }
 
 export function verifyCurrentRound(detail, round) {
+  // 已结办的采购快照按所选轮次核对。兼岗用户可能通过初审记录看到更新的轮次。
+  const closedPurchase =
+    ['APPROVED', 'REJECTED'].includes(detail.policy.status) &&
+    detail.policy.status === round.status &&
+    round.currentSubmissionVersion > detail.policy.submissionVersion &&
+    detail.policy.recordVersion === null &&
+    round.recordVersion === null &&
+    !detail.policy.reviewable &&
+    !round.allowedActions?.length
   if (
     detail.policy.id !== round.id ||
     detail.audit.submissionVersion !== round.submissionVersion ||
-    round.currentSubmissionVersion !== detail.policy.submissionVersion ||
+    (round.currentSubmissionVersion !== detail.policy.submissionVersion && !closedPurchase) ||
     round.recordVersion !== detail.policy.recordVersion
   ) {
     throw new RequestError(

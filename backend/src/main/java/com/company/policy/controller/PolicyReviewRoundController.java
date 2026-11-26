@@ -20,6 +20,14 @@ public class PolicyReviewRoundController {
     private final LoginSessionService sessions;
     private final PolicyReviewRoundService reviews;
 
+    @GetMapping("/my-product-decisions")
+    public com.company.policy.vo.PageResponse<PolicyReviewRoundService.SignedDecision> signed(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize,
+            HttpServletRequest request) {
+        return reviews.signed(sessions.requireLogin(request).user(), page, pageSize);
+    }
+
     @GetMapping("/{id:[0-9]+}")
     @Operation(
             summary = "读取指定提交轮次",

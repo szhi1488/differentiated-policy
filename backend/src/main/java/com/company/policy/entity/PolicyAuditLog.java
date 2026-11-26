@@ -9,7 +9,6 @@ public class PolicyAuditLog {
     private Long policyId;
     private int version;
     private String auditStatus;
-    private int workflowVersion;
     private String rejectedAtStage;
     private String auditorName;
     private String auditComment;

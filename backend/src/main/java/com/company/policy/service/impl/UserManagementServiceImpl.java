@@ -1,386 +1,375 @@
 package com.company.policy.service.impl;
 
 import com.company.policy.common.exception.ApiException;
-import com.company.policy.dto.ChannelPlatform;
-import com.company.policy.dto.UserListQuery;
-import com.company.policy.dto.UserPlatformsUpdate;
-import com.company.policy.dto.UserRoleUpdate;
-import com.company.policy.dto.UserStatusUpdate;
+import com.company.policy.dto.*;
 import com.company.policy.entity.UserInfo;
-import com.company.policy.mapper.UserManagementMapper;
+import com.company.policy.mapper.*;
 import com.company.policy.mapper.UserManagementMapper.DetailRow;
-import com.company.policy.mapper.UserPlatformMapper;
-import com.company.policy.service.CatalogAccess;
-import com.company.policy.service.ExecutionNotices;
-import com.company.policy.service.UserManagementService;
-import com.company.policy.vo.CurrentUserResponse;
-import com.company.policy.vo.PageResponse;
-import com.company.policy.vo.PolicyReviewerCandidate;
-import com.company.policy.vo.UserDetailResponse;
-import com.company.policy.vo.UserPlatformOwner;
-import com.company.policy.vo.UserStatsResponse;
-import com.company.policy.vo.UserSummaryResponse;
-import java.time.Clock;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
+import com.company.policy.service.*;
+import com.company.policy.support.PlatformAccess;
+import com.company.policy.vo.*;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import org.springframework.dao.DuplicateKeyException;
+import java.util.*;
+import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.*;
 
 @Service
+@RequiredArgsConstructor
 @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 public class UserManagementServiceImpl implements UserManagementService {
-    private static final Set<String> ROLES = Set.of("APPLICANT", "ADMIN");
-    private static final Set<String> STATUSES = Set.of("ENABLED", "DISABLED");
-    private static final DateTimeFormatter TIME =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private final CatalogAccess access;
     private final UserManagementMapper users;
+    private final RoleAccessMapper roles;
     private final UserPlatformMapper platforms;
+    private final PlatformAccess platformAccess;
+    private final ExecutionNotices notices;
     private final Clock clock;
-    private final ExecutionNotices executionNotices;
+    private static final DateTimeFormatter TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    public UserManagementServiceImpl(
-            CatalogAccess access,
-            UserManagementMapper users,
-            UserPlatformMapper platforms,
-            Clock clock,
-            ExecutionNotices executionNotices) {
-        this.executionNotices = executionNotices;
-        this.access = access;
-        this.users = users;
-        this.clock = clock;
-        this.platforms = platforms;
+    public PageResponse<UserSummaryResponse> list(CurrentUserResponse session, UserListQuery q) {
+        String tenant = access.requireUserAdmin(session).getTenantKey();
+        long start = offset(q.page(), q.pageSize());
+        String role = optional(q.roleCode()), status = optional(q.status());
+        if (role != null && roles.roleId(tenant, role) == null
+                || status != null && !Set.of("ENABLED", "DISABLED").contains(status))
+            throw invalid("USER_LIST_INVALID_REQUEST", "请核对角色及状态筛选条件。");
+        var filters = new UserListQuery(q.page(), q.pageSize(), pattern(q.keyword()), role, status);
+        long total = users.count(tenant, filters);
+        if (start >= total) return new PageResponse<>(List.of(), total);
+        var rows = users.list(tenant, filters, start);
+        var pageRoles =
+                roles.rolesForUsers(tenant, rows.stream().map(DetailRow::id).toList()).stream()
+                        .collect(
+                                Collectors.groupingBy(
+                                        RoleAccessMapper.UserRole::userId,
+                                        Collectors.mapping(
+                                                RoleAccessMapper.UserRole::roleCode,
+                                                Collectors.toList())));
+        var result =
+                rows.stream()
+                        .map(
+                                user ->
+                                        new UserSummaryResponse(
+                                                user.id().toString(),
+                                                user.name(),
+                                                user.avatarUrl(),
+                                                user.department(),
+                                                pageRoles.getOrDefault(user.id(), List.of()),
+                                                user.authVersion(),
+                                                status(user),
+                                                user.createdAt().format(TIME)))
+                        .toList();
+        return new PageResponse<>(result, total);
     }
 
-    @Override
-    public PageResponse<UserSummaryResponse> list(
-            CurrentUserResponse session, UserListQuery query) {
-        var admin = access.requireUserAdmin(session);
-        long offset = offset(query.page(), query.pageSize());
-        String keyword = searchPattern(query.keyword());
-        String role = filter(query.roleType(), ROLES, "系统角色");
-        String status = filter(query.status(), STATUSES, "账号状态");
-        var filters = new UserListQuery(query.page(), query.pageSize(), keyword, role, status);
-        long total = users.count(admin.getTenantKey(), filters);
-        var items =
-                offset >= total
-                        ? List.<UserSummaryResponse>of()
-                        : users.list(admin.getTenantKey(), filters, offset).stream()
-                                .map(
-                                        user ->
-                                                new UserSummaryResponse(
-                                                        user.id().toString(),
-                                                        user.name(),
-                                                        user.avatarUrl(),
-                                                        user.department(),
-                                                        user.roleType(),
-                                                        statusOf(user.isDeleted()),
-                                                        user.createdAt().format(TIME)))
-                                .toList();
-        return new PageResponse<>(items, total);
-    }
-
-    @Override
     public PageResponse<PolicyReviewerCandidate> reviewCandidates(
             CurrentUserResponse session,
-            String reviewGroup,
+            String group,
             String name,
             String department,
             int page,
-            int pageSize) {
-        var admin = access.requireUserAdmin(session);
-        String role;
-        if ("PURCHASE".equals(reviewGroup)) role = "ADMIN";
-        else if ("PRODUCT".equals(reviewGroup)) role = null;
-        else throw invalid("审核岗位须为 PRODUCT（产品运营）或 PURCHASE（采购）。");
-        long offset = offset(page, pageSize);
-        // 岗位资格由服务端固定，与普通用户列表可查看停用账号的规则分别处理。
-        var filters =
+            int size) {
+        String tenant = access.requirePermission(session, "review.manage").getTenantKey();
+        if (!"PRODUCT".equals(group) && !"PURCHASE".equals(group))
+            throw invalid("USER_LIST_INVALID_REQUEST", "审核岗位无效。");
+        long start = offset(page, size);
+        var query =
                 new UserListQuery(
                         page,
-                        pageSize,
+                        size,
                         null,
-                        role,
+                        null,
                         "ENABLED",
-                        searchPattern(name),
-                        searchPattern(department));
-        long total = users.count(admin.getTenantKey(), filters);
+                        pattern(name),
+                        pattern(department),
+                        null);
+        long total = users.countReviewCandidates(tenant, query, group);
         return new PageResponse<>(
-                offset >= total
-                        ? List.of()
-                        : users.reviewCandidates(admin.getTenantKey(), filters, offset),
+                start >= total ? List.of() : users.reviewCandidates(tenant, query, group, start),
                 total);
     }
 
-    private static long offset(int page, int pageSize) {
-        if (page < 1 || pageSize < 1 || pageSize > 100)
-            throw invalid("页码须从 1 开始，每页条数须在 1 至 100 之间。");
-        return (page - 1L) * pageSize;
+    public PageResponse<PlatformTeam.Candidate> platformCandidates(
+            CurrentUserResponse session, String keyword, int page, int size) {
+        String tenant = access.requirePermission(session, "platforms.manage").getTenantKey();
+        var query =
+                new UserListQuery(
+                        page,
+                        size,
+                        pattern(keyword),
+                        null,
+                        "ENABLED",
+                        null,
+                        null,
+                        "PLATFORM_MEMBER");
+        long start = offset(page, size);
+        long total = users.count(tenant, query);
+        return new PageResponse<>(
+                start >= total ? List.of() : users.platformCandidates(tenant, query, start), total);
     }
 
-    @Override
     public UserStatsResponse stats(CurrentUserResponse session) {
-        var admin = access.requireUserAdmin(session);
-        var counts = users.stats(admin.getTenantKey());
+        var s = users.stats(access.requireUserAdmin(session).getTenantKey());
         return new UserStatsResponse(
-                counts.total(),
-                counts.enabledApplicants(),
-                counts.enabledAdmins(),
-                counts.disabledUsers());
+                s.total(), s.enabledUsers(), s.enabledAdmins(), s.disabledUsers());
     }
 
-    @Override
     public UserDetailResponse detail(CurrentUserResponse session, long id) {
-        var admin = access.requireUserAdmin(session);
-        if (id < 1) {
-            throw new ApiException(
-                    HttpStatus.BAD_REQUEST, "USER_DETAIL_INVALID_REQUEST", "用户标识须为正整数。");
-        }
-        var user = users.detail(admin.getTenantKey(), id);
-        if (user == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "用户不存在或不在当前可见范围内。");
-        }
-        return detailResponse(user);
+        String tenant = access.requireUserAdmin(session).getTenantKey();
+        if (id < 1) throw invalid("USER_DETAIL_INVALID_REQUEST", "用户标识须为正整数。");
+        return response(tenant, users.detail(tenant, id));
     }
 
-    @Override
+    private UserDetailResponse response(String tenant, DetailRow u) {
+        if (u == null)
+            throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "用户不存在或不在当前可见范围内。");
+        return new UserDetailResponse(
+                u.id().toString(),
+                u.name(),
+                u.avatarUrl(),
+                u.department(),
+                u.openId(),
+                roles.userRoles(tenant, u.id(), true),
+                u.authVersion(),
+                status(u),
+                u.createdAt().format(TIME));
+    }
+
+    private UserInfo managementActor(CurrentUserResponse session, String permission) {
+        var actor = access.requirePermission(session, permission);
+        // 同企业授权写入共用管理员角色行。取得锁后重新核验，避免沿用等待前的权限。
+        roles.lockAdministration(actor.getTenantKey());
+        return access.requirePermission(session, permission);
+    }
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public UserDetailResponse updateRole(
-            CurrentUserResponse session, long id, UserRoleUpdate request) {
-        var admin = access.requireUserAdmin(session);
-        if (id < 1
-                || request == null
-                || request.roleType() == null
-                || !ROLES.contains(request.roleType())
-                || !validExpectedValues(request.expectedRoleType(), request.expectedStatus())) {
-            throw new ApiException(
-                    HttpStatus.BAD_REQUEST, "USER_ROLE_INVALID_REQUEST", "请核对用户标识、目标角色及读取时的角色和状态。");
+            CurrentUserResponse session, long id, UserRoleUpdate input) {
+        if (id <= 0
+                || input == null
+                || input.expectedVersion() == null
+                || input.roleCodes() == null
+                || input.roleCodes().stream()
+                        .anyMatch(
+                                code ->
+                                        code == null
+                                                || !code.matches(
+                                                        RoleDefinitionUpdate.CODE_PATTERN)))
+            throw invalid("USER_ROLE_INVALID_REQUEST", "请提供目标用户、岗位列表和账号版本。");
+        var actor = managementActor(session, "users.manage");
+        var tenant = actor.getTenantKey();
+        var u = lock(tenant, actor.getId(), id, input.expectedVersion(), "USER_ROLE_CONFLICT");
+
+        var desired = new TreeSet<>(input.roleCodes());
+        var previous = new TreeSet<>(roles.userRoles(tenant, id, true));
+        if (previous.equals(desired)) return response(tenant, u);
+        if (previous.contains("ADMIN") && !desired.contains("ADMIN") && u.isDeleted() == 0)
+            preserveAdmin(tenant);
+        if (id == actor.getId()) throw conflict("USER_ROLE_SELF_FORBIDDEN", "不能调整本人角色。");
+        Set<String> changed = new HashSet<>(desired);
+        changed.addAll(previous);
+        boolean administrator = roles.userRoles(tenant, actor.getId(), false).contains("ADMIN");
+        var grantable =
+                administrator ? List.<String>of() : roles.userPermissions(tenant, actor.getId());
+        for (String code : changed) {
+            if (desired.contains(code) == previous.contains(code)) continue;
+            var rid = roles.roleId(tenant, code);
+            if (rid == null || desired.contains(code) && !roles.lock(tenant, rid).isEnabled())
+                throw invalid("USER_ROLE_INVALID_REQUEST", "选择的岗位不存在或已停用。");
+            if (!administrator
+                    && ("ADMIN".equals(code)
+                            || !grantable.containsAll(roles.permissions(tenant, rid))))
+                throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_FORBIDDEN", "无权授予或撤销该岗位。");
         }
-        var target = lockTarget(admin, session, id);
-        if (admin.getId() == id) {
-            if ("APPLICANT".equals(request.roleType())) {
-                requireAnotherAdmin(admin.getTenantKey());
-            }
-            throw conflict("USER_ROLE_SELF_FORBIDDEN", "不能调整自己的角色，请由其他管理员操作。");
-        }
-        requireExpectedValues(
-                target, request.expectedRoleType(), request.expectedStatus(), "USER_ROLE_CONFLICT");
-        if (target.roleType().equals(request.roleType())) {
-            return detailResponse(target);
-        }
-        if (users.updateRole(
-                        admin.getTenantKey(),
-                        id,
-                        request.roleType(),
-                        target.roleType(),
-                        target.isDeleted(),
-                        now())
-                != 1) {
-            throw stale("USER_ROLE_CONFLICT");
-        }
-        if ("ADMIN".equals(request.roleType())) {
-            releaseAll(admin.getTenantKey(), id);
-        }
-        return detailResponse(users.detail(admin.getTenantKey(), id));
+        roles.removeRoles(tenant, id);
+        for (String code : desired) roles.grantRole(tenant, id, roles.roleId(tenant, code));
+        advance(tenant, u, u.isDeleted(), "USER_ROLE_CONFLICT");
+        platformAccess.reconcile(tenant, id, actor.getId());
+        return response(tenant, users.detail(tenant, id));
     }
 
-    @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public UserDetailResponse updateStatus(
-            CurrentUserResponse session, long id, UserStatusUpdate request) {
-        var admin = access.requireUserAdmin(session);
-        if (id < 1
-                || request == null
-                || request.status() == null
-                || !STATUSES.contains(request.status())
-                || !validExpectedValues(request.expectedRoleType(), request.expectedStatus())) {
-            throw new ApiException(
-                    HttpStatus.BAD_REQUEST,
-                    "USER_STATUS_INVALID_REQUEST",
-                    "请核对用户标识、目标状态及读取时的角色和状态。");
+            CurrentUserResponse session, long id, UserStatusUpdate input) {
+        if (id <= 0
+                || input == null
+                || input.status() == null
+                || !Set.of("ENABLED", "DISABLED").contains(input.status())
+                || input.expectedVersion() == null)
+            throw invalid("USER_STATUS_INVALID_REQUEST", "请提供用户、状态和账号版本。");
+        var actor = managementActor(session, "users.manage");
+        String tenant = actor.getTenantKey();
+        var u = lock(tenant, actor.getId(), id, input.expectedVersion(), "USER_STATUS_CONFLICT");
+        int deleted = "DISABLED".equals(input.status()) ? 1 : 0;
+
+        if (u.isDeleted() == deleted) return response(tenant, u);
+        if (roles.userRoles(tenant, id, false).contains("ADMIN")) {
+            if (!roles.userRoles(tenant, actor.getId(), false).contains("ADMIN"))
+                throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_FORBIDDEN", "仅系统管理员可以启停管理员账号。");
+            if (deleted == 1) preserveAdmin(tenant);
         }
-        var target = lockTarget(admin, session, id);
-        int deleted = "DISABLED".equals(request.status()) ? 1 : 0;
-        if (admin.getId() == id && deleted == 1) {
-            requireAnotherAdmin(admin.getTenantKey());
-            throw conflict("USER_STATUS_SELF_FORBIDDEN", "不能停用自己的账号，请由其他管理员操作。");
-        }
-        requireExpectedValues(
-                target,
-                request.expectedRoleType(),
-                request.expectedStatus(),
-                "USER_STATUS_CONFLICT");
-        if (target.isDeleted() == deleted) {
-            return detailResponse(target);
-        }
-        if (users.updateStatus(
-                        admin.getTenantKey(),
-                        id,
-                        deleted,
-                        target.roleType(),
-                        target.isDeleted(),
-                        now())
-                != 1) {
-            throw stale("USER_STATUS_CONFLICT");
-        }
-        if (deleted == 1) {
-            releaseAll(admin.getTenantKey(), id);
-        }
-        return detailResponse(users.detail(admin.getTenantKey(), id));
+        if (id == actor.getId() && deleted == 1)
+            throw conflict("USER_STATUS_SELF_FORBIDDEN", "不能停用本人。");
+        advance(tenant, u, deleted, "USER_STATUS_CONFLICT");
+        if (deleted == 1) platformAccess.reconcile(tenant, id, actor.getId());
+        return response(tenant, users.detail(tenant, id));
     }
 
-    @Override
-    public List<UserPlatformOwner> platformOwners(CurrentUserResponse session) {
-        return platforms.owners(access.requireUserAdmin(session).getTenantKey());
-    }
-
-    @Override
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    public void updatePlatforms(CurrentUserResponse session, long id, UserPlatformsUpdate request) {
-        var admin = access.requireUserAdmin(session);
-        if (id < 1
-                || request == null
-                || !validScopes(request.platforms())
-                || !validScopes(request.expectedPlatforms())) {
-            throw new ApiException(
-                    HttpStatus.BAD_REQUEST, "USER_PLATFORMS_INVALID", "请选择有效的渠道和平台，同一渠道内的平台不能重复。");
-        }
-        var target = lockTarget(admin, session, id);
-        String tenant = admin.getTenantKey();
-        if (target.isDeleted() != 0 || !"APPLICANT".equals(target.roleType())) {
-            throw conflict("USER_PLATFORMS_CONFLICT", "仅可为启用的申请人分配平台，请刷新用户列表。");
-        }
-        var current = new HashSet<>(platforms.assigned(tenant, id));
-        if (!current.equals(new HashSet<>(request.expectedPlatforms()))) {
-            throw conflict("USER_PLATFORMS_CONFLICT", "此人的负责平台已变化，请重新读取后确认。");
-        }
-        if (current.equals(new HashSet<>(request.platforms()))) {
-            return;
-        }
-        platforms.release(tenant, id);
-        try {
-            for (var scope : request.platforms()) {
-                platforms.assign(tenant, id, scope);
-            }
-            for (var scope : current)
-                if (!request.platforms().contains(scope))
-                    executionNotices.platformChanged(tenant, scope, id, false);
-            for (var scope : request.platforms())
-                if (!current.contains(scope))
-                    executionNotices.platformChanged(tenant, scope, id, true);
-        } catch (DuplicateKeyException error) {
-            throw conflict("USER_PLATFORMS_CONFLICT", "所选渠道的平台已有负责人，请重新读取后确认。");
-        }
-    }
-
-    private void releaseAll(String tenant, long id) {
-        var released = platforms.assigned(tenant, id);
-        platforms.release(tenant, id);
-        released.forEach(s -> executionNotices.platformChanged(tenant, s, id, false));
-    }
-
-    private static boolean validScopes(List<ChannelPlatform> scopes) {
-        return scopes != null
-                && scopes.stream().allMatch(s -> s != null && s.valid())
-                && new HashSet<>(scopes).size() == scopes.size();
-    }
-
-    private DetailRow lockTarget(UserInfo admin, CurrentUserResponse session, long id) {
-        long actorId = admin.getId();
-        long firstId = Math.min(actorId, id);
-        long secondId = Math.max(actorId, id);
-        var first = users.lockUser(admin.getTenantKey(), firstId);
-        var second = firstId == secondId ? first : users.lockUser(admin.getTenantKey(), secondId);
-        var actor = actorId == firstId ? first : second;
-        var target = id == firstId ? first : second;
-        // 角色和启停共用锁顺序。等待期间操作人可能已被降级或停用，须按锁内身份授权。
-        if (actor == null
-                || !actor.openId().equals(session.openId())
-                || !"ADMIN".equals(actor.roleType())
-                || actor.isDeleted() != 0) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "USER_ADMIN_REQUIRED", "只有有效管理员可以管理用户。");
-        }
-        if (target == null) {
+    private DetailRow lock(String tenant, long actorId, long id, int version, String code) {
+        // 平台交接写入 updated_by 外键，操作账号和目标账号都按 ID 升序持锁。
+        if (actorId < id) users.lockUser(tenant, actorId);
+        var u = users.lockUser(tenant, id);
+        if (actorId > id) users.lockUser(tenant, actorId);
+        if (u == null)
             throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "用户不存在或不在当前可见范围内。");
+        if (version != u.authVersion()) throw conflict(code, "账号已更新，请重新核对。");
+        return u;
+    }
+
+    private void advance(String tenant, DetailRow u, int deleted, String code) {
+        if (users.change(
+                        tenant,
+                        u.id(),
+                        deleted,
+                        u.authVersion(),
+                        LocalDateTime.ofInstant(clock.instant(), ZoneId.of("Asia/Shanghai"))
+                                .withNano(0))
+                != 1) throw conflict(code, "账号已更新，请重新核对。");
+    }
+
+    private void preserveAdmin(String tenant) {
+        if (users.stats(tenant).enabledAdmins() <= 1)
+            throw conflict("USER_LAST_ADMIN_REQUIRED", "须保留至少一名启用的系统管理员。");
+    }
+
+    public List<PlatformTeam> platformOwners(CurrentUserResponse session) {
+        String tenant = access.requirePermission(session, "platforms.manage").getTenantKey();
+        var owners =
+                platforms.owners(tenant).stream()
+                        .collect(
+                                Collectors.groupingBy(
+                                        m ->
+                                                new ChannelPlatform(
+                                                        m.perspective(), m.platformCode())));
+        var teams = new ArrayList<PlatformTeam>();
+        for (var team : platforms.teams(tenant)) {
+            var scope = new ChannelPlatform(team.perspective(), team.platformCode());
+            var members =
+                    owners.getOrDefault(scope, List.of()).stream()
+                            .map(
+                                    m ->
+                                            new PlatformTeam.Member(
+                                                    m.userId(),
+                                                    m.name(),
+                                                    m.memberKind(),
+                                                    m.canSubmit()))
+                            .toList();
+            teams.add(
+                    new PlatformTeam(
+                            scope.perspective(), scope.platformCode(), team.version(), members));
         }
-        return target;
+        return teams;
     }
 
-    // 操作他人时，已锁定的操作人本身就是另一位有效管理员。
-    private void requireAnotherAdmin(String tenantKey) {
-        if (users.stats(tenantKey).enabledAdmins() <= 1) {
-            throw conflict("USER_LAST_ADMIN_REQUIRED", "须保留至少一位有效管理员。");
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void updatePlatforms(
+            CurrentUserResponse session, ChannelPlatform scope, UserPlatformsUpdate input) {
+        if (!scope.valid()
+                || input == null
+                || input.expectedVersion() == null
+                || input.members() == null)
+            throw invalid("USER_PLATFORMS_INVALID", "请核对平台、分工成员及版本。");
+        var desired = new TreeMap<Long, String>();
+        for (var m : input.members()) {
+            if (m == null
+                    || m.memberKind() == null
+                    || !Set.of("MEMBER", "SUBMITTER").contains(m.memberKind())
+                    || m.userId() == null
+                    || !m.userId().matches("[1-9][0-9]{0,18}"))
+                throw invalid("USER_PLATFORMS_INVALID", "请核对成员和职责。");
+            try {
+                if (desired.putIfAbsent(Long.parseLong(m.userId()), m.memberKind()) != null)
+                    throw invalid("USER_PLATFORMS_INVALID", "同一成员不能重复。");
+            } catch (NumberFormatException e) {
+                throw invalid("USER_PLATFORMS_INVALID", "成员编号无效。");
+            }
         }
-    }
-
-    private static boolean validExpectedValues(String role, String status) {
-        return role != null && ROLES.contains(role) && status != null && STATUSES.contains(status);
-    }
-
-    private static void requireExpectedValues(
-            DetailRow target, String role, String status, String code) {
-        if (!target.roleType().equals(role) || !statusOf(target.isDeleted()).equals(status)) {
-            throw stale(code);
+        if (!desired.isEmpty() && Collections.frequency(desired.values(), "SUBMITTER") != 1)
+            throw invalid("USER_PLATFORMS_INVALID", "每个平台需要指定一位提交人。");
+        var actor = managementActor(session, "platforms.manage");
+        String tenant = actor.getTenantKey();
+        var previous =
+                platforms.teamMembers(tenant, scope).stream()
+                        .collect(
+                                Collectors.toMap(
+                                        UserPlatformMapper.MemberRow::userId,
+                                        UserPlatformMapper.MemberRow::memberKind));
+        var accounts = new TreeSet<>(previous.keySet());
+        accounts.addAll(desired.keySet());
+        accounts.add(actor.getId());
+        for (long id : accounts) {
+            var account = users.lockUser(tenant, id);
+            if (!desired.containsKey(id)) continue;
+            boolean submit = roles.hasPermission(tenant, id, "policy.apply") > 0;
+            if (account == null
+                    || account.isDeleted() != 0
+                    || (!submit
+                            && ("SUBMITTER".equals(desired.get(id))
+                                    || !platformAccess.canRead(tenant, id))))
+                throw invalid("USER_PLATFORMS_INVALID", "成员的账号或岗位不符合该项分工。");
         }
+        Integer version = platforms.lockTeam(tenant, scope);
+        if (version == null || !version.equals(input.expectedVersion()))
+            throw conflict("USER_PLATFORMS_CONFLICT", "平台分工已更新，请重新核对。");
+        if (previous.equals(desired)) return;
+        platforms.clearTeam(tenant, scope);
+        desired.forEach((id, kind) -> platforms.assign(tenant, id, scope, kind));
+        platforms.advance(tenant, scope, actor.getId());
+        Long outgoing = submitter(previous), incoming = submitter(desired);
+        if (!Objects.equals(outgoing, incoming))
+            notices.platformChanged(tenant, scope, outgoing, incoming);
     }
 
-    private static ApiException stale(String code) {
-        return conflict(code, "用户角色或状态已变化，请重新读取详情后确认。");
+    private static Long submitter(Map<Long, String> members) {
+        return members.entrySet().stream()
+                .filter(e -> "SUBMITTER".equals(e.getValue()))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(null);
     }
 
-    private static ApiException conflict(String code, String message) {
-        return new ApiException(HttpStatus.CONFLICT, code, message);
+    private static long offset(int p, int size) {
+        if (p < 1 || size < 1 || size > 100)
+            throw invalid("USER_LIST_INVALID_REQUEST", "页码须为正数，每页 1 至 100 条。");
+        return (p - 1L) * size;
     }
 
-    private LocalDateTime now() {
-        return LocalDateTime.ofInstant(clock.instant(), ZoneId.of("Asia/Shanghai")).withNano(0);
+    private static String optional(String s) {
+        return s == null || s.isBlank() ? null : s.strip();
     }
 
-    private static String statusOf(int deleted) {
-        return deleted == 0 ? "ENABLED" : "DISABLED";
+    private static String pattern(String s) {
+        s = optional(s);
+        if (s == null) return null;
+        if (s.codePointCount(0, s.length()) > 128)
+            throw invalid("USER_LIST_INVALID_REQUEST", "关键词最多 128 个字符。");
+        return "%" + s.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
 
-    private static UserDetailResponse detailResponse(DetailRow user) {
-        return new UserDetailResponse(
-                user.id().toString(),
-                user.name(),
-                user.avatarUrl(),
-                user.department(),
-                user.openId(),
-                user.roleType(),
-                statusOf(user.isDeleted()),
-                user.createdAt().format(TIME));
+    private static String status(DetailRow u) {
+        return u.isDeleted() == 0 ? "ENABLED" : "DISABLED";
     }
 
-    private static String optional(String value) {
-        return value == null || value.isBlank() ? null : value.strip();
+    private static ApiException invalid(String code, String msg) {
+        return new ApiException(HttpStatus.BAD_REQUEST, code, msg);
     }
 
-    private static String filter(String value, Set<String> allowed, String label) {
-        String normalized = optional(value);
-        if (normalized != null && !allowed.contains(normalized)) {
-            throw invalid(label + "无效。");
-        }
-        return normalized;
-    }
-
-    private static String searchPattern(String value) {
-        String keyword = optional(value);
-        if (keyword != null && keyword.codePointCount(0, keyword.length()) > 128)
-            throw invalid("关键词最多 128 个字符。");
-        return keyword == null
-                ? null
-                : "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
-    }
-
-    private static ApiException invalid(String message) {
-        return new ApiException(HttpStatus.BAD_REQUEST, "USER_LIST_INVALID_REQUEST", message);
+    private static ApiException conflict(String code, String msg) {
+        return new ApiException(HttpStatus.CONFLICT, code, msg);
     }
 }

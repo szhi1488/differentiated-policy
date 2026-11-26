@@ -48,7 +48,13 @@ class AuthControllerTest {
         when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", null))
                 .thenReturn(
                         new CurrentUserResponse(
-                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT", null));
+                                "1",
+                                "ou_verified",
+                                "tenant-test",
+                                "测试用户",
+                                java.util.List.of("OPERATIONS"),
+                                java.util.List.of(),
+                                null));
         when(transport.post(eq("/oauth/v3/token"), anyMap(), isNull()))
                 .thenReturn(
                         mapper.readTree(
@@ -71,7 +77,13 @@ class AuthControllerTest {
         when(users.saveVerifiedIdentity("tenant-test", "ou_verified", null, "测试用户", avatar))
                 .thenReturn(
                         new CurrentUserResponse(
-                                "1", "ou_verified", "tenant-test", "测试用户", "APPLICANT", avatar));
+                                "1",
+                                "ou_verified",
+                                "tenant-test",
+                                "测试用户",
+                                java.util.List.of("OPERATIONS"),
+                                java.util.List.of(),
+                                avatar));
         var client = new MockHttpSession();
         mvc.perform(login(client, challenge(client)))
                 .andExpect(status().isOk())
@@ -251,7 +263,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.user.name").value("测试用户"))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.user.id").value("1"))
-                .andExpect(jsonPath("$.user.roleType").value("APPLICANT"))
+                .andExpect(jsonPath("$.user.roleCodes[0]").value("OPERATIONS"))
                 .andExpect(
                         content()
                                 .string(

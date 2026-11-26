@@ -47,7 +47,7 @@ public class ApplicantCatalogController {
     }
 
     @GetMapping("/subsidy-options")
-    @Operation(summary = "读取机型补贴查询的目录选项", description = "包括已下架、停产机型的品牌、系列、版本和配置。")
+    @Operation(summary = "读取机型补贴查询的目录选项", description = "采购在本人负责的品牌内查询。可见目录包含已下架、停产机型的系列、版本和配置。")
     public Options subsidyOptions(HttpServletRequest request) {
         return goods.subsidyOptions(sessions.requireLogin(request).user());
     }

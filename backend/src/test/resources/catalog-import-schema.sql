@@ -1,4 +1,4 @@
--- 二十二表基线中的商品、政策与按轮审核表，用于隔离 H2 验证。账号与审核名单见 user-info-schema.sql。
+-- 29 表空库基线的商品与政策部分，用于隔离 H2 验证。
 
 CREATE TABLE `brand` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -89,6 +89,8 @@ CREATE TABLE `policy_apply` (
   `tenant_key` VARCHAR(64) NOT NULL,
   `applicant_id` BIGINT NOT NULL,
   `applicant_name` VARCHAR(64) NOT NULL,
+  `brand_id` BIGINT DEFAULT NULL,
+  `series_id` BIGINT DEFAULT NULL,
   `channel_type` VARCHAR(20) NOT NULL,
   `platforms` TEXT DEFAULT NULL,
   `write_off_type` VARCHAR(20) DEFAULT NULL,
@@ -113,6 +115,8 @@ CREATE TABLE `policy_apply` (
   KEY `idx_apply_mine` (`applicant_id`, `tenant_key`, `is_deleted`, `created_at`, `id`),
   KEY `idx_apply_status` (`tenant_key`, `is_deleted`, `status`, `created_at`, `id`),
 
+  CONSTRAINT fk_apply_series FOREIGN KEY (series_id,brand_id) REFERENCES series(id,brand_id),
+  CONSTRAINT ck_apply_catalog CHECK ((brand_id IS NULL AND series_id IS NULL AND status IN ('DRAFT','REJECTED')) OR (brand_id IS NOT NULL AND series_id IS NOT NULL)),
   CONSTRAINT `fk_apply_applicant`
     FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
   CONSTRAINT `fk_apply_extension_source`
@@ -138,7 +142,9 @@ CREATE TABLE `policy_audit_log` (
   `tenant_key` VARCHAR(64) NOT NULL,
   `version` INT NOT NULL,
   `snapshot_data` TEXT NOT NULL,
-  `workflow_version` TINYINT NOT NULL DEFAULT 1 CHECK (workflow_version IN (0,1)),
+  brand_id BIGINT NOT NULL,
+  series_id BIGINT NOT NULL,
+  perspective VARCHAR(16) NOT NULL,
   `audit_status` VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED',
   `auditor_id` BIGINT DEFAULT NULL,
   `auditor_name` VARCHAR(64) DEFAULT NULL,
@@ -148,6 +154,10 @@ CREATE TABLE `policy_audit_log` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_policy_audit_round` (`policy_id`, `version`),
+  UNIQUE KEY uk_audit_round_catalog (policy_id,version,brand_id,series_id),
+  UNIQUE KEY uk_audit_round_channel (policy_id,version,tenant_key,perspective),
+  CONSTRAINT fk_audit_series_brand FOREIGN KEY (series_id,brand_id) REFERENCES series(id,brand_id),
+  CONSTRAINT ck_audit_channel CHECK (perspective IN ('RETAIL','BILLION')),
   KEY `idx_policy_audit_tenant` (`policy_id`, `tenant_key`),
   KEY `idx_policy_audit_auditor` (`auditor_id`, `tenant_key`),
 
@@ -162,6 +172,25 @@ CREATE TABLE `policy_audit_log` (
     OR (`audit_status` IN ('APPROVED', 'REJECTED') AND `auditor_id` IS NOT NULL
       AND `auditor_name` IS NOT NULL AND `audit_time` IS NOT NULL)
   )
+);
+
+CREATE TABLE `policy_round_platform` (
+  `policy_id` BIGINT NOT NULL,
+  `version` INT NOT NULL,
+  `tenant_key` VARCHAR(64) NOT NULL,
+  `perspective` VARCHAR(16) NOT NULL,
+  `platform_code` VARCHAR(32) NOT NULL,
+
+  PRIMARY KEY (`policy_id`, `version`, `platform_code`),
+  KEY `idx_round_platform_scope` (`tenant_key`, `perspective`, `platform_code`, `policy_id`, `version`),
+  KEY `idx_round_platform_channel` (`policy_id`, `version`, `tenant_key`, `perspective`),
+  CONSTRAINT `fk_round_platform_audit`
+    FOREIGN KEY (`policy_id`, `version`, `tenant_key`, `perspective`)
+    REFERENCES `policy_audit_log` (`policy_id`, `version`, `tenant_key`, `perspective`),
+  CONSTRAINT `fk_round_platform_team`
+    FOREIGN KEY (`tenant_key`, `perspective`, `platform_code`)
+    REFERENCES `platform_team` (`tenant_key`, `perspective`, `platform_code`)
+
 );
 
 CREATE TABLE `policy_time_change` (
@@ -210,6 +239,8 @@ CREATE TABLE `policy_goods_detail` (
   `policy_id` BIGINT NOT NULL,
   `version` INT NOT NULL,
   `platform_code` VARCHAR(32) NOT NULL,
+  `brand_id` BIGINT NOT NULL,
+  `series_id` BIGINT NOT NULL,
   `spu_id` BIGINT NOT NULL,
   `ram` VARCHAR(20) NOT NULL,
   `rom` VARCHAR(20) NOT NULL,
@@ -218,12 +249,19 @@ CREATE TABLE `policy_goods_detail` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_policy_goods_round_platform` (`policy_id`, `version`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_round_catalog` (`policy_id`, `version`, `brand_id`, `series_id`),
+  KEY `idx_policy_goods_spu_catalog` (`spu_id`, `brand_id`, `series_id`),
   KEY `idx_policy_goods_config` (`spu_id`, `ram`, `rom`, `platform_code`, `goods_id`),
   KEY `idx_policy_goods_binding` (`goods_id`, `spu_id`, `ram`, `rom`),
 
   CONSTRAINT `fk_policy_goods_round`
-    FOREIGN KEY (`policy_id`, `version`) REFERENCES `policy_audit_log` (`policy_id`, `version`),
-  CONSTRAINT `fk_policy_goods_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
+    FOREIGN KEY (`policy_id`, `version`, `brand_id`, `series_id`)
+    REFERENCES `policy_audit_log` (`policy_id`, `version`, `brand_id`, `series_id`),
+  CONSTRAINT `fk_policy_goods_platform`
+    FOREIGN KEY (`policy_id`, `version`, `platform_code`)
+    REFERENCES `policy_round_platform` (`policy_id`, `version`, `platform_code`),
+  CONSTRAINT `fk_policy_goods_spu`
+    FOREIGN KEY (`spu_id`, `brand_id`, `series_id`) REFERENCES `spu` (`id`, `brand_id`, `series_id`),
   CONSTRAINT `fk_policy_goods_sku`
     FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`),
   CONSTRAINT `ck_policy_goods_platform` CHECK (
@@ -233,6 +271,7 @@ CREATE TABLE `policy_goods_detail` (
     REGEXP_LIKE(`ram`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`ram`, 2) = 'GB'
     AND REGEXP_LIKE(`rom`, '^[1-9][0-9]{0,7}GB$', 'c') AND RIGHT(`rom`, 2) = 'GB'
   )
+
 );
 
 CREATE TABLE `goods_sync_job` (
@@ -407,6 +446,41 @@ CREATE TABLE `catalog_operation_log` (
   CONSTRAINT `ck_catalog_log_after` CHECK (`after_data` IS NULL OR `after_data` IS JSON OBJECT)
 );
 
+CREATE TABLE policy_review_brand_owner (
+  tenant_key VARCHAR(64) NOT NULL,
+  brand_id BIGINT NOT NULL,
+  purchase_user_id BIGINT NOT NULL,
+  product_mode VARCHAR(16) NOT NULL,
+  brand_product_user_id BIGINT DEFAULT NULL,
+  PRIMARY KEY (tenant_key, brand_id),
+  KEY idx_review_brand_purchase (purchase_user_id, tenant_key),
+  KEY idx_review_brand_product (brand_product_user_id, tenant_key),
+  KEY idx_review_brand_catalog (brand_id),
+  CONSTRAINT fk_review_brand_settings FOREIGN KEY (tenant_key) REFERENCES policy_review_settings (tenant_key),
+  CONSTRAINT fk_review_brand_catalog FOREIGN KEY (brand_id) REFERENCES brand (id),
+  CONSTRAINT fk_review_brand_purchase FOREIGN KEY (purchase_user_id, tenant_key) REFERENCES user_info (id, tenant_key),
+  CONSTRAINT fk_review_brand_product FOREIGN KEY (brand_product_user_id, tenant_key) REFERENCES user_info (id, tenant_key),
+  CONSTRAINT ck_review_brand_product_mode CHECK (
+    (product_mode = 'BY_BRAND' AND brand_product_user_id IS NOT NULL)
+    OR (product_mode = 'BY_SERIES' AND brand_product_user_id IS NULL)
+  )
+);
+
+CREATE TABLE policy_review_series_owner (
+  tenant_key VARCHAR(64) NOT NULL,
+  series_id BIGINT NOT NULL,
+  brand_id BIGINT NOT NULL,
+  product_user_id BIGINT NOT NULL,
+  PRIMARY KEY (tenant_key, series_id),
+  KEY idx_review_series_brand (tenant_key, brand_id),
+  KEY idx_review_series_catalog (series_id, brand_id),
+  KEY idx_review_series_product (product_user_id, tenant_key),
+  CONSTRAINT fk_review_series_brand FOREIGN KEY (tenant_key, brand_id)
+    REFERENCES policy_review_brand_owner (tenant_key, brand_id),
+  CONSTRAINT fk_review_series_catalog FOREIGN KEY (series_id, brand_id) REFERENCES series (id, brand_id),
+  CONSTRAINT fk_review_series_product FOREIGN KEY (product_user_id, tenant_key) REFERENCES user_info (id, tenant_key)
+);
+
 CREATE TABLE policy_review_round (
   policy_id BIGINT NOT NULL,
   version INT NOT NULL,
@@ -437,9 +511,11 @@ CREATE TABLE policy_review_member (
   assignment_no INT NOT NULL DEFAULT 1,
   member_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
   task_guid VARCHAR(128) DEFAULT NULL,
+  active_review_slot TINYINT GENERATED ALWAYS AS (CASE WHEN member_status='ACTIVE' AND group_code IN ('PRODUCT','PURCHASE') THEN 1 ELSE NULL END),
   active_user_id BIGINT GENERATED ALWAYS AS (CASE WHEN member_status = 'ACTIVE' THEN user_id ELSE NULL END),
   PRIMARY KEY (id),
   UNIQUE KEY uk_review_member_assignment (policy_id, version, group_code, user_id, assignment_no),
+  UNIQUE KEY uk_review_member_active_slot (policy_id,version,group_code,active_review_slot),
   UNIQUE KEY uk_review_member_active (policy_id, version, group_code, active_user_id),
   UNIQUE KEY uk_review_member_group (id, policy_id, version, tenant_key, group_code),
   UNIQUE KEY uk_review_member_round (id, policy_id, version, tenant_key),

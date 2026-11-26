@@ -1,3 +1,4 @@
+import { roleSession } from '../fixtures/role-session'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createAuthSession } from '../../src/composables/useAuthSession'
 import { getLoginSession, logout } from '../../src/api/feishu'
@@ -31,11 +32,13 @@ it('单一入口共享登录请求，退出时立即隔离并忽略迟到的登�
 })
 it('账号、租户、角色变化递增隔离版本，姓名更新不清理表单', () => {
   const state = createAuthSession()
-  state.setLogin({ user: { id: '1', tenantKey: 'a', roleType: 'APPLICANT' } })
+  state.setLogin({ user: { id: '1', tenantKey: 'a', ...roleSession('OPERATIONS') } })
   const version = state.revision.value
-  state.setLogin({ user: { id: '1', tenantKey: 'a', roleType: 'APPLICANT', name: '新姓名' } })
+  state.setLogin({
+    user: { id: '1', tenantKey: 'a', ...roleSession('OPERATIONS'), name: '新姓名' },
+  })
   expect(state.revision.value).toBe(version)
-  state.setLogin({ user: { id: '1', tenantKey: 'b', roleType: 'APPLICANT' } })
+  state.setLogin({ user: { id: '1', tenantKey: 'b', ...roleSession('OPERATIONS') } })
   expect(state.revision.value).toBe(version + 1)
   state.invalidate()
   expect(state.user.value).toBeNull()

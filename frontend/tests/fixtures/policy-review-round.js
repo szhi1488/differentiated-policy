@@ -46,6 +46,9 @@ export function reviewRound() {
     currentSubmissionVersion: 2,
     recordVersion: 4,
     settingsVersion: 1,
+    applicantName: snapshot.applicantName,
+    submittedAt: '2026-11-23T09:01:02+08:00',
+    requiresProductReview: true,
     reviewStage: 'PRODUCT_REVIEW',
     allowedActions: ['APPROVE', 'REJECT'],
     productReviewers: [

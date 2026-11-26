@@ -18,6 +18,7 @@ import com.company.policy.entity.PolicyConsent;
 import com.company.policy.entity.PolicyConsent.EndAdjustment;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.CatalogGoodsMapper;
+import com.company.policy.mapper.PlatformPolicyMapper;
 import com.company.policy.mapper.PolicyApplyMapper;
 import com.company.policy.mapper.PolicyApplyMapper.DetailLine;
 import com.company.policy.mapper.UserPlatformMapper;
@@ -74,11 +75,13 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     private final CatalogAccess access;
     private final UserPlatformMapper platforms;
     private final PolicyApplyMapper policies;
+    private final PlatformPolicyMapper sharedPolicies;
     private final CatalogGoodsMapper catalog;
     private final ObjectMapper json;
     private final PolicySnapshotCodec snapshots;
     private final AttachmentService attachments;
     private final PolicyTimeHistory history;
+    private final PolicyReviewProgressReader progress;
 
     PolicyApplyServiceImpl(
             PolicyCoverageService coverage,
@@ -90,7 +93,11 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
             PolicySnapshotCodec snapshots,
             AttachmentService attachments,
             PolicyReviewWorkflow workflow,
-            PolicyTimeHistory history) {
+            PolicyTimeHistory history,
+            PlatformPolicyMapper sharedPolicies,
+            PolicyReviewProgressReader progress) {
+        this.progress = progress;
+        this.sharedPolicies = sharedPolicies;
         this.history = history;
         this.coverage = coverage;
         this.workflow = workflow;
@@ -240,13 +247,16 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         var lines = prepared.lines();
         int version = snapshot.submissionVersion();
         checkUpdated(policies.markSubmitted(entry, now));
-        checkUpdated(
-                policies.insertAudit(
-                        id, entry.getTenantKey(), version, snapshots.write(snapshot), now, 1));
+        checkUpdated(policies.insertAudit(entry, version, snapshots.write(snapshot), now));
+        var selectedPlatforms = snapshot.form().selectedPlatforms();
+        if (policies.insertPlatforms(entry, version, selectedPlatforms)
+                != selectedPlatforms.size()) {
+            throw new IllegalStateException("正式轮次平台写入数量不一致");
+        }
         // 分批写入同一事务，避免单条 SQL 的参数数随商品数和平台数相乘。
         for (int offset = 0; offset < lines.size(); offset += 500) {
             var batch = lines.subList(offset, Math.min(offset + 500, lines.size()));
-            if (policies.insertDetails(id, version, batch, now) != batch.size()) {
+            if (policies.insertDetails(entry, version, batch, now) != batch.size()) {
                 throw new IllegalStateException("政策商品明细写入数量不一致");
             }
         }
@@ -258,7 +268,15 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     }
 
     @Override
-    public List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session) {
+    public List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session, String usage) {
+        if ("READ".equals(usage)) {
+            var member = access.requireActive(session);
+            if (!access.hasPermission(member, "subsidy.read.platform")) {
+                access.requirePermission(session, "policy.read.platform_submitted");
+            }
+            return platforms.memberships(member.getTenantKey(), member.getId());
+        }
+        if (!"SUBMIT".equals(usage)) throw invalid("平台范围须为 SUBMIT 或 READ。");
         var owner = access.requireApplicant(session);
         return platforms.assigned(owner.getTenantKey(), owner.getId());
     }
@@ -267,17 +285,18 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public PolicySubsidyTimeline subsidyTimeline(
             CurrentUserResponse session, PolicyTimelineQuery query) {
-        var owner = access.requireApplicant(session);
+        var owner = access.requirePermission(session, "subsidy.read.platform");
         query.validate();
         var scopes =
-                platforms.assigned(owner.getTenantKey(), owner.getId()).stream()
+                platforms.memberships(owner.getTenantKey(), owner.getId()).stream()
                         .filter(query::matches)
                         .toList();
         if (query.platformCode() != null && scopes.isEmpty()) {
             throw new ApiException(
                     HttpStatus.FORBIDDEN, "POLICY_PLATFORM_FORBIDDEN", "当前所选平台未分配给本人。");
         }
-        return coverage.subsidyTimeline(owner.getTenantKey(), query, scopes);
+        return coverage.subsidyTimeline(
+                owner.getTenantKey(), query, scopes, access.subsidyBrandNames(owner));
     }
 
     private void requirePlatforms(UserInfo owner, PolicyDraftRequest form, boolean writing) {
@@ -315,6 +334,11 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
 
     private PreparedSubmission prepare(PolicyApply entry, PolicyDraftRequest form, List<Long> ids) {
         var goods = readGoods(ids);
+        var category = selectedCategory(ids, goods);
+        if (category == null
+                || !Long.valueOf(category.brandId()).equals(entry.getBrandId())
+                || !Long.valueOf(category.seriesId()).equals(entry.getSeriesId()))
+            throw goodsChanged();
         var lines = new ArrayList<DetailLine>();
         for (var card : form.goodsForm().cards()) {
             for (var target : card.targets()) {
@@ -421,7 +445,10 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                         ? history.read(
                                 entry.getTenantKey(), id, entry.getCurrentVersion(), form.endTime())
                         : null,
-                entry.getReviewStage());
+                entry.getReviewStage(),
+                entry.getCurrentVersion() > 0
+                        ? progress.read(entry.getTenantKey(), id, entry.getCurrentVersion())
+                        : null);
     }
 
     @Override
@@ -470,7 +497,10 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         if (log == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到该轮提交记录。");
         }
-        return new AuditDetail(auditSummary(log), snapshots.read(log.getSnapshotData()));
+        return new AuditDetail(
+                auditSummary(log),
+                snapshots.read(log.getSnapshotData()),
+                progress.read(entry.getTenantKey(), id, log.getVersion()));
     }
 
     private Summary summary(PolicyApply entry) {
@@ -488,6 +518,69 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 entry.getReviewStage());
     }
 
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public Page<Summary> shared(CurrentUserResponse session, PolicyListQuery query) {
+        var reader = access.requirePermission(session, "policy.read.platform_submitted");
+        long offset = offset(query.page(), query.pageSize());
+        validateFilter(query.status(), STATUSES, "申请状态");
+        validateFilter(query.perspective(), PERSPECTIVES, "渠道");
+        validateFilter(query.platformCode(), PolicyFormValidation.RETAIL, "平台");
+        var tenant = reader.getTenantKey();
+        long total = sharedPolicies.count(tenant, reader.getId(), query);
+        var items =
+                offset >= total
+                        ? List.<Summary>of()
+                        : sharedPolicies.list(tenant, reader.getId(), query, offset).stream()
+                                .map(
+                                        row ->
+                                                new Summary(
+                                                        Long.toString(row.id()),
+                                                        policyNumber(row.id()),
+                                                        row.status(),
+                                                        row.recordVersion(),
+                                                        row.version(),
+                                                        row.perspective(),
+                                                        decode(
+                                                                row.platforms(),
+                                                                new TypeReference<
+                                                                        List<String>>() {}),
+                                                        formatTime(row.createdAt()),
+                                                        formatTime(row.updatedAt()),
+                                                        row.effectiveEnd() == null
+                                                                ? row.submittedEnd()
+                                                                : formatTime(row.effectiveEnd()),
+                                                        row.stage()))
+                                .toList();
+        return new Page<>(items, total, query.page(), query.pageSize());
+    }
+
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public Detail sharedDetail(CurrentUserResponse session, long id) {
+        var reader = access.requirePermission(session, "policy.read.platform_submitted");
+        var row = sharedPolicies.current(reader.getTenantKey(), reader.getId(), id);
+        if (row == null)
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到可查阅的平台政策。");
+        var snapshot = snapshots.read(row.snapshotData());
+        return new Detail(
+                snapshot.id(),
+                snapshot.policyCode(),
+                row.status(),
+                row.recordVersion(),
+                row.version(),
+                snapshot.applicantName(),
+                snapshot.form(),
+                snapshot.goods(),
+                snapshot.consent() == null ? List.of() : snapshot.consent().endAdjustments(),
+                "APPROVED".equals(row.status())
+                        ? history.read(
+                                reader.getTenantKey(), id, row.version(), snapshot.form().endTime())
+                        : null,
+                row.stage(),
+                progress.read(reader.getTenantKey(), id, row.version()));
+    }
+
     static AuditSummary auditSummary(PolicyAuditLog log) {
         return new AuditSummary(
                 log.getId().toString(),
@@ -497,7 +590,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 log.getAuditComment(),
                 formatTime(log.getAuditTime()),
                 formatTime(log.getCreatedAt()),
-                log.getWorkflowVersion(),
                 log.getRejectedAtStage());
     }
 
@@ -593,6 +685,10 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
     }
 
     private void writeForm(PolicyApply entry, PolicyDraftRequest form) {
+        var ids = targetIds(form);
+        var category = selectedCategory(ids, readGoods(ids));
+        entry.setBrandId(category == null ? null : Long.valueOf(category.brandId()));
+        entry.setSeriesId(category == null ? null : Long.valueOf(category.seriesId()));
         entry.setChannelType(form.perspective());
         entry.setPlatforms(encode(form.selectedPlatforms()));
         entry.setWriteOffType(form.verifyType());
@@ -603,6 +699,20 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         entry.setRemark(form.specialRemark());
         entry.setAttachmentUrls(encode(form.attachmentInfo()));
         entry.setGoodsFormJson(encode(form.goodsForm()));
+    }
+
+    private static ApplicantCatalogResponse selectedCategory(
+            List<Long> ids, Map<Long, ApplicantCatalogResponse> goods) {
+        if (ids.isEmpty()) return null;
+        if (ids.size() != goods.size()) throw goodsChanged();
+        var first = goods.get(ids.get(0));
+        for (var item : goods.values()) {
+            if (!first.brandId().equals(item.brandId())
+                    || !first.seriesId().equals(item.seriesId())) {
+                throw invalid("同一张政策只能申报同一品牌下的一个系列，请将其他系列分单提交。");
+            }
+        }
+        return first;
     }
 
     private PolicyDraftRequest readForm(PolicyApply entry) {

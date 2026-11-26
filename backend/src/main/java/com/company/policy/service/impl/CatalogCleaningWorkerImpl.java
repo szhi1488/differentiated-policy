@@ -10,7 +10,6 @@ import com.company.policy.service.CatalogCleaningResultWriter;
 import com.company.policy.service.CatalogCleaningResultWriter.Mapping;
 import com.company.policy.service.CatalogCleaningResultWriter.MappingConflict;
 import com.company.policy.service.CatalogCleaningWorker;
-import com.company.policy.service.ExecutionNotices;
 import com.company.policy.support.catalog.CatalogCleaningRule;
 import com.company.policy.vo.CatalogCleaningResponse.Candidate;
 import com.company.policy.vo.CatalogCleaningResponse.Status;
@@ -29,7 +28,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class CatalogCleaningWorkerImpl implements CatalogCleaningWorker {
     private static final int BATCH_SIZE = 100;
     private final CatalogCleaningMapper mapper;
-    private final ExecutionNotices executionNotices;
     private final CatalogCleaningResultWriter writer;
     private final JackyunProperties config;
     private final TransactionTemplate tx;
@@ -39,9 +37,7 @@ public class CatalogCleaningWorkerImpl implements CatalogCleaningWorker {
             CatalogCleaningMapper mapper,
             CatalogCleaningResultWriter writer,
             JackyunProperties config,
-            PlatformTransactionManager manager,
-            ExecutionNotices executionNotices) {
-        this.executionNotices = executionNotices;
+            PlatformTransactionManager manager) {
         this.mapper = mapper;
         this.writer = writer;
         this.config = config;
@@ -69,7 +65,6 @@ public class CatalogCleaningWorkerImpl implements CatalogCleaningWorker {
                         var counts = mapper.jobCounts(List.of(job.getId()));
                         String status = batchStatus(counts);
                         checked(mapper.release(job, token, status));
-                        if (!"RUNNING".equals(status)) executionNotices.cleaned(job, counts);
                     });
         } catch (LeaseLost ignored) {
             // 失去租约后停止写入，未完成明细由后续执行者接手。

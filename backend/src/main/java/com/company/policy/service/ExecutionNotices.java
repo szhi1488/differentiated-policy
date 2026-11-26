@@ -1,17 +1,15 @@
 package com.company.policy.service;
 
 import com.company.policy.dto.ChannelPlatform;
-import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyTimeChange;
-import com.company.policy.mapper.CatalogCleaningMapper.JobCount;
 import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** 登记执行期、平台交接及商品异常提醒，发送前重新核对范围与人员。 */
+/** 登记执行期、平台交接及商品导入暂停提醒，发送前重新核对范围与人员。 */
 public interface ExecutionNotices {
     String EXPIRY_REMINDER = "EXPIRY_REMINDER";
 
@@ -25,13 +23,11 @@ public interface ExecutionNotices {
     void timeAdjusted(PolicyTimeChange change);
 
     /** 在分工事务内登记指定渠道平台的交接。 */
-    void platformChanged(String tenant, ChannelPlatform scope, long user, boolean assigned);
+    void platformChanged(
+            String tenant, ChannelPlatform scope, Long previousSubmitter, Long nextSubmitter);
 
     /** 在异常暂停的事务内登记续跑提醒。 */
     void paused(GoodsSyncJob job, String code);
-
-    /** 清洗批次结束时汇总待审及技术错误。 */
-    void cleaned(CatalogCleaningJob job, List<JobCount> counts);
 
     /** 投递前读取当前生效状态、截止及账号。 */
     Message message(String tenant, JsonNode payload, LocalDateTime at);

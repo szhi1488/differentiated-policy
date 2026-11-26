@@ -21,13 +21,13 @@ class UserInfoServiceTest {
     void
             firstLoginCreatesApplicantAndRepeatLoginUpdatesIdentityWithoutOverwritingRoleOrDepartment() {
         var first = service.saveVerifiedIdentity("tenant1", "open1", "union1", "首次姓名", null);
-        assertThat(first.roleType()).isEqualTo("APPLICANT");
+        assertThat(first.roleCodes()).containsExactly("OPERATIONS");
         assertThat(first.id()).isNotBlank();
-        jdbc.update(
-                "UPDATE user_info SET role_type='ADMIN', department='采购部' WHERE id=?", first.id());
+        com.company.policy.RbacFixture.setRole(jdbc, Long.parseLong(first.id()), "ADMIN");
+        jdbc.update("UPDATE user_info SET department='采购部' WHERE id=?", first.id());
         var second = service.saveVerifiedIdentity("tenant1", "open1", null, "更新姓名", null);
         assertThat(second.id()).isEqualTo(first.id());
-        assertThat(second.roleType()).isEqualTo("ADMIN");
+        assertThat(second.roleCodes()).containsExactly("ADMIN");
         assertThat(second.name()).isEqualTo("更新姓名");
         var saved = mapper.findIdentity("tenant1", "open1");
         assertThat(saved.getUnionId()).isEqualTo("union1");
@@ -46,8 +46,8 @@ class UserInfoServiceTest {
                         "头像用户",
                         "https://example.test/first.png");
         assertThat(first.avatarUrl()).isEqualTo("https://example.test/first.png");
-        jdbc.update(
-                "UPDATE user_info SET role_type='ADMIN', department='采购部' WHERE id=?", first.id());
+        com.company.policy.RbacFixture.setRole(jdbc, Long.parseLong(first.id()), "ADMIN");
+        jdbc.update("UPDATE user_info SET department='采购部' WHERE id=?", first.id());
         var updated =
                 service.saveVerifiedIdentity(
                         "avatar-tenant",
@@ -57,7 +57,7 @@ class UserInfoServiceTest {
                         "https://example.test/second.png");
         assertThat(updated.id()).isEqualTo(first.id());
         assertThat(updated.avatarUrl()).isEqualTo("https://example.test/second.png");
-        assertThat(updated.roleType()).isEqualTo("ADMIN");
+        assertThat(updated.roleCodes()).containsExactly("ADMIN");
         for (String avatar :
                 new String[] {
                     null,

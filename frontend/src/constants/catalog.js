@@ -1,5 +1,3 @@
-export const GOODS_BRANDS = ['OPPO手机', '一加手机']
-
 export const CATALOG_SALES_STATES = {
   active: { code: 1, label: '在售', type: 'success' },
   pending: { code: 2, label: '待上架', type: 'warning' },

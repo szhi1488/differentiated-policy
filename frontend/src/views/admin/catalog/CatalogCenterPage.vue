@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
@@ -7,14 +7,25 @@ import AppIcon from '../../../components/AppIcon.vue'
 import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import { useCatalogCenter } from '../../../composables/useCatalogCenter'
 import { useCatalogDictionary } from '../../../composables/useCatalogDictionary'
+import { authSession } from '../../../composables/useAuthSession'
+import { useCatalogSourceBrands } from '../../../composables/useCatalogSourceBrands'
+import { canOpen } from '../../../constants/navigation'
 import { CATALOG_SALES_STATES as statuses } from '../../../constants/catalog'
 import { catalogConfigLabel as specLabel } from '../../../utils/catalog-dictionary'
 import { copyText } from '../../../utils/clipboard'
 import CatalogDictionaryPanel from './CatalogDictionaryPanel.vue'
 import CatalogPhonePreview from './CatalogPhonePreview.vue'
 import CatalogProductEditor from './CatalogProductEditor.vue'
+import CatalogBrandScopeNotice from './CatalogBrandScopeNotice.vue'
 import './catalog-center.css'
 
+const canManage = computed(() => authSession.user.value?.permissions?.includes('catalog.manage'))
+const canImport = computed(() => canOpen(authSession.user.value, 'catalog-sources'))
+const {
+  names: importBrands,
+  error: brandError,
+  reload: loadBrands,
+} = useCatalogSourceBrands(canImport)
 const {
   entries: dictionaryEntries,
   loading: dictionaryLoading,
@@ -28,6 +39,8 @@ const {
   applied,
   categoryKeyword,
   brands,
+  assignedBrands,
+  singleBrand,
   stats,
   activeOnly,
   seriesOptions,
@@ -80,13 +93,34 @@ const manualCopyNo = ref('')
 const manualCopyInput = ref(null)
 const productEditor = ref(null)
 const deletingProductId = ref('')
+const unassigned = computed(() => assignedBrands.value?.length === 0)
+watch(assignedBrands, (names, previous) => {
+  if (!names || names.join() === previous?.join()) {
+    return
+  }
+  manualCopyNo.value = ''
+  detailId.value = ''
+  dialogOpen.value = false
+  applyAndClear(changeBrand, singleBrand.value)
+})
+function refreshScope() {
+  void loadSummary()
+  void loadBrands()
+}
+if (canImport.value) {
+  window.addEventListener('focus', loadSummary)
+  onScopeDispose(() => window.removeEventListener('focus', loadSummary))
+}
 const metrics = computed(() => [
   {
     label: '商品总数',
     value: summaryLoading.value || summaryError.value ? '—' : stats.value.total,
     icon: 'box',
     tone: 'blue',
-    note: summaryLoading.value || summaryError.value ? '' : `覆盖 ${brands.value.length} 个品牌`,
+    note:
+      summaryLoading.value || summaryError.value
+        ? ''
+        : singleBrand.value || `覆盖 ${brands.value.length} 个品牌`,
   },
   {
     label: '在售商品',
@@ -310,18 +344,34 @@ async function confirmDeleteProduct(row) {
     <header class="catalog-center-heading workspace-page-banner">
       <WorkspacePageHeading title="商品中心" icon="box" heading-id="catalog-center-title" />
       <div class="catalog-center-actions">
-        <el-button size="small" @click="downloadProducts(null, '商品导入模板-示例.csv')">
+        <el-button
+          v-if="canImport"
+          type="primary"
+          size="small"
+          :disabled="!importBrands.length"
+          :title="!importBrands.length ? '当前没有可从吉客云导入的品牌' : undefined"
+          @click="$router.push({ name: 'catalog-sources', query: { import: '1' } })"
+        >
+          <AppIcon name="upload" :size="14" />
+          导入商品
+        </el-button>
+        <el-button
+          v-if="canManage"
+          size="small"
+          @click="downloadProducts(null, '商品导入模板-示例.csv')"
+        >
           <AppIcon name="download" :size="14" />
           下载导入模板
         </el-button>
         <el-button
+          v-if="canManage"
           size="small"
           @click="showNote('批量导入', '批量导入待接入，可先下载导入模板查看字段。')"
         >
           <AppIcon name="upload" :size="14" />
           批量导入
         </el-button>
-        <el-button type="primary" size="small" @click="openProductEditor()">
+        <el-button v-if="canManage" type="primary" size="small" @click="openProductEditor()">
           <AppIcon name="plus" :size="14" />
           新增商品
         </el-button>
@@ -344,6 +394,12 @@ async function confirmDeleteProduct(row) {
       </div>
     </header>
 
+    <CatalogBrandScopeNotice
+      v-if="canImport"
+      :error="brandError"
+      :unassigned="unassigned"
+      @retry="refreshScope"
+    />
     <div class="catalog-center-metrics" aria-label="商品统计">
       <article
         v-for="metric in metrics"
@@ -412,8 +468,8 @@ async function confirmDeleteProduct(row) {
                 <el-button
                   class="catalog-center-tree-row"
                   text
-                  :aria-pressed="!applied.brand && !applied.series"
-                  @click="applyAndClear(selectCategory, '')"
+                  :aria-pressed="(!applied.brand || Boolean(singleBrand)) && !applied.series"
+                  @click="applyAndClear(selectCategory, singleBrand)"
                 >
                   <AppIcon name="list" :size="14" />
                   全部商品
@@ -527,10 +583,11 @@ async function confirmDeleteProduct(row) {
                     :model-value="filters.brand"
                     placeholder="全部"
                     aria-label="品牌"
+                    :disabled="Boolean(singleBrand) || unassigned"
                     filterable
                     @change="applyAndClear(changeBrand, $event)"
                   >
-                    <el-option label="全部" value="" />
+                    <el-option v-if="!singleBrand" label="全部" value="" />
                     <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
                   </el-select>
                 </el-form-item>
@@ -730,13 +787,19 @@ async function confirmDeleteProduct(row) {
                     <small>{{ row.time }}</small>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="102" fixed="right" :resizable="false">
+                <el-table-column
+                  label="操作"
+                  :width="canManage ? 102 : 60"
+                  fixed="right"
+                  :resizable="false"
+                >
                   <template #default="{ row }">
                     <div class="catalog-center-row-actions">
                       <el-button link type="primary" size="small" @click="showDetail(row)">
                         查看
                       </el-button>
                       <el-button
+                        v-if="canManage"
                         link
                         type="primary"
                         size="small"
@@ -746,6 +809,7 @@ async function confirmDeleteProduct(row) {
                         编辑
                       </el-button>
                       <el-button
+                        v-if="canManage"
                         link
                         type="danger"
                         size="small"
@@ -781,7 +845,7 @@ async function confirmDeleteProduct(row) {
           </div>
         </div>
       </el-tab-pane>
-      <el-tab-pane label="数据字典" name="dictionary">
+      <el-tab-pane v-if="canManage" label="数据字典" name="dictionary">
         <CatalogDictionaryPanel
           :entries="dictionaryEntries"
           :loading="dictionaryLoading"
@@ -794,7 +858,7 @@ async function confirmDeleteProduct(row) {
     </el-tabs>
 
     <CatalogProductEditor
-      v-if="productEditor"
+      v-if="canManage && productEditor"
       :key="productEditor.product?.id ?? 'new-product'"
       :product="productEditor.product"
       :entries="editorEntries"

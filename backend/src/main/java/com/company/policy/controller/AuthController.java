@@ -78,7 +78,7 @@ public class AuthController {
     @Operation(
             summary = "交换飞书授权码、保存用户并建立会话",
             description =
-                    "以 tenant_key + open_id 幂等写入 user_info，新用户为 APPLICANT，保留已有角色与部门。落库成功后轮换 Session ID；401 授权码/state 失效，403 账号停用，502 飞书异常，503 缺少配置或用户存储不可用。失败需重新获取 state/code。")
+                    "以 tenant_key + open_id 幂等写入 user_info，新用户初始为 OPERATIONS，已有用户保留岗位分配与部门。落库成功后轮换 Session ID；401 授权码/state 失效，403 账号停用，502 飞书异常，503 缺少配置或用户存储不可用。失败需重新获取 state/code。")
     public ResponseEntity<AuthSessionResponse> login(
             @Valid @RequestBody FeishuLoginRequest body, HttpServletRequest request) {
         sessions.consumeChallenge(request.getSession(false), body.state());
@@ -91,7 +91,7 @@ public class AuthController {
     @Operation(
             summary = "读取当前登录身份",
             description =
-                    "按当前公司和已核验身份读取有效账号的最新 roleType，保留登录时头像与原到期时间。401 会话过期或身份失效，403 账号停用或公司不符，503 配置缺失或用户存储不可用。")
+                    "按当前公司和已核验身份读取有效账号的最新岗位 roleCodes、权限 permissions 及当前头像，保留原到期时间。401 会话过期或身份失效，403 账号停用或公司不符，503 配置缺失或用户存储不可用。")
     public ResponseEntity<AuthSessionResponse> current(HttpServletRequest request) {
         var login = sessions.requireLogin(request);
         return ResponseEntity.ok()

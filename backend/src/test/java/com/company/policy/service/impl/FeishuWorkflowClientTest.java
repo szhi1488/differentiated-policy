@@ -33,8 +33,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 
 /** 仅在回环地址模拟平台的成功、限频、丢回执和错误响应。 */
 class FeishuWorkflowClientTest {
@@ -220,84 +218,6 @@ class FeishuWorkflowClientTest {
     }
 
     @Test
-    void reconcilesGroupOnlyWithOriginalSenderChatContentAndTime() throws Exception {
-        String summary = "采购终审通过\n\n【基础信息】\n京东\n\n【商品及补贴信息】\n补贴 20 元";
-        members(List.of("ou_a"), false, "");
-        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_group\"}}");
-        client.sendGroup("oc_group", summary, List.of("ou_a"), KEY, VALID_LEASE);
-        assertThat(requests.remove().method).isEqualTo("GET");
-        var content = requests.remove().body.path("content").asText();
-        assertThat(json.readTree(content).at("/zh_cn/content")).hasSize(4);
-        var message = platformMessage("post", "om_group", content);
-        var fingerprint =
-                PolicyDeliveryFingerprint.compute(
-                        json,
-                        "cli_test",
-                        "GROUP_MESSAGE",
-                        "oc_group",
-                        List.of(summary, List.of("ou_a"), ""));
-        var sentAt = LocalDateTime.of(2026, 1, 1, 8, 0);
-        reply(200, message);
-        assertThat(client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, sentAt))
-                .isEqualTo(sentAt);
-        for (String bad :
-                List.of(
-                        message.replace("oc_group", "oc_other"),
-                        message.replace("补贴 20 元", "补贴 50 元"),
-                        message.replace("1767225600000", "1767232800000"),
-                        message.replace("cli_test", "cli_else"),
-                        message.replace("test-company", "other-company"))) {
-            reply(200, bad);
-            assertFailure(
-                    Kind.PERMANENT,
-                    () ->
-                            client.verifyGroupReceipt(
-                                    "om_group", "oc_group", KEY, fingerprint, sentAt));
-        }
-    }
-
-    @Test
-    void historicalAdjustmentReceiptMatchesOnlyItsOriginalDetailLink() throws Exception {
-        String url = "https://policy.example.test/#/reviews/24?round=1";
-        String summary = "政策已延期 · ZC-000024";
-        var post = json.createObjectNode();
-        var rows = post.putObject("zh_cn").putArray("content");
-        rows.addArray().addObject().put("tag", "text").put("text", summary);
-        rows.addArray().addObject().put("tag", "a").put("text", "查看本轮政策").put("href", url);
-        String content = post.toString();
-        var fingerprint =
-                PolicyDeliveryFingerprint.compute(
-                        json,
-                        "cli_test",
-                        "GROUP_MESSAGE",
-                        "oc_group",
-                        List.of(summary, List.of(), url));
-        reply(200, platformMessage("post", "om_group", content));
-        var at = LocalDateTime.of(2026, 1, 1, 8, 0);
-        assertThat(client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, at))
-                .isEqualTo(at);
-        reply(200, platformMessage("post", "om_group", content.replace("?round=1", "?round=2")));
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, at));
-    }
-
-    @Test
-    void acceptsOnlyTheMatchingFooterOnHistoricalMessages() throws Exception {
-        var old = json.createObjectNode();
-        var rows = old.putArray("content");
-        rows.addArray().addObject().put("tag", "text").put("text", "初审通过");
-        rows.addArray().addObject().put("tag", "text").put("text", "投递编号 " + KEY);
-        var message = platformMessage("post", "om_old", old.toString());
-        reply(200, message);
-        assertThat(client.verifyGroupReceipt("om_old", "oc_group", KEY, null, null)).isNull();
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyGroupReceipt("om_old", "oc_group", "other", null, null));
-    }
-
-    @Test
     void noticeWithoutLinkHasOnlyItsBusinessTextAndUsesTheRequestUuid() throws Exception {
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_platform\"}}");
         client.sendGroup("oc_group", "平台负责人已变更", List.of(), KEY, VALID_LEASE);
@@ -412,53 +332,6 @@ class FeishuWorkflowClientTest {
                                 Map.of("items", items, "has_more", hasMore, "page_token", token))));
     }
 
-    @Test
-    void reconcilesPrivateCardUsingOriginalRecipientsBoundCallbackAndRound() throws Exception {
-        var card =
-                json.valueToTree(
-                        Map.of(
-                                "body",
-                                Map.of(
-                                        "elements",
-                                        List.of(
-                                                Map.of(
-                                                        "tag",
-                                                        "button",
-                                                        "behaviors",
-                                                        List.of(
-                                                                Map.of(
-                                                                        "type",
-                                                                        "callback",
-                                                                        "value",
-                                                                        Map.of(
-                                                                                "policyId",
-                                                                                "7",
-                                                                                "round",
-                                                                                2,
-                                                                                "memberId",
-                                                                                "51"))))))));
-        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_card\"}}");
-        client.sendCard("ou_a", card, KEY, VALID_LEASE);
-        var message =
-                platformMessage(
-                        "interactive", "om_card", requests.remove().body.path("content").asText());
-        reply(200, message);
-        client.verifyReceipt("SEND_CARD", "om_card", "ou_a", KEY, 51, 7, 2);
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_card", "ou_b", KEY, 51, 7, 2));
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_card", "ou_a", KEY, 52, 7, 2));
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_card", "ou_a", KEY, 51, 7, 3));
-        assertThat(requests.peek().path).endsWith("?card_msg_content_type=user_card_content");
-    }
-
     private static final String TEST_TENANT = "test-company";
 
     private Delivery productDelivery() {
@@ -510,7 +383,7 @@ class FeishuWorkflowClientTest {
     }
 
     @Test
-    void sendsProductCardWithOnlyReviewCallbacksAndVerifiableReceipt() throws Exception {
+    void sendsProductCardWithBoundReviewCallbacksAndReturnsItsReceipt() throws Exception {
         var sender = productCardSender();
         reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_trial\"}}");
         assertThat(sender.send(productDelivery())).isEqualTo("om_trial");
@@ -531,47 +404,22 @@ class FeishuWorkflowClientTest {
                                 KEY.equals(value.path("deliveryKey").asText())
                                         && "ou_a".equals(value.path("recipientOpenId").asText()));
         assertThat(card.findValuesAsText("default_url")).isEmpty();
-        var message = platformMessage("interactive", "om_trial", rawCard);
-        reply(200, message);
-        client.verifyReceipt("SEND_CARD", "om_trial", "ou_a", KEY, 51, 7, 2);
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_trial", "ou_b", KEY, 51, 7, 2));
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_trial", "ou_a", KEY, 52, 7, 2));
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_trial", "ou_a", KEY, 51, 7, 3));
     }
 
     private static final String PURCHASE_INSTRUCTIONS =
             "请打开飞书工作台里的「差异化政策管理系统」，进入「政策管理」→「差异化政策」，找到 ZC-000026，点击「审核」，及时完成终审。";
 
-    @ParameterizedTest
-    @CsvSource({
-        "SUBMITTED, ACTIVE, 待你采购终审, " + PURCHASE_INSTRUCTIONS,
-        "REASSIGNED_3, ACTIVE, 待你采购终审, '" + PURCHASE_INSTRUCTIONS + "\n本轮采购终审已改派给你。'",
-        "REASSIGNED_3, REMOVED, 采购终审已改派, 你原先的这次采购指派已撤销。"
-    })
-    void purchaseAndReassignmentNoticesAreTextOnlyAndRetainTheirOwnVerifiableReceipt(
-            String event, String outcome, String expectedTitle, String expectedText)
-            throws Exception {
+    @Test
+    void purchaseNoticeIsTextOnlyAndReceivesItsMessageId() throws Exception {
         var sender = productCardSender();
-        var payload =
-                json.createObjectNode().put("stage", "PURCHASE_REVIEW").put("outcome", outcome);
-        boolean reassigned = "REASSIGNED_3".equals(event);
-        if (reassigned) payload.put("reason", "原采购本周休假");
+        var payload = json.createObjectNode().put("stage", "PURCHASE_REVIEW");
         var item =
                 new Delivery(
                         81,
                         TEST_TENANT,
                         26,
                         1,
-                        event,
+                        "SUBMITTED",
                         "SEND_CARD",
                         51,
                         "PURCHASE",
@@ -590,42 +438,12 @@ class FeishuWorkflowClientTest {
         var raw = post.body.path("content").asText();
         JsonNode notice = json.readTree(raw);
         assertThat(notice.at("/header/title/content").asText())
-                .isEqualTo(expectedTitle + " · ZC-000026 · 第 1 轮");
+                .isEqualTo("待你采购终审 · ZC-000026 · 第 1 轮");
         assertThat(notice.at("/body/elements/0/text/content").asText())
-                .isEqualTo(expectedText + (reassigned ? "\n改派原因：原采购本周休假" : ""));
+                .isEqualTo(PURCHASE_INSTRUCTIONS);
         assertThat(notice.findValuesAsText("tag")).doesNotContain("button", "form", "a");
         assertThat(notice.findValues("behaviors")).isEmpty();
         assertThat(notice.findValues("default_url")).isEmpty();
-        var message = platformMessage("interactive", "om_notice", raw);
-        reply(200, message);
-        client.verifyReceipt("SEND_CARD", "om_notice", "ou_a", KEY, 51, 26, 1);
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_notice", "ou_b", KEY, 51, 26, 1));
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_notice", "ou_a", KEY, 50, 26, 1));
-    }
-
-    @Test
-    void stillVerifiesPreviouslyDeliveredCardsWithAMarkedDetailButton() throws Exception {
-        String marker = PolicyFeishuSender.noticeElementId("ou_a", KEY, 51, 7, 2);
-        var content = json.createObjectNode().put("schema", "2.0");
-        var button = content.putObject("body").putArray("elements").addObject();
-        button.put("tag", "button").put("element_id", marker);
-        button.putArray("behaviors")
-                .addObject()
-                .put("type", "open_url")
-                .put("default_url", "https://erp.example.test/#/reviews/7?round=2");
-        var message = platformMessage("interactive", "om_old_notice", content.toString());
-        reply(200, message);
-        client.verifyReceipt("SEND_CARD", "om_old_notice", "ou_a", KEY, 51, 7, 2);
-        reply(200, message);
-        assertFailure(
-                Kind.PERMANENT,
-                () -> client.verifyReceipt("SEND_CARD", "om_old_notice", "ou_b", KEY, 51, 7, 2));
     }
 
     @Test
@@ -637,63 +455,6 @@ class FeishuWorkflowClientTest {
         JsonNode card = json.readTree(requests.remove().body.path("content").asText());
         assertThat(card.findValues("default_url")).isEmpty();
         assertThat(card.findValues("value")).hasSize(2);
-    }
-
-    @Test
-    void reconcilesTaskOnlyWhenApplicationAssigneeAndBusinessKeyAgree() throws Exception {
-        var task =
-                Map.of(
-                        "guid",
-                        "guid-a",
-                        "creator",
-                        Map.of("type", "app", "id", "cli_test"),
-                        "extra",
-                        KEY,
-                        "members",
-                        List.of(Map.of("role", "assignee", "type", "user", "id", "ou_a")));
-        var reply = json.writeValueAsString(Map.of("code", 0, "data", Map.of("task", task)));
-        reply(200, reply);
-        client.verifyReceipt("CREATE_TASK", "guid-a", "ou_a", KEY, 51, 7, 2);
-        for (String bad :
-                List.of(
-                        reply.replace("assignee", "follower"),
-                        reply.replace(KEY, "wrong-key"),
-                        reply.replace("ou_a", "ou_other"),
-                        reply.replace("cli_test", "other-app"))) {
-            reply(200, bad);
-            assertFailure(
-                    Kind.PERMANENT,
-                    () -> client.verifyReceipt("CREATE_TASK", "guid-a", "ou_a", KEY, 51, 7, 2));
-        }
-    }
-
-    private String platformMessage(String type, String id, String content) throws Exception {
-        var sender =
-                Map.of(
-                        "sender_type",
-                        "app",
-                        "id_type",
-                        "app_id",
-                        "id",
-                        "cli_test",
-                        "tenant_key",
-                        "test-company");
-        var message =
-                Map.of(
-                        "message_id",
-                        id,
-                        "msg_type",
-                        type,
-                        "create_time",
-                        "1767225600000",
-                        "sender",
-                        sender,
-                        "body",
-                        Map.of("content", content),
-                        "chat_id",
-                        "oc_group");
-        return json.writeValueAsString(
-                Map.of("code", 0, "data", Map.of("items", List.of(message))));
     }
 
     private void assertFailure(Kind kind, Runnable send) {

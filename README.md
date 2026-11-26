@@ -10,9 +10,9 @@
 
 已建立 Vue 3 / Vite 前端和 Java 17 / Spring Boot 后端，并接入飞书客户端 JS-SDK 免登、浏览器内飞书扫码、网页 OAuth 授权及服务端会话。
 
-当前包含申请人页面、登录落库及管理员工作台。登录按服务端 `user.roleType` 分流，ADMIN 进入 `#/admin/catalog/sources`。管理员可在「商品 → 源商品库」分别导入 OPPO、一加，查询当前 SKU 原文、完整分类路径和修改时间，或在「商品 → 商品清洗与识别」启动清洗并处理异常。其他角色进入申请人工作台，侧栏为「政策提交 → 提交政策 / 我的提交」，同一个表单切换零售、百亿。SDK 鉴权与用户登录是两个独立步骤。[管理员工作台](docs/architecture/admin-workspace.md)
+工作台根据服务端 `roleCodes` 和 `permissions` 开放菜单。系统管理员可以管理用户、角色、平台和审核设置，查询公司正式政策和全部品牌的机型补贴。采购在当前负责品牌内查看、导入和清洗商品，查询该品牌的机型补贴，并办理提交时按品牌指派给本人的终审。运营提交和管理本人政策并可查阅负责平台的正式政策。产品运营通过飞书卡片办理初审，在 ERP 查阅自己的初审签署记录。[角色和平台分工](docs/sql/role-platform-review-design.md)
 
-已接入 MyBatis-Plus / MySQL，登录时按 `(tenant_key, open_id)` 幂等保存至 `user_info`，新用户默认为 `APPLICANT`；重复登录更新姓名及有效 union_id，保留已有角色、部门、停用标记。部门不从姓名推断，不额外请求通讯录权限。停用用户拒绝登录，用户存储失败不建立会话。当前空库基线含二十三张表，覆盖商品目录、平台分工、政策提交、按轮审核和原单改期。提交政策页已接入在售目录、草稿、回填和提交。「我的提交」已接入本人分页列表、当前详情和驳回原因，申请人界面不显示提交轮次或历轮审核。对外短单号如 `ZC-000005`，重提不变；后台保留原有创建幂等标识、日志和快照。草稿和已驳回申请可继续编辑提交，管理员审核已接入。
+飞书身份按 `(tenant_key, open_id)` 保存至 `user_info`。首次登录自动初始化四个内置岗位及渠道平台，新用户默认关联运营岗位。现有岗位通过 `sys_user_role` 保存，停用账号拒绝登录。管理员按标准目录预设各品牌采购及品牌或系列的初审人。新单与退回重提在正式提交时冻结当轮分工、平台和快照。
 
 后端包结构约定：`controller` 接收请求，`dto` 定义请求对象，`vo` 定义响应对象，`entity` 映射数据库，`mapper` 执行持久化操作。服务接口放在 `service`，对应实现放在 `service.impl` 并命名为 `接口名Impl`；Controller 和服务之间通过接口注入，组件及事务注解放在实现类。`common.config` 负责配置注册，`common.interceptor` 承担登录态与请求来源校验。登录 challenge 响应独立为 `LoginChallengeResponse`。
 
@@ -24,11 +24,11 @@
 
 2026-11-11 Element Plus 替换验证：本轮 `npm.cmd run check` 通过 ESLint、Prettier、10 个测试文件中的 41 项测试及生产构建。组件回归覆盖渠道显隐、取消清除后保留内容、确认清除、平台独立回显、补贴互斥、菜单切换保留、日期秒精度与清空、附件暂存与移除、未接通提交的提示。按需导入并拆分登录页/申请工作台，构建未出现单个 JS 包超过 500 kB 的提示。用户授权后，已在真实浏览器检查 1440px 桌面、768px 平板和 390px 窄屏；修复窄屏时间截断、日期面板溢出和表格空状态行高，并验证日期选择确认、明细输入、渠道清除提示及菜单返回。使用本地临时组件预览，不代表真实飞书登录或业务提交联调；未运行后端检查。
 
-临期提醒在实际截止日期前两天及前一天的北京时间 17:00 分别私聊原申请人。执行期生效与截止、平台交接及商品批次异常仍按对应事件通知。测试群已验证连通性。[F 阶段验收与切换手册](docs/architecture/policy-workflow-phase-f.md)
+临期提醒在实际截止日期前两天及前一天的北京时间 17:00 分别私聊原申请人。执行期生效与截止、平台交接及商品导入异常暂停按对应事件通知。测试群已验证连通性。[F 阶段验收与切换手册](docs/architecture/policy-workflow-phase-f.md)
 
 ## 本地启动
 
-政策审核名单配置、分流冻结及切换条件见 [B 阶段交付记录](docs/architecture/policy-workflow-phase-b.md)。运营从飞书卡初审，采购在「差异化政策」终审。授权用户可按轮查看依据与附件，管理员可在途改派。[C 阶段交付记录](docs/architecture/policy-workflow-phase-c.md)
+政策审核名单配置、分流冻结及切换条件见 [B 阶段交付记录](docs/architecture/policy-workflow-phase-b.md)。运营从飞书卡初审，采购在「差异化政策」终审。授权用户可按轮查看依据与附件，提交时按管理员预设冻结本轮审核人，飞书送达结果由后台落库。[C 阶段交付记录](docs/architecture/policy-workflow-phase-c.md)
 
 管理员在「系统管理 → 政策审核设置」维护默认名单，本轮有多张政策在确认段实际叠加，且整轮所有参与单的商品 ID 集合完全相同时，由运营在飞书私聊卡上初审，通过后由本轮采购在「政策管理 → 差异化政策」终审。普通申请直接进入采购终审，终审通过即结束。[D 阶段工作台与本地验收](docs/architecture/policy-workflow-phase-d.md)
 
@@ -117,13 +117,13 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 应用会话使用 `POLICY_SESSION` Cookie（HttpOnly、SameSite=Lax、仅 Cookie 跟踪），闲置 30 分钟到期，最长不超过 2 小时及飞书 token 返回的有效期；后端重启会清空会话。该会话不是飞书实时登录状态订阅，用户撤销飞书授权不会即时清除既有应用会话；到期重新授权。多实例部署前需接入共享会话和缓存。
 
-所有 `/api/**` 默认需登录，只有公开配置、SDK 签名、登录 challenge/交换和退出接口放行。写请求统一校验 `Origin` 属于 `FEISHU_ALLOWED_ORIGINS` 且有 `X-Policy-Request: 1` 请求头，无跨域放行。使用 Knife4j/调试工具请求 POST 时也需这些请求头。登录 state 在 3 分钟内一次有效，成功后轮换会话 ID；前端不能自行提交姓名、open_id 或角色作为身份。登录创建用户只授予 APPLICANT，已有角色从数据库读取；管理员业务权限另行实现。
+所有 `/api/**` 默认需登录，只有公开配置、SDK 签名、登录 challenge/交换和退出接口放行。写请求统一校验 `Origin` 属于 `FEISHU_ALLOWED_ORIGINS` 且有 `X-Policy-Request: 1` 请求头，无跨域放行。使用 Knife4j/调试工具请求 POST 时也需这些请求头。登录 state 在 3 分钟内一次有效，成功后轮换会话 ID；前端不能自行提交姓名、open_id 或角色作为身份。首次登录授予运营岗位，已有账号按本企业当前启用岗位的权限并集授权。
 
 ## 吉客云商品导入
 
-1. 首次部署以当前二十三表空库基线建表后启动后端。首次登录生成申请人账号，首个管理员角色由用户在 Navicat 对已确认账号配置，刷新应用后进入管理员工作台。[空库建表步骤](docs/sql/database-design.md#1-在-navicat-建表)
+1. 使用 29 表新库前须接入新版权限、审核分工和平台成员模型。当前已接入的商品导入流程继续使用与现有后端匹配的开发库。[空库建表步骤](docs/sql/database-design.md#1-在-navicat-建表)
 2. 在后端环境变量或忽略的 `backend/.env.local.properties` 配置 `JACKYUN_APP_KEY`、`JACKYUN_APP_SECRET`，ISV 应用另配置 `JACKYUN_TOKEN`。`FEISHU_TENANT_KEY` 仅用于本系统的飞书登录及权限校验，不发送给吉客云。`JACKYUN_SOURCE_KEY` 是稳定的本地商品账套标识，默认 `jackyun`，与飞书企业标识无关。
-3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以管理员进入源商品库，点右上角「导入商品」，在弹窗选择品牌和导入范围。
+3. 确认该 AppKey 的上游额度，再按需设置 `JACKYUN_IMPORT_INTERVAL_SECONDS`（默认 5 秒）与 `JACKYUN_IMPORT_MAX_PAGES`（默认 2000 页）。重启后端后以采购账号进入源商品库，点右上角「导入商品」，弹窗自动选中管理员在「政策审核设置」分给该采购的品牌，采购选择导入范围即可。
 
 每条通过的源商品单独对应一条 `goods`，`sku_id` 延续该来源的原始 SKU。不同来源即使规格和颜色相同也分别建档，手工无来源商品的 SKU 为空。[来源与标准目录](docs/sql/database-design.md#来源与标准目录)
 
@@ -139,9 +139,11 @@ App Secret、token、ticket 不返回前端，也不写入日志；API 响应禁
 
 前端开发从 [frontend/README.md](frontend/README.md) 进入，目录职责、组件数据流、接口模型、会话路由、样式及整改验收见[前端架构与开发规范](docs/architecture/frontend-development.md)。管理员商品管理、申请人政策提交、按轮审核与机型补贴查询均已接入后端。[页面接口总览](docs/api/page-api-plan.md)
 
-首次建表由用户在 Navicat 选中目标空库，用 `SELECT VERSION(), DATABASE()` 和 `SHOW TABLES` 核对 MySQL 版本（8.0.16 及以上）、库名及空库状态。选择一份建表基线执行一次即可建立二十三张表。两份基线内容相同，仅包含结构及必要的会话设置。表关联、字段、草稿与审核历史见数据字典。[schema.sql](docs/sql/schema.sql) · [V1__create_policy_tables.sql](docs/sql/V1__create_policy_tables.sql) · [数据库设计与字段字典](docs/sql/database-design.md)
+首次建表由用户在 Navicat 选中目标空库，用 `SELECT VERSION(), DATABASE()` 和 `SHOW TABLES` 核对 MySQL 版本（8.0.16 及以上）、库名及空库状态。选择一份建表基线执行一次即可建立 29 张空表。两份基线内容相同，仅包含结构及必要的会话设置。表关联、字段、草稿与审核历史见数据字典。[schema.sql](docs/sql/schema.sql) · [V1__create_policy_tables.sql](docs/sql/V1__create_policy_tables.sql) · [数据库设计与字段字典](docs/sql/database-design.md)
 
-库中已有业务表时，先由用户核对现有结构及需保留的数据。重建会删除项目表及其中数据，需单独确认本次目标库、删除范围及备份恢复安排，再由用户在 Navicat 操作。历史重建许可只适用于当时确认的操作。[重建用删表脚本](docs/sql/drop_all_tables.sql)
+首位管理员须先用本人飞书账号登录，再由数据库负责人在 Navicat 核对同企业的用户 ID，并将该账号关联到 `sys_role.role_code = ADMIN` 的本企业岗位。之后可在 ERP 管理其他人的岗位、平台及审核分工。[空库启用](docs/sql/role-platform-review-design.md#7-并发空库启用与核验)
+
+库中已有业务表时，先由用户核对现有结构及需保留的数据。重建会删除项目表及其中数据，需单独确认本次目标库、删除范围及备份恢复安排，再由用户在 Navicat 操作。历史重建许可只适用于当时确认的操作。[仅适用于原 23 表结构的删表脚本](docs/sql/drop_all_tables.sql)
 
 2026-11-15 已确认新增用户头像字段。两份建表脚本均已包含 `avatar_url`，登录时同步头像。申请人与管理员顶部栏共用头像展示，空头像或图片失败显示姓名首字。
 

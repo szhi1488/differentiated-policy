@@ -5,18 +5,20 @@ import { useLatestQuery } from '../../../composables/useLatestQuery'
 
 const props = defineProps({
   group: { type: String, required: true },
-  modelValue: { type: Array, required: true },
-  disabled: Boolean,
+  title: { type: String, required: true },
+  modelValue: { type: Object, default: null },
 })
-const emit = defineEmits(['update:modelValue'])
-const label = computed(() => (props.group === 'PRODUCT' ? '产品运营审核人' : '采购审核人'))
-const open = ref(false)
+const emit = defineEmits(['select', 'close'])
+const roleName = computed(() => (props.group === 'PRODUCT' ? '产品运营' : '采购'))
+const dialogTitle = computed(() =>
+  props.group === 'PRODUCT' ? '选择产品运营初审人' : '选择采购终审人',
+)
+const selected = ref(props.modelValue)
 const page = ref(1)
 const pageSize = 10
 const filters = reactive({ name: '', department: '' })
 const applied = ref({ ...filters })
 const { data, error, loading, run } = useLatestQuery()
-const selectedIds = computed(() => new Set(props.modelValue.map((person) => person.id)))
 
 function load() {
   return run((signal) =>
@@ -26,185 +28,247 @@ function load() {
     ),
   )
 }
-watch([open, page, applied], () => {
-  if (open.value) {
-    void load()
-  }
-})
+watch([page, applied], load, { immediate: true })
+
 function search() {
   page.value = 1
   applied.value = { name: filters.name.trim(), department: filters.department.trim() }
 }
-function select(person, checked) {
-  if (props.disabled || checked === selectedIds.value.has(person.id)) {
-    return
-  }
-  emit(
-    'update:modelValue',
-    checked
-      ? [...props.modelValue, person]
-      : props.modelValue.filter((item) => item.id !== person.id),
-  )
+
+function choose(personId) {
+  selected.value = data.value.items.find((person) => person.id === personId)
 }
 </script>
 
 <template>
-  <section class="reviewer-picker" :aria-label="label">
-    <div class="picker-heading">
-      <h3>
-        {{ label }}
-        <small>{{ modelValue.length }} 人</small>
-      </h3>
-      <el-button size="small" :disabled="disabled" :aria-expanded="open" @click="open = !open">
-        {{ open ? '收起选择' : '选择人员' }}
-      </el-button>
-    </div>
-    <ul v-if="modelValue.length" class="picked-people" :aria-label="`已选${label}`">
-      <li v-for="person in modelValue" :key="person.id">
-        <span>{{ person.name }} · {{ person.department || '部门未填写' }}</span>
-        <button
-          type="button"
-          :aria-label="`移除 ${person.name} · ${person.department || '部门未填写'} · ID ${person.id}`"
-          :disabled="disabled"
-          @click="select(person, false)"
+  <el-dialog
+    :model-value="true"
+    :title="dialogTitle"
+    class="reviewer-picker-dialog"
+    width="min(540px, calc(100% - 24px))"
+    align-center
+    append-to-body
+    @update:model-value="!$event && emit('close')"
+  >
+    <template #header="{ titleId, titleClass }">
+      <h2 :id="titleId" :class="titleClass">{{ dialogTitle }}</h2>
+      <p class="picker-context">{{ title }}</p>
+    </template>
+
+    <form class="picker-filters" aria-label="查找审核人" @submit.prevent="search">
+      <el-input
+        v-model="filters.name"
+        aria-label="姓名"
+        placeholder="输入姓名"
+        maxlength="128"
+        clearable
+      />
+      <el-input
+        v-model="filters.department"
+        aria-label="部门"
+        placeholder="输入部门"
+        maxlength="128"
+        clearable
+      />
+      <el-button native-type="submit">查询</el-button>
+    </form>
+
+    <p v-if="loading" class="picker-status" role="status">正在查找人员…</p>
+    <el-alert v-else-if="error" :title="error.message" type="error" :closable="false" show-icon>
+      <el-button link @click="load">重新查询</el-button>
+    </el-alert>
+    <template v-else-if="data">
+      <p v-if="!data.items.length" class="picker-status" role="status">
+        暂无符合条件的{{ roleName }}人员
+      </p>
+      <el-radio-group
+        v-else
+        :model-value="selected?.id"
+        class="candidate-rows"
+        aria-label="候选审核人"
+        @update:model-value="choose"
+      >
+        <el-radio
+          v-for="person in data.items"
+          :key="person.id"
+          :value="person.id"
+          class="candidate-row"
         >
-          ×
-        </button>
-      </li>
-    </ul>
-    <p v-else class="picker-empty">尚未选择人员</p>
-    <div v-if="open" class="picker-search">
-      <form @submit.prevent="search">
-        <el-input
-          v-model="filters.name"
-          aria-label="姓名"
-          placeholder="姓名"
-          maxlength="128"
-          clearable
-        />
-        <el-input
-          v-model="filters.department"
-          aria-label="部门"
-          placeholder="部门"
-          maxlength="128"
-          clearable
-        />
-        <el-button native-type="submit">查询</el-button>
-      </form>
-      <p v-if="loading" role="status">正在查找人员…</p>
-      <el-alert v-else-if="error" :title="error.message" type="error" :closable="false">
-        <el-button link @click="load">重新查询</el-button>
-      </el-alert>
-      <template v-else-if="data">
-        <p v-if="!data.items.length" role="status">没有符合条件的人员</p>
-        <ul v-else class="candidate-rows" :aria-label="`${label}候选`">
-          <li v-for="person in data.items" :key="person.id">
-            <el-checkbox
-              :model-value="selectedIds.has(person.id)"
-              :disabled="disabled"
-              @change="select(person, $event)"
-            >
-              <strong>{{ person.name }}</strong>
-              · {{ person.department || '部门未填写' }}
-              <small>ID {{ person.id }}</small>
-            </el-checkbox>
-          </li>
-        </ul>
-        <el-pagination
-          v-if="data.total > pageSize"
-          v-model:current-page="page"
-          size="small"
-          layout="prev, pager, next"
-          :pager-count="5"
-          :page-size="pageSize"
-          :total="data.total"
-        />
-      </template>
+          <span class="candidate-identity">
+            <strong>{{ person.name }}</strong>
+            <span>{{ person.department || '部门未填写' }}</span>
+          </span>
+          <small class="candidate-id">ID {{ person.id }}</small>
+        </el-radio>
+      </el-radio-group>
+      <el-pagination
+        v-if="data.total > pageSize"
+        v-model:current-page="page"
+        class="picker-pagination"
+        size="small"
+        layout="prev, pager, next"
+        :pager-count="5"
+        :page-size="pageSize"
+        :total="data.total"
+      />
+    </template>
+
+    <div class="picker-selection" aria-live="polite">
+      <span class="selection-label">当前选择</span>
+      <span v-if="selected" class="selection-name">
+        {{ selected.name }} · {{ selected.department || '部门未填写' }}
+        <small>ID {{ selected.id }}</small>
+      </span>
+      <span v-else>未指定</span>
+      <el-button v-if="selected" type="primary" link @click="selected = null">清除选择</el-button>
     </div>
-  </section>
+
+    <template #footer>
+      <el-button @click="emit('close')">取消</el-button>
+      <el-button type="primary" @click="emit('select', selected)">确认选择</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
-.reviewer-picker {
-  min-width: 0;
-  color: #243a58;
-}
-.picker-heading {
+:global(.reviewer-picker-dialog.el-dialog) {
+  --el-dialog-padding-primary: 20px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  max-height: calc(100dvh - 24px);
+  border-radius: 12px;
 }
-.picker-heading h3 {
+
+:global(.reviewer-picker-dialog .el-dialog__body) {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+:global(.reviewer-picker-dialog .el-dialog__title) {
   margin: 0;
-  font-size: 16px;
+  color: #203651;
+  font-size: 18px;
+  font-weight: 650;
 }
-.picker-heading small,
-.candidate-rows small {
-  font-size: 12px;
-  font-weight: 400;
-  color: #526581;
-  margin-left: 6px;
-}
-.picked-people,
-.candidate-rows {
-  list-style: none;
-  padding: 0;
-}
-.picked-people {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0 0;
-}
-.picked-people li {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  padding: 3px 4px 3px 8px;
-  background: #eff5ff;
-  border-radius: 5px;
-  color: #315b94;
+
+.picker-context {
+  margin: 4px 0 0;
+  color: #596c84;
   font-size: 13px;
   overflow-wrap: anywhere;
 }
-.picked-people button {
-  border: 0;
-  color: inherit;
-  font: inherit;
-  font-size: 18px;
-  cursor: pointer;
-  background: transparent;
-}
-.picker-empty,
-.picker-search p {
-  color: #60728a;
-  font-size: 14px;
-}
-.picker-search {
-  margin-top: 12px;
-}
-.picker-search form {
+
+.picker-filters {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 8px;
+  margin-bottom: 14px;
 }
+
 .candidate-rows {
-  max-height: 255px;
+  display: flex;
+  flex-flow: column nowrap;
+  align-items: stretch;
+  width: 100%;
+  max-height: min(340px, 40dvh);
   overflow-y: auto;
-  margin: 10px 0;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
 }
-.candidate-rows li {
-  padding: 3px 2px;
-  border-bottom: 1px solid #edf1f7;
-}
-.candidate-rows :deep(.el-checkbox) {
+
+.candidate-row {
+  flex: none;
   height: auto;
-  min-height: 30px;
+  min-height: 48px;
+  margin: 0;
+  padding: 8px 12px;
   white-space: normal;
 }
-.candidate-rows :deep(.el-checkbox__label) {
+
+.candidate-row + .candidate-row {
+  border-top: 1px solid #eef1f6;
+}
+
+.candidate-row:hover,
+.candidate-row:focus-within,
+.candidate-row.is-checked {
+  background: #f2f7ff;
+}
+
+.candidate-row :deep(.el-radio__label) {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.candidate-identity,
+.selection-name {
   overflow-wrap: anywhere;
+}
+
+.candidate-identity strong {
+  color: #223751;
+}
+
+.candidate-identity span,
+.candidate-id,
+.selection-name small {
+  color: #596c84;
+  font-size: 12px;
+}
+
+.candidate-identity span {
+  margin-left: 8px;
+}
+
+.candidate-id,
+.selection-name small {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.picker-pagination {
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.picker-status {
+  padding: 26px 12px;
+  color: #596c84;
+  text-align: center;
+}
+
+.picker-selection {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e7ef;
+  color: #223751;
+  font-size: 13px;
+}
+
+.selection-label {
+  color: #596c84;
+}
+
+.picker-selection .el-button {
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  :global(.reviewer-picker-dialog.el-dialog) {
+    --el-dialog-padding-primary: 16px;
+  }
+
+  .candidate-id {
+    width: 100%;
+  }
 }
 </style>

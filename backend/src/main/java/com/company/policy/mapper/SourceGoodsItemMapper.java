@@ -47,10 +47,19 @@ public interface SourceGoodsItemMapper {
                AND marker.batch_key = CONCAT('CREATED-DATE-', #{createdDate}))
         </if>
         """;
-    String FILTER =
+    String BRAND_SCOPE =
             """
-        FROM source_goods_item item WHERE source_key = #{sourceKey}
-        <if test="brand != null">AND brand_name = #{brand}</if>
+        <choose>
+          <when test="brands != null and !brands.isEmpty()">AND brand_name IN
+            <foreach collection="brands" item="name" open="(" separator="," close=")">#{name}</foreach>
+          </when>
+          <otherwise>AND 1 = 0</otherwise>
+        </choose>
+        """;
+    String FILTER =
+            " FROM source_goods_item item WHERE source_key = #{sourceKey} "
+                    + BRAND_SCOPE
+                    + """
         <if test="keyword != null">
           AND (LOCATE(#{keyword}, goods_name) > 0 OR LOCATE(#{keyword}, goods_no) > 0
                OR LOCATE(#{keyword}, sku_name) > 0 OR LOCATE(#{keyword}, cate_full_name) > 0
@@ -135,7 +144,7 @@ public interface SourceGoodsItemMapper {
     int recordCreatedDates(GoodsSyncJob job, List<String> skuIds);
 
     @Select("<script> SELECT COUNT(*) " + FILTER + "</script>")
-    long count(String sourceKey, String brand, String keyword, LocalDate createdDate);
+    long count(String sourceKey, List<String> brands, String keyword, LocalDate createdDate);
 
     @Select(
             "<script> SELECT "
@@ -146,7 +155,7 @@ public interface SourceGoodsItemMapper {
                     + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset} </script>")
     List<SourceGoodsItem> page(
             String sourceKey,
-            String brand,
+            List<String> brands,
             String keyword,
             LocalDate createdDate,
             int limit,

@@ -1,6 +1,6 @@
 # 采购管理员审核与有效政策接口
 
-更新日期 2026-11-25。以下八个接口已由 `PolicyReviewController` 提供。管理员从「政策管理 → 差异化政策」查看已提交的申请。接口依据会话核对账号、角色和公司租户。申请人转任管理员后，由其他管理员审核其原申请。公共约定见 [申请人接口](policy-api.md)。
+采购从「政策管理 → 差异化政策」查看本人获派且已进入终审的轮次，包括已办理历史。系统管理员从每轮正式提交起可查看全公司的政策。审核时再校验本人有效指派、阶段、轮次、版本，并排除自审与同人双签。产品运营通过飞书办理初审，ERP 只展示本人实际签署的初审记录。[审核设置和权限](policy-review-settings.md)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -15,11 +15,17 @@
 
 ## 列表与详情
 
-需要查看某轮初审和终审人员、办理情况、退回来源及允许操作时，读取 `GET /api/policy-reviews/{id}?submissionVersion=轮次`。逐段变化以该轮冻结的 `before`、`after` 和 `candidates` 为依据。有完整候选时可对照申请人已选和未选的政策。某轮只记录前后名单时，按已记录的内容展示。初审同意转采购时主表仍为 `PENDING`。改派与终审都校验轮次和记录版本。[站内节点接口](../architecture/policy-workflow-phase-c.md#api-与字段)
+采购的列表、计数、单号详情和历轮查询按已进入采购终审的本人轮次取数。直接进入采购的轮次从提交起可见。新轮仍在初审或止于初审时，同一单号展示最近可见轮的提交内容、状态和历史。按轮详情及文件下载也校验具体轮次。
+
+按轮详情中的 `applicantName`、`submittedAt`、`requiresProductReview` 分别取本轮提交人、提交时间和冻结的初审分流决定。`productReviewers`、`purchaseReviewers` 保存本轮指派及实际办理信息，`rejectedAtStage` 指明退回所在环节。
+
+需要查看某轮初审和终审人员、办理情况、退回来源及允许操作时，读取 `GET /api/policy-reviews/{id}?submissionVersion=轮次`。逐段变化以该轮冻结的 `before`、`after` 和 `candidates` 为依据。有完整候选时可对照申请人已选和未选的政策。某轮只记录前后名单时，按已记录的内容展示。初审同意转采购时主表仍为 `PENDING`。终审校验冻结的指派、轮次和记录版本。[站内节点接口](../architecture/policy-workflow-phase-c.md#api-与字段)
 
 `page` 默认 1，`pageSize` 默认 20，范围 1 至 100。支持 `status`（PENDING、APPROVED、REJECTED）、`perspective`、`platformCode`（整单平台）、`verifyType`、`sceneType`、`applicant`、`submittedFrom`、`submittedTo`、`keyword`。提交日期为北京时间 `YYYY-MM-DD`，含所选的首尾日期。关键词匹配单号、申请人和快照机型名。列表按本轮提交时间、提交日志 ID 倒序。`counts` 返回其他筛选条件下各状态的数量，`total` 为当前状态筛选后的行数。
 
 详情的 `policy` 提供记录版本、提交轮次、审核状态和 `reviewable`，`snapshot` 保存本轮提交内容，`audit` 保存当前审核结果。`timeHistory` 返回本张原单首次获批截止、当前截止及历次调整。
+
+采购只读已结办轮次时，`recordVersion` 为 null。通用按轮详情的 `currentSubmissionVersion` 是该读者在各项权限下可见的最新正式轮号。兼岗用户可能在「我的初审记录」中看到比采购列表更新的一轮。
 
 列表可按 `reviewStage=PRODUCT_REVIEW` 或 `PURCHASE_REVIEW` 查询当前待审环节，状态计数与分页使用相同条件。终态的阶段为空。列表及详情摘要返回 `reviewStage`、`productReviewerName` 和 `productReviewedAt`。初审姓名和北京时间来自该轮实际签署的指派与决定，尚无决定时两项均为空。
 
@@ -35,7 +41,7 @@
 
 ## 审核
 
-办理人须为本企业有效管理员和本轮当前采购节点的有效指派成员，且不能自审；需要初审的轮次须已由其他人完成产品运营同意。列表及详情的 `reviewable` 和直接调用通过、驳回使用同一资格。缺节点、未指派或已移出返回 403 `POLICY_REVIEW_FORBIDDEN`；已失效的记录或轮次版本返回 409。新轮终审成功在同一事务记录实际签署人、节点决定及同组其余任务的「同组他人已处理」。[本轮指派和采购门控](../architecture/policy-workflow-phase-b.md)
+办理人须具备采购终审权限，并且是本轮终审节点的有效指派成员。系统排除自审和同人双签。列表及详情的 `reviewable` 和直接调用通过、驳回使用同一资格。缺节点、未指派或已移出返回 403 `POLICY_REVIEW_FORBIDDEN`。已失效的记录或轮次版本返回 409。新轮终审成功在同一事务记录实际签署人、节点决定及同组其余任务的「同组他人已处理」。[本轮指派和采购门控](../architecture/policy-workflow-phase-b.md)
 
 请求体示例：
 

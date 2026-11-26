@@ -17,6 +17,9 @@ it('按接口字段分别显示 SKU 和商品修改时间，并保留毫秒差�
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path) => {
+      if (path === '/api/admin/catalog/source-brands') {
+        return Response.json({ brandNames: ['OPPO手机'] })
+      }
       const body = path.startsWith('/api/admin/source-goods?')
         ? { items, total: items.length }
         : { configured: true, jobs: [] }
@@ -49,6 +52,9 @@ it('按接口字段分别显示 SKU 和商品修改时间，并保留毫秒差�
 
 it('从建档日任务查看该日商品，重置后恢复全部来源', async () => {
   const fetch = vi.fn(async (path) => {
+    if (path === '/api/admin/catalog/source-brands') {
+      return Response.json({ brandNames: ['OPPO手机', '一加手机'] })
+    }
     if (path.startsWith('/api/admin/source-goods?')) {
       return Response.json({ items: [], total: 0 })
     }

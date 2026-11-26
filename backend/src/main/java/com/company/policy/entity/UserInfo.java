@@ -17,6 +17,6 @@ public class UserInfo {
     private String name;
     private String avatarUrl;
     private String department;
-    private String roleType;
+    private Integer authVersion;
     private Integer isDeleted;
 }

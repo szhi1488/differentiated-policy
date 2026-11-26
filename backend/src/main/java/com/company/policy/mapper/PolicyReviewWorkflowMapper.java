@@ -32,13 +32,32 @@ public interface PolicyReviewWorkflowMapper {
 
     @Insert(
             """
-            <script>INSERT INTO policy_review_member
+            INSERT INTO policy_review_member
                 (policy_id, version, tenant_key, group_code, user_id, display_name, department)
-            VALUES <foreach collection="users" item="u" separator=",">
+            VALUES
                 (#{id}, #{version}, #{tenant}, #{group}, #{u.id}, #{u.name}, #{u.department})
-            </foreach></script>
             """)
-    int insertMembers(String tenant, long id, int version, String group, List<UserInfo> users);
+    int insertMember(String tenant, long id, int version, String group, UserInfo u);
+
+    record PlatformAudience(String perspective, String platformCode, Long userId) {}
+
+    @Select(
+            """
+        SELECT p.perspective,p.platform_code,u.id AS user_id FROM policy_round_platform p
+        LEFT JOIN user_platform_assignment m ON m.tenant_key=p.tenant_key AND m.perspective=p.perspective AND m.platform_code=p.platform_code
+        LEFT JOIN user_info u ON u.id=m.user_id AND u.tenant_key=m.tenant_key AND u.is_deleted=0
+        WHERE p.tenant_key=#{tenant} AND p.policy_id=#{id} AND p.version=#{version}
+        ORDER BY p.perspective,p.platform_code,u.id
+        """)
+    List<PlatformAudience> platformAudience(String tenant, long id, int version);
+
+    @Select(
+            """
+        SELECT t.version FROM platform_team t JOIN policy_round_platform p ON p.tenant_key=t.tenant_key
+          AND p.perspective=t.perspective AND p.platform_code=t.platform_code
+        WHERE p.tenant_key=#{tenant} AND p.policy_id=#{id} AND p.version=#{version} ORDER BY t.perspective,t.platform_code FOR UPDATE
+        """)
+    List<Integer> lockPlatformTeams(String tenant, long id, int version);
 
     record Member(long id, String groupCode, long userId, String memberStatus) {}
 

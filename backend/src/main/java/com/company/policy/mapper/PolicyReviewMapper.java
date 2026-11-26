@@ -15,10 +15,10 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface PolicyReviewMapper {
     // 管理员业务字段只读最近正式提交的快照，驳回后的暂存修改不能提前进入列表和筛选。
-    String FROM =
+    String AUDIT_JOIN =
             """
         FROM policy_apply p JOIN (
-          SELECT id, policy_id, tenant_key, version, created_at, snapshot_data, audit_status, workflow_version,
+          SELECT id, policy_id, tenant_key, version, created_at, snapshot_data, audit_status, brand_id, series_id,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.applicantName')), 'null') AS applicant_name,
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(snapshot_data, '$.form.perspective')), 'null') AS channel_type,
             JSON_EXTRACT(snapshot_data, '$.form.selectedPlatforms') AS platforms,
@@ -26,9 +26,26 @@ public interface PolicyReviewMapper {
             JSON_EXTRACT(snapshot_data, '$.form.sceneTypes') AS scene_types
           FROM policy_audit_log
         ) a
-          ON a.policy_id = p.id AND a.tenant_key = p.tenant_key AND a.version = p.current_version
+          ON a.policy_id = p.id AND a.tenant_key = p.tenant_key
+        """;
+    String FROM =
+            AUDIT_JOIN
+                    + " AND a.version=p.current_version "
+                    + PolicyReviewWorkflowMapper.ROUND_JOIN;
+    // 采购默认打开本人最近获派的轮次；当前轮改由其他采购办理时，历史记录仍能从列表找到。
+    String VISIBLE_FROM =
+            AUDIT_JOIN
+                    + """
+        <choose><when test="buyerId != null">AND a.version = (SELECT MAX(m.version)
+        """
+                    + PolicyPurchaseReviewMapper.VISIBLE_ASSIGNMENTS
+                    + """
+            AND m.tenant_key=p.tenant_key AND m.policy_id=p.id AND m.user_id=#{buyerId})
+        </when><otherwise>AND a.version=p.current_version</otherwise></choose>
         """
                     + PolicyReviewWorkflowMapper.ROUND_JOIN;
+    String ROUND_STATUS =
+            " CASE WHEN a.audit_status='SUBMITTED' THEN 'PENDING' ELSE a.audit_status END ";
     String PRODUCT_SIGNER =
             """
             LEFT JOIN policy_review_decision d ON d.policy_id=r.policy_id AND d.version=r.version
@@ -38,9 +55,12 @@ public interface PolicyReviewMapper {
             """;
     String COLUMNS =
             """
-        p.id, p.policy_no, p.tenant_key, p.applicant_id, a.applicant_name,
+        p.id, p.policy_no, p.tenant_key, p.applicant_id, a.applicant_name, a.brand_id, a.series_id,
         a.channel_type, a.platforms, a.write_off_type, a.scene_types,
-        p.status, p.record_version, p.current_version, a.created_at AS created_at,
+        """
+                    + ROUND_STATUS
+                    + """
+         AS status, p.record_version, a.version AS current_version, a.created_at AS created_at,
         signer.display_name AS product_reviewer_name, d.decided_at AS product_reviewed_at,
         """
                     + PolicyReviewWorkflowMapper.CURRENT_STAGE
@@ -51,7 +71,7 @@ public interface PolicyReviewMapper {
           AND p.status IN ('PENDING', 'APPROVED', 'REJECTED')
         """;
     String FILTERS =
-            "<if test='q.reviewStage != null'>AND p.status='PENDING' AND "
+            "<if test='q.reviewStage != null'>AND a.audit_status='SUBMITTED' AND "
                     + PolicyReviewWorkflowMapper.CURRENT_STAGE
                     + " = #{q.reviewStage}</if>"
                     + """
@@ -73,23 +93,38 @@ public interface PolicyReviewMapper {
         """;
 
     @Select(
-            "<script>SELECT p.status, COUNT(*) AS total "
-                    + FROM
+            "<script>SELECT "
+                    + ROUND_STATUS
+                    + " AS status, COUNT(*) AS total "
+                    + VISIBLE_FROM
                     + SUBMITTED
                     + FILTERS
-                    + " GROUP BY p.status</script>")
-    List<StatusCount> counts(String tenantKey, PolicyReviewQuery q);
+                    + " GROUP BY "
+                    + ROUND_STATUS
+                    + "</script>")
+    List<StatusCount> counts(String tenantKey, PolicyReviewQuery q, Long buyerId);
 
     @Select(
             "<script>SELECT "
                     + COLUMNS
-                    + FROM
+                    + VISIBLE_FROM
                     + PRODUCT_SIGNER
                     + SUBMITTED
                     + FILTERS
-                    + "<if test='q.status != null'> AND p.status = #{q.status}</if>"
+                    + "<if test='q.status != null'> AND "
+                    + ROUND_STATUS
+                    + " = #{q.status}</if>"
                     + " ORDER BY a.created_at DESC, a.id DESC LIMIT #{q.pageSize} OFFSET #{offset}</script>")
-    List<PolicyApply> list(String tenantKey, PolicyReviewQuery q, long offset);
+    List<PolicyApply> list(String tenantKey, PolicyReviewQuery q, long offset, Long buyerId);
+
+    @Select(
+            "<script>SELECT "
+                    + COLUMNS
+                    + VISIBLE_FROM
+                    + PRODUCT_SIGNER
+                    + SUBMITTED
+                    + " AND p.id=#{id}</script>")
+    PolicyApply latestVisible(long id, String tenantKey, Long buyerId);
 
     @Select(
             "SELECT "
@@ -136,7 +171,7 @@ public interface PolicyReviewMapper {
                 JOIN policy_goods_detail d ON d.platform_code=u.platform_code
                 WHERE d.policy_id=p.id AND d.version=a.version AND u.tenant_key=p.tenant_key
                   AND u.perspective=p.channel_type AND u.user_id=#{applicantId}
-                  AND owner.is_deleted=0 AND owner.role_type='APPLICANT')
+                  AND owner.is_deleted=0 AND u.member_kind='SUBMITTER')
             """;
 
     @Select(
@@ -149,12 +184,19 @@ public interface PolicyReviewMapper {
                     + ADJUSTABLE
                     + """
                        AND a.audit_time <= #{asOf}
+                       AND (#{brandId} IS NULL OR a.brand_id=#{brandId})
+                       AND (#{seriesId} IS NULL OR a.series_id=#{seriesId})
                        AND (p.applicant_id=#{applicantId}
                          OR p.end_time >= #{today})
                      ORDER BY p.id DESC
                      """)
     List<AdjustmentCandidate> adjustmentCandidates(
-            String tenant, long applicantId, LocalDateTime asOf, String today);
+            String tenant,
+            long applicantId,
+            LocalDateTime asOf,
+            String today,
+            Long brandId,
+            Long seriesId);
 
     record AdjustmentCandidate(
             long policyId,
@@ -242,10 +284,14 @@ public interface PolicyReviewMapper {
         """)
     List<Long> lockScopeModels(List<Long> ids);
 
-    @Select("SELECT spu_id, ram, rom FROM goods WHERE id = #{goodsId}")
+    @Select(
+            "SELECT g.spu_id, g.ram, g.rom, b.name AS brand_name FROM goods g JOIN brand b ON b.id = g.brand_id WHERE g.id = #{goodsId}")
     Configuration configuration(long goodsId);
 
-    record Configuration(long spuId, String ram, String rom) {}
+    record Configuration(long spuId, String ram, String rom, String brandName) {}
+
+    @Select("SELECT b.name FROM spu p JOIN brand b ON b.id = p.brand_id WHERE p.id = #{spuId}")
+    String modelBrandName(long spuId);
 
     @Select(
             "SELECT id FROM goods WHERE spu_id = #{spuId} AND ram = #{ram} AND rom = #{rom} ORDER BY id")
@@ -310,6 +356,28 @@ public interface PolicyReviewMapper {
             String auditorName,
             String remark,
             LocalDateTime now);
+
+    String PURCHASE_SCOPE =
+            "<if test='buyerId != null'> AND EXISTS (SELECT 1 "
+                    + PolicyPurchaseReviewMapper.VISIBLE_ASSIGNMENTS
+                    + " AND m.tenant_key=a.tenant_key AND m.policy_id=a.policy_id AND m.version=a.version AND m.user_id=#{buyerId})</if>";
+
+    @Select(
+            "<script>SELECT COUNT(*) FROM policy_audit_log a WHERE "
+                    + PolicyApplyMapper.AUDIT_SCOPE
+                    + PURCHASE_SCOPE
+                    + "</script>")
+    long countVisibleAudits(long id, String tenantKey, Long buyerId);
+
+    @Select(
+            "<script>SELECT "
+                    + PolicyApplyMapper.AUDIT_COLUMNS
+                    + " FROM policy_audit_log a WHERE "
+                    + PolicyApplyMapper.AUDIT_SCOPE
+                    + PURCHASE_SCOPE
+                    + " ORDER BY a.version DESC LIMIT #{size} OFFSET #{offset}</script>")
+    List<PolicyAuditLog> visibleAudits(
+            long id, String tenantKey, Long buyerId, int size, long offset);
 
     record StatusCount(String status, long total) {}
 }

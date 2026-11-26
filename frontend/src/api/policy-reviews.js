@@ -20,3 +20,9 @@ export function reviewRoundAttachmentUrl(id, submissionVersion, fileId) {
 export function timeChangeAttachmentUrl(id, submissionVersion, changeId, fileId) {
   return `${roundPath(id)}/time-changes/${encodeURIComponent(changeId)}/attachments/${encodeURIComponent(fileId)}/content?${new URLSearchParams({ submissionVersion })}`
 }
+
+export function readProductDecisions(page, pageSize, signal) {
+  return request(base + '/my-product-decisions?' + new URLSearchParams({ page, pageSize }), {
+    signal,
+  })
+}

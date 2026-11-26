@@ -71,7 +71,13 @@ export function useCatalogCenter() {
   const stats = computed(() => summary.data.value ?? { total: 0, active: 0, stopped: 0 })
   const categoryTotal = computed(() => (activeOnly.value ? stats.value.active : stats.value.total))
   const series = computed(() => summary.data.value?.series ?? [])
-  const brands = computed(() => [...new Set(series.value.map((row) => row.brandName))])
+  const assignedBrands = computed(() => summary.data.value?.brandNames)
+  const brands = computed(
+    () => assignedBrands.value ?? [...new Set(series.value.map((row) => row.brandName))],
+  )
+  const singleBrand = computed(() =>
+    assignedBrands.value?.length === 1 ? assignedBrands.value[0] : '',
+  )
   const seriesOptions = computed(() =>
     series.value.filter((row) => !filters.brand || row.brandName === filters.brand),
   )
@@ -134,7 +140,7 @@ export function useCatalogCenter() {
   }
 
   function loadSummary() {
-    return summary.run(readCatalogGoodsSummary)
+    return summary.run(readCatalogGoodsSummary, { keepData: true })
   }
 
   function loadDetail() {
@@ -214,7 +220,7 @@ export function useCatalogCenter() {
   }
 
   function reset() {
-    Object.assign(filters, emptyFilters())
+    Object.assign(filters, emptyFilters(), { brand: singleBrand.value })
     categoryKeyword.value = ''
     search()
   }
@@ -251,6 +257,8 @@ export function useCatalogCenter() {
     categoryTotal,
     categoryBranches,
     brands,
+    assignedBrands,
+    singleBrand,
     stats,
     activeOnly,
     seriesOptions,

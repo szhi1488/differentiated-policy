@@ -16,7 +16,7 @@ import org.apache.ibatis.annotations.Update;
 public interface PolicyApplyMapper {
     String COLUMNS =
             """
-        id, policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms, write_off_type,
+        id, policy_no, tenant_key, applicant_id, applicant_name, brand_id, series_id, channel_type, platforms, write_off_type,
         scene_types, is_estimated, start_time, end_time, remark, goods_form_json, attachment_urls,
         status, current_version, record_version
         """;
@@ -40,7 +40,7 @@ public interface PolicyApplyMapper {
                     + " WHERE a.policy_id=p.id AND a.tenant_key=p.tenant_key AND a.version=p.current_version) AS review_stage ";
     String AUDIT_COLUMNS =
             """
-            a.id, a.version, a.audit_status, a.auditor_name, a.audit_comment, a.audit_time, a.created_at, a.workflow_version,
+            a.id, a.version, a.audit_status, a.auditor_name, a.audit_comment, a.audit_time, a.created_at,
             CASE WHEN a.audit_status='REJECTED' THEN
               (SELECT CASE d.group_code WHEN 'PRODUCT' THEN 'PRODUCT_REVIEW' WHEN 'PURCHASE' THEN 'PURCHASE_REVIEW' END
                 FROM policy_review_decision d WHERE d.policy_id=a.policy_id AND d.tenant_key=a.tenant_key
@@ -77,12 +77,12 @@ public interface PolicyApplyMapper {
     @Insert(
             """
         INSERT INTO policy_apply (
-            policy_no, tenant_key, applicant_id, applicant_name, channel_type, platforms,
+            policy_no, tenant_key, applicant_id, applicant_name, brand_id, series_id, channel_type, platforms,
             write_off_type, scene_types, is_estimated, start_time, end_time, remark,
             goods_form_json, attachment_urls, created_at, updated_at
         ) VALUES (
             #{entry.policyNo}, #{entry.tenantKey}, #{entry.applicantId}, #{entry.applicantName},
-            #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.sceneTypes},
+            #{entry.brandId}, #{entry.seriesId}, #{entry.channelType}, #{entry.platforms}, #{entry.writeOffType}, #{entry.sceneTypes},
             #{entry.isEstimated}, #{entry.startTime}, #{entry.endTime}, #{entry.remark},
             #{entry.goodsFormJson}, #{entry.attachmentUrls}, #{now}, #{now}
         )
@@ -92,7 +92,7 @@ public interface PolicyApplyMapper {
 
     @Update(
             """
-        UPDATE policy_apply SET channel_type = #{entry.channelType}, platforms = #{entry.platforms},
+        UPDATE policy_apply SET brand_id = #{entry.brandId}, series_id = #{entry.seriesId}, channel_type = #{entry.channelType}, platforms = #{entry.platforms},
             write_off_type = #{entry.writeOffType}, scene_types = #{entry.sceneTypes}, is_estimated = #{entry.isEstimated},
             start_time = #{entry.startTime}, end_time = #{entry.endTime}, remark = #{entry.remark},
             goods_form_json = #{entry.goodsFormJson},
@@ -125,16 +125,19 @@ public interface PolicyApplyMapper {
 
     @Insert(
             """
-        INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data, audit_status, created_at, workflow_version)
-        VALUES (#{id}, #{tenantKey}, #{version}, #{snapshot}, 'SUBMITTED', #{now}, #{workflowVersion})
+        INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data, audit_status, created_at, brand_id, series_id, perspective)
+        VALUES (#{entry.id}, #{entry.tenantKey}, #{version}, #{snapshot}, 'SUBMITTED', #{now}, #{entry.brandId}, #{entry.seriesId}, #{entry.channelType})
         """)
-    int insertAudit(
-            long id,
-            String tenantKey,
-            int version,
-            String snapshot,
-            java.time.LocalDateTime now,
-            int workflowVersion);
+    int insertAudit(PolicyApply entry, int version, String snapshot, java.time.LocalDateTime now);
+
+    @Insert(
+            """
+        <script>INSERT INTO policy_round_platform (policy_id,version,tenant_key,perspective,platform_code)
+        VALUES <foreach collection="codes" item="code" separator=",">
+          (#{entry.id},#{version},#{entry.tenantKey},#{entry.channelType},#{code})
+        </foreach></script>
+        """)
+    int insertPlatforms(PolicyApply entry, int version, List<String> codes);
 
     @Select(
             """
@@ -165,15 +168,15 @@ public interface PolicyApplyMapper {
     @Insert(
             """
         <script>
-        INSERT INTO policy_goods_detail (policy_id, version, platform_code, goods_id, spu_id, ram, rom, created_at)
+        INSERT INTO policy_goods_detail (policy_id, version, platform_code, goods_id, spu_id, ram, rom, created_at, brand_id, series_id)
         VALUES
         <foreach collection="lines" item="line" separator=",">
-            (#{id}, #{version}, #{line.platform}, #{line.goodsId}, #{line.spuId}, #{line.ram}, #{line.rom}, #{now})
+            (#{entry.id}, #{version}, #{line.platform}, #{line.goodsId}, #{line.spuId}, #{line.ram}, #{line.rom}, #{now}, #{entry.brandId}, #{entry.seriesId})
         </foreach>
         </script>
         """)
     int insertDetails(
-            long id,
+            PolicyApply entry,
             int version,
             @Param("lines") List<DetailLine> lines,
             java.time.LocalDateTime now);

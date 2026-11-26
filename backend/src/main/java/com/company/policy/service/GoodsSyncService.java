@@ -4,11 +4,15 @@ import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.GoodsSyncResponse;
 import com.company.policy.vo.GoodsSyncResponse.Overview;
+import com.company.policy.vo.GoodsSyncResponse.SourceBrands;
 import com.company.policy.vo.GoodsSyncResponse.SourcePage;
 import java.time.LocalDate;
 
 /** 管理吉客云源商品的分页导入和断点续跑，并提供已导入商品查询。 */
 public interface GoodsSyncService {
+    /** 返回源商品导入或清洗页面可选的负责品牌。 */
+    SourceBrands sourceBrands(CurrentUserResponse session);
+
     /** 查询当前账套是否可导入，以及各品牌最近一次导入任务的状态。 */
     Overview overview(CurrentUserResponse session);
 

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { authSession } from './composables/useAuthSession'
 import { isFeishuClient } from './utils/feishu-sdk'
+import { ADMIN_NAV_GROUPS, visibleGroups } from './constants/navigation'
 import { workspaceDestination } from './utils/workspace-route'
 import FeishuLoginPage from './views/auth/FeishuLoginPage.vue'
 const ApplicantLayout = defineAsyncComponent(() => import('./layouts/ApplicantLayout.vue'))
@@ -50,7 +51,13 @@ onUnmounted(() => {
   <el-config-provider :locale="zhCn">
     <template v-if="status === 'ready' && login">
       <template v-if="routeMatchesUser">
-        <AdminLayout :key="revision" v-if="login.user?.roleType === 'ADMIN'" :user="login.user" />
+        <AdminLayout
+          :key="revision"
+          v-if="
+            visibleGroups(login.user, ADMIN_NAV_GROUPS).length || !visibleGroups(login.user).length
+          "
+          :user="login.user"
+        />
         <ApplicantLayout v-else :key="revision" />
       </template>
     </template>

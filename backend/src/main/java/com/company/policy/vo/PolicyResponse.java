@@ -38,7 +38,8 @@ public record PolicyResponse(
             List<ApplicantCatalogResponse> goods,
             List<PolicyConsent.EndAdjustment> endAdjustments,
             TimeHistory timeHistory,
-            String reviewStage) {}
+            String reviewStage,
+            PolicyReviewRoundResponse.Progress reviewProgress) {}
 
     public record TimeHistory(String initialEnd, String currentEnd, List<TimeChange> changes) {}
 
@@ -135,8 +136,10 @@ public record PolicyResponse(
             String auditComment,
             String auditTime,
             String submittedAt,
-            int workflowVersion,
             String rejectedAtStage) {}
 
-    public record AuditDetail(AuditSummary log, Snapshot snapshot) {}
+    public record AuditDetail(
+            AuditSummary log,
+            Snapshot snapshot,
+            PolicyReviewRoundResponse.Progress reviewProgress) {}
 }

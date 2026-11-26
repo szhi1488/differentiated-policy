@@ -14,6 +14,38 @@ afterEach(() => {
 })
 const button = (root, label) => root.findAll('button').find((node) => node.text() === label)
 
+it('兼岗采购从列表打开自己的已结办轮次，可同时持有其他岗位的更新轮次', async () => {
+  const detail = currentDetail()
+  Object.assign(detail.policy, { status: 'REJECTED', recordVersion: null, reviewable: false })
+  detail.audit = { ...detail.audit, auditStatus: 'REJECTED' }
+  const round = {
+    ...reviewRound(),
+    currentSubmissionVersion: 3,
+    recordVersion: null,
+    status: 'REJECTED',
+    reviewStage: null,
+    rejectedAtStage: 'PURCHASE_REVIEW',
+    allowedActions: [],
+  }
+  vi.stubGlobal('fetch', async (path) => {
+    if (path === '/api/admin/policies/5') {
+      return Response.json(detail)
+    }
+    if (path === '/api/policy-reviews/5?submissionVersion=2') {
+      return Response.json(round)
+    }
+    return Response.json({ items: [{ ...detail.policy, platforms: ['JD'] }], total: 1, counts: {} })
+  })
+  wrapper = mount(AdminPoliciesPage, {
+    global: { stubs: { teleport: true, ElSelect: true } },
+  })
+  await flushPromises()
+  await wrapper.get('[aria-label="查看政策 ZC-000005"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('[aria-label="本轮审核进度"]').text()).toContain('已驳回')
+  expect(button(wrapper, '通过')).toBeUndefined()
+})
+
 it('查看政策时改期流水独占中间页签，切换申请重新显示当前申请', async () => {
   const detail = currentDetail()
   const initialEnd = detail.snapshot.form.endTime
@@ -257,11 +289,11 @@ it('记录和快照读取失败分别显示实际错误并可重试，空历史�
   expect(wrapper.text()).toContain('未填写审核意见')
   expect(wrapper.text()).toContain('历史机型名称')
   expect(wrapper.text()).toContain('第一轮成员暂不可用')
-  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="本轮审核进度"]').exists()).toBe(false)
   failRound = false
   await button(wrapper, '重新读取本轮审核信息').trigger('click')
   await flushPromises()
-  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(true)
+  expect(wrapper.find('[aria-label="本轮审核进度"]').exists()).toBe(true)
   expect(fetch.mock.calls.filter(([path]) => path.endsWith('/901'))).toHaveLength(2)
   await button(wrapper, '返回审核记录').trigger('click')
   vi.mocked(fetch).mockResolvedValue(Response.json({ items: [], total: 0 }))

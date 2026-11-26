@@ -4,12 +4,12 @@ import { useLatestQuery } from './useLatestQuery'
 
 const pageSize = 20
 
-export function usePolicySubmissions() {
+export function usePolicySubmissions(load = listMyPolicies) {
   const filters = reactive({ page: 1, status: '', perspective: '', platformCode: '' })
   const list = useLatestQuery()
 
   async function refresh() {
-    await list.run((signal) => listMyPolicies({ ...filters, pageSize }, signal))
+    await list.run((signal) => load({ ...filters, pageSize }, signal))
     const result = list.data.value
     const lastPage = Math.max(1, Math.ceil((result?.total ?? 0) / pageSize))
     if (result && filters.page > lastPage) {

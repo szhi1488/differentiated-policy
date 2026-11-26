@@ -94,8 +94,9 @@ public class PolicyApplyController {
 
     @GetMapping("/platforms")
     @Operation(summary = "读取本人可以提交政策的渠道及平台")
-    public List<ChannelPlatform> assignedPlatforms(HttpServletRequest request) {
-        return policies.assignedPlatforms(sessions.requireLogin(request).user());
+    public List<ChannelPlatform> assignedPlatforms(
+            @RequestParam(defaultValue = "SUBMIT") String usage, HttpServletRequest request) {
+        return policies.assignedPlatforms(sessions.requireLogin(request).user(), usage);
     }
 
     @GetMapping("/subsidy-timeline")
@@ -190,7 +191,9 @@ public class PolicyApplyController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "查看本人申请", description = "草稿和驳回读取当前表单及目录信息，待审和通过读取当前轮次提交快照。")
+    @Operation(
+            summary = "查看本人申请",
+            description = "草稿和驳回读取当前表单，待审和通过读取当前轮次快照。reviewProgress 展示最近正式提交的审核进度。")
     public Detail detail(@PathVariable long id, HttpServletRequest request) {
         return policies.detail(sessions.requireLogin(request).user(), id);
     }
@@ -213,6 +216,26 @@ public class PolicyApplyController {
                 new PolicyListQuery(page, pageSize, status, perspective, platformCode));
     }
 
+    @GetMapping("/shared")
+    @Operation(summary = "查看本人负责平台的最新正式政策")
+    public Page<Summary> shared(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String perspective,
+            @RequestParam(required = false) String platformCode,
+            HttpServletRequest request) {
+        return policies.shared(
+                sessions.requireLogin(request).user(),
+                new PolicyListQuery(page, pageSize, status, perspective, platformCode));
+    }
+
+    @GetMapping("/shared/{id}")
+    @Operation(summary = "查看负责平台政策的最近正式快照", description = "reviewProgress 为该轮冻结的分工和实际办理记录。")
+    public Detail sharedDetail(@PathVariable long id, HttpServletRequest request) {
+        return policies.sharedDetail(sessions.requireLogin(request).user(), id);
+    }
+
     @GetMapping("/{id}/audit-logs")
     @Operation(summary = "分页查看本人申请历轮审核", description = "每页 1 至 100 条，按提交轮次倒序。草稿没有历史，待审轮次的审核信息为空。")
     public Page<AuditSummary> auditLogs(
@@ -224,7 +247,9 @@ public class PolicyApplyController {
     }
 
     @GetMapping("/{id}/audit-logs/{logId}")
-    @Operation(summary = "查看本人申请某轮审核及提交快照", description = "logId 取自审核记录列表，返回该轮提交时的表单、商品快照及审核结果。")
+    @Operation(
+            summary = "查看本人申请某轮审核及提交快照",
+            description = "logId 取自审核记录列表，返回该轮的表单、商品快照及 reviewProgress 审核进度。")
     public AuditDetail auditDetail(
             @PathVariable long id, @PathVariable long logId, HttpServletRequest request) {
         return policies.auditDetail(sessions.requireLogin(request).user(), id, logId);

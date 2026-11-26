@@ -51,13 +51,17 @@ public interface PolicyAttachmentMapper {
             long policyId, long logId, String tenantKey, long applicantId, FileReference reference);
 
     @Select(
-            HISTORY
-                    + """
-            AND p.status IN ('PENDING', 'APPROVED', 'REJECTED')
-            AND EXISTS (SELECT 1 FROM policy_audit_log latest WHERE latest.policy_id = p.id
-                AND latest.tenant_key = p.tenant_key AND latest.version = p.current_version)
-            """)
-    Membership adminHistory(long policyId, long logId, String tenantKey, FileReference reference);
+            "SELECT version FROM policy_audit_log WHERE tenant_key=#{tenant} AND policy_id=#{id} AND id=#{logId}")
+    Integer versionOf(String tenant, long id, long logId);
+
+    @Select(
+            "SELECT p.status, a.id AS audit_id, "
+                    + HISTORICAL_FILE
+                    + " AS attached "
+                    + PlatformPolicyMapper.SCOPE
+                    + " AND p.id=#{id} AND a.version=#{version}")
+    Membership sharedRound(
+            String tenant, long userId, long id, int version, FileReference reference);
 
     @Select(
             "SELECT p.status, a.id AS audit_id, "
@@ -67,11 +71,21 @@ public interface PolicyAttachmentMapper {
     Membership reviewRound(
             String tenant, long userId, long id, int version, FileReference reference);
 
-    @Select(
+    String CHANGE_FILE =
             "SELECT p.status, a.id AS audit_id, EXISTS (SELECT 1 FROM policy_time_change c"
                     + " WHERE c.policy_id=p.id AND c.tenant_key=p.tenant_key AND c.audit_log_id=a.id"
-                    + " AND c.id=#{changeId} AND JSON_CONTAINS(c.attachment_json, #{reference.file})) AS attached "
-                    + PolicyReviewRoundMapper.VISIBLE_ROUND)
+                    + " AND c.id=#{changeId} AND JSON_CONTAINS(c.attachment_json, #{reference.file})) AS attached ";
+
+    @Select(CHANGE_FILE + PlatformPolicyMapper.SCOPE + " AND p.id=#{id} AND a.version=#{version}")
+    Membership sharedChange(
+            String tenant,
+            long userId,
+            long id,
+            int version,
+            long changeId,
+            FileReference reference);
+
+    @Select(CHANGE_FILE + PolicyReviewRoundMapper.VISIBLE_ROUND)
     Membership changeFile(
             String tenant,
             long userId,

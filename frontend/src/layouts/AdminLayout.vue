@@ -1,14 +1,23 @@
 <script setup>
-import { provide, reactive, ref, watch } from 'vue'
+import { computed, provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import WorkspaceTopbar from './components/WorkspaceTopbar.vue'
-import { ADMIN_NAV_GROUPS as navGroups } from '../constants/navigation'
+import { visibleGroups, homePage, canOpen } from '../constants/navigation'
 import { useWorkspaceSidebar } from './use-workspace-sidebar'
 import './workspace-navigation.css'
+import PolicyBanner from './components/PolicyBanner.vue'
+import './applicant-layout.css'
 import './admin-layout.css'
 
-defineProps({ user: { type: Object, required: true } })
+import { useWorkspacePolicyForm } from '../composables/useWorkspacePolicyForm'
+import { roleLabels } from '../constants/users'
+const props = defineProps({ user: { type: Object, required: true } })
+const applicationRoute = canOpen(props.user, 'apply') ? useWorkspacePolicyForm() : null
+const navGroups = computed(() => visibleGroups(props.user))
+function location(name) {
+  return name === 'apply' && applicationRoute ? applicationRoute.value : { name }
+}
 const route = useRoute()
 const router = useRouter()
 const { collapsed, menuOpen, expanded, toggle } = useWorkspaceSidebar(600)
@@ -22,7 +31,7 @@ watch(
 watch(
   () => route.meta.menu || route.name,
   (name) => {
-    const group = navGroups.find(({ links }) => links.some((link) => link.name === name))
+    const group = navGroups.value.find(({ links }) => links.some((link) => link.name === name))
     if (group) {
       openGroups[group.id] = true
     }
@@ -42,16 +51,12 @@ watch(
       class="admin-sidebar workspace-sidebar"
       :class="{ 'is-open': menuOpen }"
     >
-      <router-link
-        :to="{ name: 'catalog-sources' }"
-        class="workspace-brand"
-        @click="menuOpen = false"
-      >
+      <router-link :to="location(homePage(user))" class="workspace-brand" @click="menuOpen = false">
         <AppIcon name="workspace-brand" class="admin-brand-icon" :size="23" />
         <strong>电商运营平台</strong>
       </router-link>
 
-      <nav class="admin-nav workspace-sidebar-nav" aria-label="管理员导航">
+      <nav class="admin-nav workspace-sidebar-nav" aria-label="工作台导航">
         <div v-for="group in navGroups" :key="group.id" class="admin-nav-section">
           <el-button
             class="admin-nav-group workspace-nav-group"
@@ -68,7 +73,7 @@ watch(
             <router-link
               v-for="link in group.links"
               :key="link.name"
-              :to="{ name: link.name }"
+              :to="location(link.name)"
               class="workspace-nav-item"
               :class="{ 'is-active': (route.meta.menu || route.name) === link.name }"
               @click="menuOpen = false"
@@ -91,14 +96,15 @@ watch(
       <WorkspaceTopbar
         :user="user"
         :groups="navGroups"
-        role-label="管理员"
+        :role-label="roleLabels(user.roleCodes)"
         sidebar-id="admin-sidebar"
         :menu-expanded="expanded"
         @toggle-menu="toggle"
-        @navigate="(name) => router.push({ name })"
+        @navigate="(name) => router.push(location(name))"
       />
       <div class="workspace-content-background">
         <main class="admin-content">
+          <PolicyBanner v-if="route.name === 'apply' || route.name === 'submissions'" />
           <router-view />
         </main>
       </div>

@@ -6,14 +6,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.company.policy.common.config.AttachmentProperties;
+import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.GlobalExceptionHandler;
 import com.company.policy.common.interceptor.LoginInterceptor;
 import com.company.policy.entity.UserInfo;
 import com.company.policy.mapper.PolicyAttachmentMapper;
+import com.company.policy.mapper.RoleAccessMapper;
 import com.company.policy.mapper.UserInfoMapper;
-import com.company.policy.service.CatalogAccess;
 import com.company.policy.service.JsSdkSignatureService;
 import com.company.policy.service.impl.AttachmentServiceImpl;
+import com.company.policy.service.impl.CatalogAccessImpl;
 import com.company.policy.service.impl.LoginSessionServiceImpl;
 import com.company.policy.vo.AuthSessionResponse;
 import com.company.policy.vo.CurrentUserResponse;
@@ -47,24 +49,26 @@ class AttachmentControllerTest {
     private AttachmentServiceImpl storage;
     private MockHttpSession owner;
     private UserInfo account;
+    private CatalogAccessImpl access;
 
     @BeforeEach
     void setup() {
         account = new UserInfo();
         account.setId(1L);
+        account.setTenantKey("tenant");
         account.setIsDeleted(0);
         when(users.findIdentity(anyString(), anyString())).thenReturn(account);
         when(users.lockAttachmentOwner(anyString(), anyLong())).thenReturn(1L);
         var properties = new AttachmentProperties();
         properties.setRoot(directory.toString());
+        var tenant = new FeishuProperties();
+        tenant.setTenantKey("tenant");
+        var roles = mock(RoleAccessMapper.class);
+        when(roles.hasPermission(eq("tenant"), anyLong(), eq("policy.apply"))).thenReturn(1);
+        access = new CatalogAccessImpl(users, tenant, roles);
         storage =
                 new AttachmentServiceImpl(
-                        properties,
-                        json,
-                        clock,
-                        users,
-                        mock(PolicyAttachmentMapper.class),
-                        mock(CatalogAccess.class));
+                        properties, json, clock, users, mock(PolicyAttachmentMapper.class), access);
         mvc =
                 MockMvcBuilders.standaloneSetup(
                                 new AttachmentController(storage, sessions),
@@ -81,7 +85,14 @@ class AttachmentControllerTest {
         sessions.establish(
                 request,
                 new AuthSessionResponse(
-                        new CurrentUserResponse("1", openId, tenant, "测试用户", "APPLICANT", null),
+                        new CurrentUserResponse(
+                                "1",
+                                openId,
+                                tenant,
+                                "测试用户",
+                                java.util.List.of("OPERATIONS"),
+                                java.util.List.of(),
+                                null),
                         Instant.now().plusSeconds(600)));
         return (MockHttpSession) request.getSession();
     }
@@ -146,16 +157,18 @@ class AttachmentControllerTest {
         properties.setRoot(directory.toString());
         var reopened =
                 new AttachmentServiceImpl(
-                        properties,
-                        json,
-                        clock,
-                        users,
-                        mock(PolicyAttachmentMapper.class),
-                        mock(CatalogAccess.class));
+                        properties, json, clock, users, mock(PolicyAttachmentMapper.class), access);
         var download =
                 reopened.download(
                         id,
-                        new CurrentUserResponse("1", "open", "tenant", "测试用户", "APPLICANT", null));
+                        new CurrentUserResponse(
+                                "1",
+                                "open",
+                                "tenant",
+                                "测试用户",
+                                java.util.List.of("OPERATIONS"),
+                                java.util.List.of(),
+                                null));
         try (var input = download.resource().getInputStream()) {
             assertThat(input.readAllBytes()).isEqualTo(file.getBytes());
         }
@@ -198,7 +211,14 @@ class AttachmentControllerTest {
         sessions.establish(
                 otherRequest,
                 new AuthSessionResponse(
-                        new CurrentUserResponse("2", "other", "tenant", "其他用户", "ADMIN", null),
+                        new CurrentUserResponse(
+                                "2",
+                                "other",
+                                "tenant",
+                                "其他用户",
+                                java.util.List.of("ADMIN"),
+                                java.util.List.of(),
+                                null),
                         Instant.now().plusSeconds(600)));
         var other = (MockHttpSession) otherRequest.getSession();
         mvc.perform(get("/api/attachments/{id}/content", id).session(other))
@@ -213,7 +233,7 @@ class AttachmentControllerTest {
         mvc.perform(
                         get("/api/attachments/{id}/content", id)
                                 .session(session("other-tenant", "open")))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isForbidden());
         account.setIsDeleted(1);
         mvc.perform(get("/api/attachments/{id}/content", id).session(owner))
                 .andExpect(status().isForbidden());

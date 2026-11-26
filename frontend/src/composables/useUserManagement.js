@@ -2,7 +2,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { listUsers, readUser, readUserStats } from '../api/admin-users'
 import { useLatestQuery } from './useLatestQuery'
 
-const initialFilters = () => ({ keyword: '', roleType: '', status: '' })
+const initialFilters = () => ({ keyword: '', roleCode: '', status: '' })
 
 export function useUserManagement() {
   const filters = reactive(initialFilters())

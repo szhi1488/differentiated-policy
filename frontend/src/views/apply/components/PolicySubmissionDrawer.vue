@@ -2,7 +2,6 @@
 import { usePolicySubmissionDetail } from '../../../composables/usePolicySubmissions'
 import { policyStatusLabel, POLICY_STATUS_TYPES, policyIsEditable } from '../../../constants/policy'
 import PolicySubmissionContent from './PolicySubmissionContent.vue'
-import PolicyRejectionNotice from './PolicyRejectionNotice.vue'
 
 const props = defineProps({
   id: { type: String, required: true },
@@ -40,8 +39,7 @@ void readDetail()
           继续编辑
         </el-button>
       </header>
-      <PolicyRejectionNotice :policy="application" />
-      <PolicySubmissionContent :detail="application" />
+      <PolicySubmissionContent :detail="application" @retry-progress="readDetail" />
     </template>
   </section>
 </template>

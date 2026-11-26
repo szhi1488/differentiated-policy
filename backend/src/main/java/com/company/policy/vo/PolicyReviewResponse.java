@@ -19,7 +19,7 @@ public final class PolicyReviewResponse {
             List<String> sceneTypes,
             String submittedAt,
             String status,
-            int recordVersion,
+            Integer recordVersion,
             int submissionVersion,
             boolean reviewable,
             String reviewStage,

@@ -62,12 +62,13 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     @Override
     public PageResponse<Job> jobs(CurrentUserResponse session, int page, int size) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.clean");
         long offset = offset(page, size);
         return tx.execute(
                 ignored -> {
                     String account = config.getSourceKey();
-                    var jobs = mapper.jobs(account, size, offset);
+                    var brands = access.sourceBrandNames(user, null);
+                    var jobs = mapper.jobs(account, brands, size, offset);
                     Map<Long, Map<String, Long>> counts = new HashMap<>();
                     if (!jobs.isEmpty()) {
                         mapper.jobCounts(jobs.stream().map(CatalogCleaningJob::getId).toList())
@@ -86,34 +87,39 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                                             counts.getOrDefault(
                                                                     job.getId(), Map.of())))
                                     .toList(),
-                            mapper.countJobs(account));
+                            mapper.countJobs(account, brands));
                 });
     }
 
     @Override
     public Job job(CurrentUserResponse session, long id) {
-        access.requireAdmin(session);
-        return tx.execute(ignored -> snapshot(requireJob(id)));
+        var user = access.requirePermission(session, "catalog.clean");
+        return tx.execute(ignored -> snapshot(requireJob(id, access.sourceBrandNames(user, null))));
     }
 
     @Override
     public Job active(CurrentUserResponse session) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.clean");
         return tx.execute(
                 ignored -> {
                     var job = mapper.active(config.getSourceKey());
-                    return job == null ? null : snapshot(job);
+                    return job == null
+                                    || !access.sourceBrandNames(user, null)
+                                            .contains(job.getBrandName())
+                            ? null
+                            : snapshot(job);
                 });
     }
 
     @Override
     public Job start(CurrentUserResponse session, Start request) {
-        var admin = access.requireAdmin(session);
+        var admin = access.requirePermission(session, "catalog.clean");
         validateBrand(request.brandName());
         var desired = newJob(admin, request.brandName(), request.requestKey());
         desired.setCreatedDate(request.createdDate());
         desired.setIncludeReviews(request.includeReviews());
         return create(
+                admin,
                 desired,
                 () -> {
                     long count =
@@ -131,21 +137,27 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                 });
     }
 
-    private Job create(CatalogCleaningJob desired, Runnable selectMembers) {
+    private Job create(UserInfo user, CatalogCleaningJob desired, Runnable selectMembers) {
         try {
             return tx.execute(
                     ignored -> {
+                        var brands = access.sourceBrandNames(user, desired.getBrandName());
                         Job existing = existingJob(desired);
                         if (existing != null) {
                             return existing;
                         }
                         checked(mapper.insertJob(desired));
                         selectMembers.run();
-                        return snapshot(requireJob(desired.getId()));
+                        return snapshot(requireJob(desired.getId(), brands));
                     });
         } catch (DuplicateKeyException concurrent) {
             // 唯一键保证同一请求只创建一次，同账套只运行一个清洗任务。
-            Job existing = tx.execute(ignored -> existingJob(desired));
+            Job existing =
+                    tx.execute(
+                            ignored -> {
+                                access.sourceBrandNames(user, desired.getBrandName());
+                                return existingJob(desired);
+                            });
             if (existing != null) {
                 return existing;
             }
@@ -169,7 +181,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         if (sameScope(active, desired)) {
             return snapshot(active);
         }
-        throw conflict("CATALOG_CLEAN_ACTIVE", "当前账套已有清洗任务在运行，请在清洗记录查看进度。");
+        throw conflict("CATALOG_CLEAN_ACTIVE", "当前账套已有清洗任务在运行，请稍后再试。");
     }
 
     private static boolean sameScope(CatalogCleaningJob a, CatalogCleaningJob b) {
@@ -198,18 +210,19 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
             String keyword,
             int page,
             int size) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.clean");
         validateBrand(brand);
         String search = keyword(keyword);
         long offset = offset(page, size);
         return tx.execute(
                 ignored -> {
                     String account = config.getSourceKey();
+                    var brands = access.sourceBrandNames(user, brand);
                     var items =
                             mapper
                                     .results(
                                             account,
-                                            brand,
+                                            brands,
                                             createdDate,
                                             false,
                                             search,
@@ -220,7 +233,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                     .map(this::storedResult)
                                     .toList();
                     long count =
-                            mapper.counts(account, brand, createdDate, false, search).stream()
+                            mapper.counts(account, brands, createdDate, false, search).stream()
                                     .mapToLong(CatalogCleaningMapper.Count::total)
                                     .sum();
                     long eligible =
@@ -240,7 +253,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
             String keyword,
             int page,
             int size) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.clean");
         if (brand != null) {
             validateBrand(brand);
         }
@@ -252,11 +265,12 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return tx.execute(
                 ignored -> {
                     String account = config.getSourceKey();
+                    var brands = access.sourceBrandNames(user, brand);
                     var items =
                             mapper
                                     .results(
                                             account,
-                                            brand,
+                                            brands,
                                             createdDate,
                                             unknownDate,
                                             search,
@@ -267,7 +281,7 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                     .map(this::storedResult)
                                     .toList();
                     var counts = emptyCounts();
-                    mapper.counts(account, brand, createdDate, unknownDate, search)
+                    mapper.counts(account, brands, createdDate, unknownDate, search)
                             .forEach(row -> counts.put(row.status(), row.total()));
                     long all = counts.values().stream().mapToLong(Long::longValue).sum();
                     counts.put("PENDING", counts.get("PENDING") + counts.get("PROCESSING"));
@@ -292,24 +306,25 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
 
     @Override
     public Detail detail(CurrentUserResponse session, long id) {
-        access.requireAdmin(session);
-        return toDetail(requireSource(id, false));
+        var user = access.requirePermission(session, "catalog.clean");
+        return toDetail(requireSource(id, false, access.sourceBrandNames(user, null)));
     }
 
     @Override
     public Detail review(CurrentUserResponse session, long id, Review request) {
-        UserInfo admin = access.requireAdmin(session);
+        UserInfo admin = access.requirePermission(session, "catalog.clean");
         if ((request.decision() == Decision.APPROVE) != (request.target() != null)) {
             throw invalid("审核通过须提供完整的系列、型号、配置和颜色，审核不通过时无需提交规格。");
         }
         return tx.execute(
                 ignored -> {
-                    var source = requireSource(id, true);
+                    var brands = access.sourceBrandNames(admin, null);
+                    var source = requireSource(id, true, brands);
                     checkSource(source, request.recordVersion(), Status.REVIEW_REQUIRED);
                     if (source.getCleanJobId() == null) {
                         throw conflict("CATALOG_SOURCE_CHANGED", "该商品尚无可审核的结果。");
                     }
-                    var job = requireJob(source.getCleanJobId());
+                    var job = requireJob(source.getCleanJobId(), brands);
                     var candidate = writer.readCandidate(source);
                     if (candidate == null)
                         throw conflict("CATALOG_SOURCE_CHANGED", "本次清洗候选缺失，请重新清洗后审核。");
@@ -347,20 +362,21 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
                                 admin,
                                 reason);
                     }
-                    return toDetail(requireSource(id, false));
+                    return toDetail(requireSource(id, false, brands));
                 });
     }
 
     @Override
     public Job retrySource(CurrentUserResponse session, long id, int version, String requestKey) {
-        var admin = access.requireAdmin(session);
-        var initial = requireSource(id, false);
+        var admin = access.requirePermission(session, "catalog.clean");
+        var initial = requireSource(id, false, access.sourceBrandNames(admin, null));
         var desired = newJob(admin, initial.getBrandName(), requestKey);
         desired.setTargetSourceId(id);
         return create(
+                admin,
                 desired,
                 () -> {
-                    var source = requireSource(id, true);
+                    var source = requireSource(id, true, List.of(desired.getBrandName()));
                     checkSource(source, version, Status.ERROR);
                     String importStatus = mapper.importStatus(source.getLastSeenJobId());
                     if (!"SUCCEEDED".equals(importStatus) && !"CANCELLED".equals(importStatus)) {
@@ -404,21 +420,21 @@ public class CatalogCleaningServiceImpl implements CatalogCleaningService {
         return counts;
     }
 
-    private CatalogCleaningJob requireJob(long id) {
+    private CatalogCleaningJob requireJob(long id, List<String> brands) {
         var job = mapper.job(config.getSourceKey(), id);
-        if (job == null) {
+        if (job == null || !brands.contains(job.getBrandName())) {
             throw new ApiException(
                     HttpStatus.NOT_FOUND, "CATALOG_CLEAN_JOB_NOT_FOUND", "未找到该清洗任务。");
         }
         return job;
     }
 
-    private SourceGoodsItem requireSource(long id, boolean lock) {
+    private SourceGoodsItem requireSource(long id, boolean lock, List<String> brands) {
         var source =
                 lock
                         ? mapper.lockSource(config.getSourceKey(), id)
                         : mapper.source(config.getSourceKey(), id, null);
-        if (source == null) {
+        if (source == null || !brands.contains(source.getBrandName())) {
             throw new ApiException(HttpStatus.NOT_FOUND, "CATALOG_SOURCE_NOT_FOUND", "未找到该来源商品。");
         }
         return source;

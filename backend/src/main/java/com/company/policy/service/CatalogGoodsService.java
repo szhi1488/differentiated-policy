@@ -21,7 +21,7 @@ public interface CatalogGoodsService {
     /** 永久删除未关联来源且未被政策引用的标准商品。 */
     void delete(CurrentUserResponse session, long id);
 
-    /** 按筛选条件分页查询管理员可见的标准商品。 */
+    /** 按筛选条件查询商品中心可见商品。采购按当前负责品牌分页。 */
     PageResponse<CatalogGoodsResponse> list(CurrentUserResponse session, CatalogGoodsQuery query);
 
     /** 按选品条件分页查询申请人可选的在售商品。 */
@@ -31,7 +31,7 @@ public interface CatalogGoodsService {
     /** 按已选品牌、系列和机型返回在售商品的联动筛选选项。 */
     Options onSaleOptions(CurrentUserResponse session, Long brandId, Long seriesId, Long spuId);
 
-    /** 为申请人的机型补贴查询列出所有销售状态的机型配置。 */
+    /** 按机型补贴查阅范围列出所有销售状态的品牌、系列和机型配置。 */
     Options subsidyOptions(CurrentUserResponse session);
 
     /** 汇总标准商品的销售状态、系列和机型数量，并列出已有内存配置。 */

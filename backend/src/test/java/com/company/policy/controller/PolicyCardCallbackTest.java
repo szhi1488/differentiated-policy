@@ -59,6 +59,7 @@ import org.springframework.test.web.servlet.ResultActions;
         })
 @AutoConfigureMockMvc
 class PolicyCardCallbackTest {
+    @Autowired com.company.policy.service.AuthorizationService roles;
     private static final AtomicLong IDS = new AtomicLong(5000);
     private static final String TENANT = "card-tenant";
     private static final String URL = "/callbacks/feishu/policy-review";
@@ -70,21 +71,24 @@ class PolicyCardCallbackTest {
     @Autowired PolicyCardCallback callbacks;
     @Autowired PolicyReviewService reviews;
     long id, first, second, firstMember, secondMember;
+    JsonNode previousCard;
 
     @BeforeEach
     void prepare() throws Exception {
+        jdbc.update("MERGE INTO brand(id,name) KEY(id) VALUES(80000,'测试品牌')");
+        jdbc.update("MERGE INTO series(id,brand_id,name) KEY(id) VALUES(80000,80000,'测试系列')");
         id = IDS.incrementAndGet();
-        long owner = actor("APPLICANT");
-        first = actor("APPLICANT");
-        second = actor("APPLICANT");
+        long owner = actor("OPERATIONS");
+        first = actor("PRODUCT_OPS");
+        second = actor("PRODUCT_OPS");
         jdbc.update(
-                "INSERT INTO policy_apply(id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version) VALUES(?,?,?,?,'原申请人','RETAIL','PENDING',1,2)",
+                "INSERT INTO policy_apply(brand_id,series_id,id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version) VALUES(80000,80000,?,?,?,?,'原申请人','RETAIL','PENDING',1,2)",
                 id,
                 TENANT,
                 "TEST" + id,
                 owner);
         jdbc.update(
-                "INSERT INTO policy_audit_log(tenant_key,policy_id,version,snapshot_data) VALUES(?,?,1,?)",
+                "INSERT INTO policy_audit_log(brand_id,series_id,perspective,tenant_key,policy_id,version,snapshot_data) VALUES(80000,80000,'RETAIL',?,?,1,?)",
                 TENANT,
                 id,
                 """
@@ -96,9 +100,16 @@ class PolicyCardCallbackTest {
                 TENANT,
                 id,
                 json.writeValueAsString(ProductReviewCardFixture.route(id, 1)));
-        firstMember = assign(first, "PRODUCT");
         secondMember = assign(second, "PRODUCT");
-        assign(actor("ADMIN"), "PURCHASE");
+        jdbc.update(
+                "UPDATE policy_review_member SET member_status='REMOVED' WHERE id=?", secondMember);
+        assign(actor("PURCHASE"), "PURCHASE");
+        jdbc.update(
+                "UPDATE policy_review_member SET member_status='ACTIVE' WHERE id=?", secondMember);
+        previousCard = card(secondMember);
+        jdbc.update(
+                "UPDATE policy_review_member SET member_status='REMOVED' WHERE id=?", secondMember);
+        firstMember = assign(first, "PRODUCT");
         for (long member : List.of(firstMember, secondMember)) {
             jdbc.update(
                     "INSERT INTO policy_review_delivery(tenant_key,policy_id,version,event_key,action_type,recipient_key,payload_json,delivery_status,receipt_id) VALUES(?,?,1,'SUBMITTED','SEND_CARD',?,'{}','SENT',?)",
@@ -111,13 +122,8 @@ class PolicyCardCallbackTest {
 
     private long actor(String role) {
         long user = IDS.incrementAndGet();
-        jdbc.update(
-                "INSERT INTO user_info(id,tenant_key,open_id,name,role_type) VALUES(?,?,?,?,?)",
-                user,
-                TENANT,
-                "ou_" + user,
-                "姓名" + user,
-                role);
+        com.company.policy.ReviewAccounts.create(
+                jdbc, roles, user, TENANT, "ou_" + user, "姓名" + user, role);
         return user;
     }
 
@@ -144,10 +150,11 @@ class PolicyCardCallbackTest {
 
     private ObjectNode event(long user, long member, String decision, String reason) {
         var value =
-                card(member).findValues("value").stream()
-                        .filter(v -> v.path("decision").asText().equals(decision))
-                        .findFirst()
-                        .orElseThrow();
+                (member == secondMember ? previousCard : card(member))
+                        .findValues("value").stream()
+                                .filter(v -> v.path("decision").asText().equals(decision))
+                                .findFirst()
+                                .orElseThrow();
         return json.valueToTree(
                 Map.of(
                         "schema",
@@ -766,14 +773,14 @@ class PolicyCardCallbackTest {
         var reject = event(first, firstMember, "REJECT", "  核对补贴  ");
         postCallback(reject).andExpect(jsonPath("$.toast.type").value("success"));
         postCallback(reject).andExpect(jsonPath("$.toast.type").value("info"));
-        postCallback(approve).andExpect(jsonPath("$.toast.content").value("同组他人已处理"));
+        postCallback(approve).andExpect(jsonPath("$.toast.type").value("error"));
         assertThat(count("policy_review_decision")).isOne();
         assertThat(card(firstMember).toString())
                 .contains("姓名" + first, "核对补贴")
                 .doesNotContain("form_action_type", "callback");
         assertThat(card(secondMember).toString())
-                .contains("同组他人已处理")
-                .doesNotContain("form_action_type", "callback");
+                .contains("本卡已停止办理")
+                .doesNotContain("姓名" + first, "核对补贴", "form_action_type", "callback");
     }
 
     @ParameterizedTest
@@ -823,7 +830,7 @@ class PolicyCardCallbackTest {
                 .isEqualTo(Map.of("toast", Map.of("type", "success", "content", "已退回原申请人")));
         assertThat(callbacks.handleLongConnection(reject))
                 .isEqualTo(Map.of("toast", Map.of("type", "info", "content", "本轮初审已退回")));
-        postCallback(peer).andExpect(jsonPath("$.toast.content").value("同组他人已处理"));
+        postCallback(peer).andExpect(jsonPath("$.toast.type").value("error"));
         assertThat(count("policy_review_decision")).isOne();
     }
 
@@ -925,11 +932,19 @@ class PolicyCardCallbackTest {
         jdbc.update("UPDATE user_info SET is_deleted=1 WHERE id=?", first);
         postCallback(removed).andExpect(jsonPath("$.toast.type").value("error"));
         jdbc.update("UPDATE user_info SET is_deleted=0 WHERE id=?", first);
+        com.company.policy.RbacFixture.setRole(jdbc, first, "ADMIN");
+        postCallback(removed).andExpect(jsonPath("$.toast.type").value("error"));
+        assertThat(count("policy_review_decision")).isZero();
+        com.company.policy.ReviewAccounts.grant(jdbc, first, TENANT, "PRODUCT_OPS");
         jdbc.update(
                 "UPDATE policy_review_member SET member_status='REMOVED' WHERE id=?", firstMember);
         jdbc.update("UPDATE policy_apply SET record_version=3 WHERE id=?", id);
         postCallback(removed).andExpect(jsonPath("$.toast.type").value("error"));
-        assertThat(card(firstMember).toString()).contains("已撤销").doesNotContain("form_action_type");
+        assertThat(card(firstMember).toString())
+                .contains("本卡已停止办理")
+                .doesNotContain("form_action_type", "callback");
+        jdbc.update(
+                "UPDATE policy_review_member SET member_status='ACTIVE' WHERE id=?", secondMember);
         postCallback(kept).andExpect(jsonPath("$.toast.type").value("success"));
         assertThat(count("policy_review_decision")).isOne();
     }
@@ -951,7 +966,7 @@ class PolicyCardCallbackTest {
     @Test
     void twoOppositeCardDecisionsAndErpCompeteForOneDecision() throws Exception {
         var approve = event(first, firstMember, "APPROVE", "");
-        var reject = event(second, secondMember, "REJECT", "需修改");
+        var reject = event(first, firstMember, "REJECT", "需修改");
         var gate = new CountDownLatch(1);
         var threadPool = Executors.newFixedThreadPool(3);
         try {
@@ -979,7 +994,8 @@ class PolicyCardCallbackTest {
                                                 "ou_" + first,
                                                 TENANT,
                                                 "姓名" + first,
-                                                "APPLICANT",
+                                                java.util.List.of("OPERATIONS"),
+                                                java.util.List.of(),
                                                 null);
                                 try {
                                     reviews.productReview(

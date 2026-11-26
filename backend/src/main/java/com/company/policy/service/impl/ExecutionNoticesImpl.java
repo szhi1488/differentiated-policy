@@ -5,11 +5,9 @@ import static com.company.policy.service.impl.PolicyApplyServiceImpl.policyNumbe
 
 import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.dto.ChannelPlatform;
-import com.company.policy.entity.CatalogCleaningJob;
 import com.company.policy.entity.GoodsSyncJob;
 import com.company.policy.entity.PolicyApply;
 import com.company.policy.entity.PolicyTimeChange;
-import com.company.policy.mapper.CatalogCleaningMapper.JobCount;
 import com.company.policy.mapper.ExecutionNoticeMapper;
 import com.company.policy.mapper.ExecutionNoticeMapper.Policy;
 import com.company.policy.mapper.PolicyTimeChangeMapper;
@@ -186,26 +184,16 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     }
 
     @Override
-    public void platformChanged(String tenant, ChannelPlatform scope, long user, boolean assigned) {
+    public void platformChanged(
+            String tenant, ChannelPlatform scope, Long previousSubmitter, Long nextSubmitter) {
         String prefix = "PL/" + scope.perspective() + "/" + scope.platformCode() + "/";
         var body =
                 json.createObjectNode()
                         .put("kind", "PLATFORM")
                         .put("channel", scope.perspective())
                         .put("platform", scope.platformCode());
-        if (assigned) {
-            body.put("new", user);
-            var previous = notices.lastPlatformChange(tenant, prefix);
-            if (previous != null) {
-                try {
-                    var old = json.readTree(previous);
-                    if (!old.has("new") && old.has("old"))
-                        body.put("old", old.path("old").asLong());
-                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-                    throw new IllegalStateException("无法读取平台交接记录。", e);
-                }
-            }
-        } else body.put("old", user);
+        if (previousSubmitter != null) body.put("old", previousSubmitter.longValue());
+        if (nextSubmitter != null) body.put("new", nextSubmitter.longValue());
         var at = now();
         register(tenant, prefix + UUID.randomUUID(), body, at, at);
     }
@@ -214,44 +202,18 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     public void paused(GoodsSyncJob job, String code) {
         int version = job.getRecordVersion() + 1;
         var body =
-                catalog("IMPORT", job.getId(), job.getBrandName(), job.getRequesterId())
+                json.createObjectNode()
+                        .put("kind", "IMPORT")
+                        .put("job", job.getId().longValue())
+                        .put("brand", job.getBrandName())
+                        .put("requester", job.getRequesterId().longValue())
                         .put("version", version)
                         .put("error", code);
-        catalogEvent(job.getRequesterId(), "IMPORT/" + job.getId() + "/" + version, body);
-    }
-
-    @Override
-    public void cleaned(CatalogCleaningJob job, List<JobCount> counts) {
-        long reviews = count(counts, "REVIEW_REQUIRED"), errors = count(counts, "ERROR");
-        if (reviews + errors == 0) return;
-        var body =
-                catalog("CLEAN", job.getId(), job.getBrandName(), job.getRequesterId())
-                        .put("reviews", reviews)
-                        .put("errors", errors);
-        catalogEvent(job.getRequesterId(), "CLEAN/" + job.getId(), body);
-    }
-
-    private static long count(List<JobCount> counts, String status) {
-        return counts.stream()
-                .filter(c -> status.equals(c.status()))
-                .mapToLong(JobCount::total)
-                .sum();
-    }
-
-    private ObjectNode catalog(String kind, long job, String brand, long requester) {
-        return json.createObjectNode()
-                .put("kind", kind)
-                .put("job", job)
-                .put("brand", brand)
-                .put("requester", requester);
-    }
-
-    private void catalogEvent(long requester, String key, ObjectNode body) {
         // 发起人即本批负责人，停用后仍能保留原企业的处置记录。
-        String tenant = notices.requesterTenant(requester);
+        String tenant = notices.requesterTenant(job.getRequesterId());
         if (tenant == null) throw new IllegalStateException("商品批次缺少发起企业。");
         var at = now();
-        register(tenant, key, body, at, at);
+        register(tenant, "IMPORT/" + job.getId() + "/" + version, body, at, at);
     }
 
     @Override
@@ -294,7 +256,7 @@ class ExecutionNoticesImpl implements ExecutionNotices {
         if (body.has("chat") && !body.path("chat").asText().equals(config.getPolicyChatId()))
             throw stale("目标业务群已更换。");
         if (kind.equals("PLATFORM")) return platformMessage(tenant, body);
-        if (kind.equals("CLEAN") || kind.equals("IMPORT")) return catalogMessage(body, kind);
+        if (kind.equals("IMPORT")) return pausedImportMessage(body);
         var p = notices.approved(tenant, body.path("policy").asLong());
         if (p == null || p.version() != body.path("version").asInt()) throw stale("原单已失效。");
         if (kind.equals("EXTENDED") || kind.equals("SHORTENED")) {
@@ -370,22 +332,16 @@ class ExecutionNoticesImpl implements ExecutionNotices {
                 List.copyOf(users));
     }
 
-    private Message catalogMessage(JsonNode body, String kind) {
+    private Message pausedImportMessage(JsonNode body) {
         long id = body.path("job").asLong();
-        if (kind.equals("IMPORT") && notices.stillPaused(id, body.path("version").asInt()) == 0)
-            throw stale("该暂停批次已续跑或结束。");
-        String action =
-                kind.equals("CLEAN")
-                        ? "清洗批次 "
-                                + id
-                                + " 已结束，待人工审核 "
-                                + body.path("reviews").asLong()
-                                + " 项，技术失败 "
-                                + body.path("errors").asLong()
-                                + " 项。"
-                        : "导入批次 " + id + " 异常暂停（" + body.path("error").asText() + "）。";
+        if (notices.stillPaused(id, body.path("version").asInt()) == 0) throw stale("该暂停批次已续跑或结束。");
         return new Message(
-                body.path("brand").asText() + " " + action,
+                body.path("brand").asText()
+                        + " 导入批次 "
+                        + id
+                        + " 异常暂停（"
+                        + body.path("error").asText()
+                        + "）。",
                 List.of(body.path("requester").asLong()));
     }
 

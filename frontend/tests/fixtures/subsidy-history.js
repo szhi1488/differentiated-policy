@@ -1,13 +1,17 @@
 export const directory = {
+  brands: [
+    { id: '1', name: 'OPPO手机' },
+    { id: '2', name: '一加手机' },
+  ],
   series: [
-    { seriesId: '11', brandName: 'OPPO手机' },
-    { seriesId: '12', brandName: '一加手机' },
+    { id: '11', brandId: '1' },
+    { id: '12', brandId: '2' },
   ],
   models: [
-    { seriesId: '11', spuId: '9007199254740993', modelName: 'Find X8', edition: '标准版' },
-    { seriesId: '12', spuId: '22', modelName: '一加 13', edition: null },
+    { seriesId: '11', id: '9007199254740993', name: 'Find X8', edition: '标准版' },
+    { seriesId: '12', id: '22', name: '一加 13', edition: null },
   ],
-  modelConfigurations: [
+  configurations: [
     { spuId: '9007199254740993', ram: '16GB', rom: '1024GB' },
     { spuId: '22', ram: '12GB', rom: '256GB' },
   ],

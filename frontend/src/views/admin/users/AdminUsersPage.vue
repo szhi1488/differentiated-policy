@@ -3,14 +3,19 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
-import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
+import UserManagementHeader from './UserManagementHeader.vue'
 import { authSession } from '../../../composables/useAuthSession'
 import { useUserManagement } from '../../../composables/useUserManagement'
-import { USER_ROLE_LABELS, USER_STATUS_LABELS } from '../../../constants/users'
+import { roleLabels, USER_STATUS_LABELS } from '../../../constants/users'
 import UserAccountAction from './UserAccountAction.vue'
-import UserPlatformDialog from './UserPlatformDialog.vue'
+import { readRoles } from '../../../api/admin-users'
+import { useLatestQuery } from '../../../composables/useLatestQuery'
 import UserDetailDrawer from './UserDetailDrawer.vue'
 import './admin-users.css'
+
+const rolesQuery = useLatestQuery()
+void rolesQuery.run(readRoles)
+const roles = computed(() => rolesQuery.data.value?.roles ?? [])
 
 const {
   filters,
@@ -36,13 +41,13 @@ const {
 } = useUserManagement()
 const metrics = [
   { key: 'total', label: '用户总数', icon: 'users', tone: 'blue' },
-  { key: 'enabledApplicants', label: '启用申请人', icon: 'document', tone: 'cyan' },
+  { key: 'enabledUsers', label: '启用用户', icon: 'document', tone: 'cyan' },
   { key: 'enabledAdmins', label: '启用管理员', icon: 'shield', tone: 'violet' },
   { key: 'disabledUsers', label: '已停用用户', icon: 'stop', tone: 'gray' },
 ]
 const currentId = computed(() => authSession.user.value?.id)
 const action = ref(null)
-const platformUser = ref(null)
+
 function restriction(user) {
   return user?.id === currentId.value ? '不能调整本人角色或停用本人账号' : ''
 }
@@ -56,10 +61,7 @@ function showAction(user, kind) {
     targetStatus: user.status === 'ENABLED' ? 'DISABLED' : 'ENABLED',
   }
 }
-function platformsSaved() {
-  platformUser.value = null
-  saved('负责平台已更新')
-}
+
 function saved(message) {
   action.value = null
   ElMessage.success(message)
@@ -69,16 +71,23 @@ function saved(message) {
 
 <template>
   <section class="admin-users" aria-labelledby="admin-users-title">
-    <header class="admin-users-heading workspace-page-banner">
-      <WorkspacePageHeading title="用户管理" icon="users" heading-id="admin-users-title" />
+    <UserManagementHeader>
       <div class="admin-users-heading-actions">
         <el-button :loading="listBusy || statsBusy || detailBusy" @click="refresh">
           <AppIcon name="sync" :size="15" />
           刷新
         </el-button>
       </div>
-    </header>
+    </UserManagementHeader>
 
+    <el-alert
+      v-if="rolesQuery.error.value"
+      :title="rolesQuery.error.value.message"
+      type="error"
+      :closable="false"
+    >
+      <el-button link @click="rolesQuery.run(readRoles)">重新读取岗位</el-button>
+    </el-alert>
     <div class="admin-user-metrics" aria-label="用户统计" :aria-busy="statsBusy">
       <article
         v-for="metric in metrics"
@@ -128,17 +137,17 @@ function saved(message) {
           <div class="admin-user-filter">
             <span id="admin-user-role-label">系统角色</span>
             <el-select
-              v-model="filters.roleType"
+              v-model="filters.roleCode"
               aria-label="系统角色"
               aria-labelledby="admin-user-role-label"
               placeholder="全部角色"
               clearable
             >
               <el-option
-                v-for="(label, value) in USER_ROLE_LABELS"
-                :key="value"
-                :label="label"
-                :value="value"
+                v-for="role in roles"
+                :key="role.roleCode"
+                :label="role.roleName"
+                :value="role.roleCode"
               />
             </el-select>
           </div>
@@ -193,13 +202,7 @@ function saved(message) {
           </el-table-column>
           <el-table-column label="系统角色" min-width="98">
             <template #default="{ row }">
-              <el-tag
-                :type="row.roleType === 'ADMIN' ? 'primary' : 'info'"
-                size="small"
-                effect="light"
-              >
-                {{ USER_ROLE_LABELS[row.roleType] }}
-              </el-tag>
+              {{ roleLabels(row.roleCodes, roles) }}
             </template>
           </el-table-column>
           <el-table-column label="账号状态" min-width="98">
@@ -223,15 +226,6 @@ function saved(message) {
                 @click="detailId = row.id"
               >
                 查看
-              </el-button>
-              <el-button
-                v-if="row.roleType === 'APPLICANT' && row.status === 'ENABLED'"
-                link
-                type="primary"
-                :aria-label="'负责平台 ' + row.name"
-                @click="platformUser = row"
-              >
-                负责平台
               </el-button>
               <el-button
                 link
@@ -291,6 +285,7 @@ function saved(message) {
     <UserDetailDrawer
       v-model:open="detailOpen"
       :user="selectedUser"
+      :roles="roles"
       :current-id="currentId"
       :restriction="restriction(selectedUser)"
       :loading="detailBusy"
@@ -299,16 +294,10 @@ function saved(message) {
       @role="showAction($event, 'role')"
       @status="showAction($event, 'status')"
     />
-
-    <UserPlatformDialog
-      v-if="platformUser"
-      :user="platformUser"
-      @close="platformUser = null"
-      @saved="platformsSaved"
-    />
     <UserAccountAction
       v-if="action"
       v-bind="action"
+      :roles="roles"
       @close="action = null"
       @saved="saved"
       @refresh="refresh"

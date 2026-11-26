@@ -6,16 +6,19 @@ import com.company.policy.vo.PolicyApplicability.Policy;
 import com.company.policy.vo.PolicyApplicability.Scope;
 import java.util.List;
 
-/** 按指定轮次呈现当时的政策与指派，操作和记录版本取本次读取时的实际值。 */
+/** 按指定轮次呈现政策与指派。最近轮次按读者权限确定，办理时使用当前并发版本。 */
 public record PolicyReviewRoundResponse(
         String id,
         String policyCode,
         int submissionVersion,
         int currentSubmissionVersion,
-        int recordVersion,
+        Integer recordVersion,
         String status,
         String reviewStage,
         String rejectedAtStage,
+        String applicantName,
+        String submittedAt,
+        boolean requiresProductReview,
         Integer settingsVersion,
         List<String> allowedActions,
         List<Member> productReviewers,
@@ -25,6 +28,17 @@ public record PolicyReviewRoundResponse(
         List<Change> changes,
         List<Adjustment> adjustments,
         PolicyResponse.TimeHistory timeHistory) {
+
+    public record Progress(
+            int submissionVersion,
+            String status,
+            String reviewStage,
+            String rejectedAtStage,
+            String applicantName,
+            String submittedAt,
+            boolean requiresProductReview,
+            List<Member> productReviewers,
+            List<Member> purchaseReviewers) {}
 
     public record Member(
             String assignmentId,

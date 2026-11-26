@@ -50,5 +50,12 @@ export function useLatestQuery() {
           ? 'empty'
           : 'success',
   )
-  return { data, error, loading, status, run }
+  function clear() {
+    version++
+    controller?.abort()
+    data.value = null
+    error.value = null
+    loading.value = false
+  }
+  return { data, error, loading, status, run, clear }
 }

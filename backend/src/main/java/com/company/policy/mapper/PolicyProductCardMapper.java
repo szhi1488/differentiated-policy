@@ -3,7 +3,7 @@ package com.company.policy.mapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
 
-/** 私聊卡始终绑定一份具体指派；同人被移除后重新加入会得到另一份指派。 */
+/** 私聊初审卡通过本轮指派标识核验办理人。 */
 @Mapper
 public interface PolicyProductCardMapper {
     String ASSIGNMENT =
@@ -41,7 +41,11 @@ public interface PolicyProductCardMapper {
           m.assignment_no,p.record_version,
           (u.is_deleted=0 AND u.id<>p.applicant_id AND m.member_status='ACTIVE' AND d.member_id IS NULL
            AND p.current_version=m.version AND p.status='PENDING' AND r.stage='PRODUCT_REVIEW'
-           AND a.audit_status='SUBMITTED') AS actionable,r.route_json,a.snapshot_data
+           AND a.audit_status='SUBMITTED' AND
+        """
+                    + ReviewPermissions.PRODUCT
+                    + """
+            ) AS actionable,r.route_json,a.snapshot_data
         """
                     + ASSIGNMENT
                     + MEMBER)
@@ -50,7 +54,6 @@ public interface PolicyProductCardMapper {
     record Binding(
             long userId,
             String name,
-            String roleType,
             int assignmentNo,
             int recordVersion,
             int currentVersion,
@@ -60,7 +63,7 @@ public interface PolicyProductCardMapper {
 
     @Select(
             """
-        SELECT u.id AS user_id,u.name,u.role_type,m.assignment_no,p.record_version,
+        SELECT u.id AS user_id,u.name,m.assignment_no,p.record_version,
           p.current_version,m.member_status,r.stage,d.decision
         """
                     + ASSIGNMENT
@@ -70,7 +73,8 @@ public interface PolicyProductCardMapper {
           AND card.delivery_status='SENT' AND card.receipt_id=#{messageId}
         """
                     + MEMBER
-                    + " AND u.is_deleted=0 AND u.open_id=#{openId}")
+                    + " AND u.is_deleted=0 AND u.open_id=#{openId} AND "
+                    + ReviewPermissions.PRODUCT)
     Binding binding(
             String tenant, long id, int version, long memberId, String openId, String messageId);
 }

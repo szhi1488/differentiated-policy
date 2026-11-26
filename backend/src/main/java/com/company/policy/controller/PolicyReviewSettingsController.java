@@ -44,7 +44,9 @@ public class PolicyReviewSettingsController {
     }
 
     @PutMapping
-    @Operation(summary = "按期望版本保存本企业两组审核人员", description = "同一组内自动去重，保存后的名单供后续新提交轮次使用。")
+    @Operation(
+            summary = "提前按品牌和系列指定审核负责人",
+            description = "OPPO 和一加按系列指定初审人。每名采购只可负责一个品牌。保存后商品范围立即生效，政策审核分工用于后续首提与重提。")
     @ApiResponse(responseCode = "409", description = "POLICY_REVIEW_SETTINGS_CONFLICT：配置版本已变化")
     public PolicyReviewSettings save(
             @Valid @RequestBody PolicyReviewSettingsUpdate body, HttpServletRequest request) {
@@ -54,7 +56,7 @@ public class PolicyReviewSettingsController {
     @GetMapping("/candidates")
     @Operation(
             summary = "按审核岗位搜索本公司启用的候选人员",
-            description = "姓名与部门可组合筛选，同名账号按本地 ID 区分。采购岗位只返回当前有效管理员。")
+            description = "初审只列产品运营，终审只列采购。候选须具备对应审核权限，支持按姓名、部门组合筛选。")
     @ApiResponse(responseCode = "400", description = "岗位、筛选条件或分页参数无效")
     @ApiResponse(responseCode = "401", description = "LOGIN_REQUIRED：无有效登录会话")
     @ApiResponse(

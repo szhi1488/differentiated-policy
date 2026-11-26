@@ -227,13 +227,27 @@ public class AttachmentServiceImpl implements AttachmentService {
     @Transactional(readOnly = true)
     public Download downloadAdminHistory(
             long policyId, long logId, String id, CurrentUserResponse user) {
-        var admin = access.requirePolicyAdmin(user);
+        var actor = access.requireActive(user);
+        var version = policies.versionOf(actor.getTenantKey(), policyId, logId);
+        if (version == null)
+            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_AUDIT_NOT_FOUND", "未找到可查看的提交轮次。");
+        return downloadReviewRound(policyId, version, id, user);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Download downloadShared(
+            long policyId, int version, String id, CurrentUserResponse session) {
+        var reader = access.requirePermission(session, "policy.read.platform_submitted");
         var membership =
-                policies.adminHistory(policyId, logId, admin.getTenantKey(), fileReference(id));
-        if (membership == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "未找到已提交的政策。");
-        }
-        return historicalContent(id, admin.getTenantKey(), membership);
+                policies.sharedRound(
+                        reader.getTenantKey(),
+                        reader.getId(),
+                        policyId,
+                        version,
+                        fileReference(id));
+        if (membership == null) throw notFound();
+        return historicalContent(id, reader.getTenantKey(), membership);
     }
 
     @Override
@@ -264,6 +278,15 @@ public class AttachmentServiceImpl implements AttachmentService {
                         version,
                         changeId,
                         fileReference(fileId));
+        if (membership == null && access.hasPermission(user, "policy.read.platform_submitted"))
+            membership =
+                    policies.sharedChange(
+                            user.getTenantKey(),
+                            user.getId(),
+                            policyId,
+                            version,
+                            changeId,
+                            fileReference(fileId));
         if (membership == null) throw notFound();
         return historicalContent(fileId, user.getTenantKey(), membership);
     }
@@ -377,18 +400,7 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     private void verifyUser(CurrentUserResponse user) {
-        try {
-            // 每次读取当前账号，旧会话不能绕过停用或租户/身份变化。
-            var current = users.findIdentity(user.tenantKey(), user.openId());
-            if (current == null
-                    || !Integer.valueOf(0).equals(current.getIsDeleted())
-                    || !user.id().equals(String.valueOf(current.getId()))) {
-                throw new ApiException(
-                        HttpStatus.FORBIDDEN, "ATTACHMENT_ACCESS_DENIED", "账号不可用，请重新登录。");
-            }
-        } catch (DataAccessException error) {
-            throw storageError();
-        }
+        access.requireApplicant(user);
     }
 
     private void validateContent(Path file, String extension) throws IOException {

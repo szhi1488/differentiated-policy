@@ -3,7 +3,6 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { ElMessage, ElPagination } from 'element-plus'
 import { afterEach, expect, it, vi } from 'vitest'
 import PolicyReviewSettingsPage from '../../src/views/admin/review-settings/PolicyReviewSettingsPage.vue'
-import PolicyReviewReassignment from '../../src/views/admin/review-settings/PolicyReviewReassignment.vue'
 
 const first = { id: '9007199254740993', name: '林宁', department: '运营一部' }
 const second = { id: '9007199254740994', name: '林宁', department: '运营二部' }
@@ -12,27 +11,35 @@ const newBuyer = { id: '32', name: '采购乙', department: '采购部' }
 const initialSettings = {
   version: 2,
   policyChatConfigured: true,
-  productReviewers: [],
-  purchaseReviewers: [buyer],
+  brands: [
+    {
+      brandId: '1',
+      brandName: 'OPPO手机',
+      productMode: 'BY_SERIES',
+      purchaseReviewer: buyer,
+      brandProductReviewer: null,
+      series: [{ seriesId: '6', seriesName: 'Reno', productReviewer: null }],
+    },
+  ],
 }
 const settingsPath = '/api/admin/policy-review-settings'
-const deliveriesPath = '/api/admin/policy-review-deliveries'
-const member = (person) => ({ ...person, userId: person.id, memberStatus: 'ACTIVE' })
-const round = {
-  id: '5',
-  policyCode: 'ZC-000005',
-  submissionVersion: 2,
-  currentSubmissionVersion: 2,
-  recordVersion: 4,
-  settingsVersion: 1,
-  status: 'PENDING',
-  reviewStage: 'PRODUCT_REVIEW',
-  productReviewers: [member(first), { ...member(second), memberStatus: 'REMOVED' }],
-  purchaseReviewers: [member(buyer)],
-}
 let wrapper
 
-async function open(component, props, handlers, stubs = {}) {
+const oppo = initialSettings.brands[0]
+const onePlus = {
+  brandId: '2',
+  brandName: '一加手机',
+  productMode: 'BY_SERIES',
+  purchaseReviewer: newBuyer,
+  brandProductReviewer: null,
+  series: [
+    { seriesId: '31', seriesName: 'Ace', productReviewer: first },
+    { seriesId: '32', seriesName: '数字系列', productReviewer: first },
+    { seriesId: '33', seriesName: 'Turbo', productReviewer: second },
+  ],
+}
+
+async function open(handlers) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path, init) => {
@@ -47,10 +54,9 @@ async function open(component, props, handlers, stubs = {}) {
       return result instanceof Response ? result : Response.json(result)
     }),
   )
-  wrapper = mount(component, {
+  wrapper = mount(PolicyReviewSettingsPage, {
     attachTo: document.body,
-    props,
-    global: { stubs: { teleport: true, ...stubs } },
+    global: { stubs: { teleport: true } },
   })
   await flushPromises()
 }
@@ -59,6 +65,17 @@ async function click(text, scope = wrapper) {
   await button(scope, text).trigger('click')
   await flushPromises()
 }
+async function edit(label) {
+  await wrapper.get(`button[aria-label="${label}"]`).trigger('click')
+  await flushPromises()
+  return wrapper.get('.reviewer-picker-dialog')
+}
+async function chooseBrand(name) {
+  const tab = wrapper.findAll('[role=tab]').find((node) => node.text().includes(name))
+  await tab.trigger('click')
+  await flushPromises()
+  expect(tab.attributes('aria-selected')).toBe('true')
+}
 afterEach(() => {
   wrapper?.unmount()
   ElMessage.closeAll()
@@ -66,118 +83,26 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('不填政策单号也可分页核对商品批次的业务提醒', async () => {
-  const rows = Array.from({ length: 50 }, (_, i) => ({
-    id: String(100 - i),
-    action: 'GROUP_MESSAGE',
-    recipient: '清洗批次 ' + (100 - i),
-    status: 'PENDING',
-    nextAttemptAt: '2099-05-01T12:00:00+08:00',
-  }))
-  const list = vi.fn().mockReturnValueOnce(rows).mockReturnValue([])
-  await open(
-    PolicyReviewSettingsPage,
-    {},
-    {
-      [`GET ${settingsPath}`]: () => initialSettings,
-      [`GET ${deliveriesPath}/notices`]: list,
-    },
-  )
-  const panel = wrapper.get('section[aria-label="飞书投递记录"]')
-  await click('查询业务提醒', panel)
-  expect(panel.text()).toContain('清洗批次 100')
-  expect(panel.text()).toContain('可投递时间 2099-05-01T12:00:00+08:00')
-  await click('下一页', panel)
-  expect(list).toHaveBeenLastCalledWith({ before: '51' })
-  expect(panel.text()).toContain('暂无投递记录')
-})
-
-it('按单号和轮次核对单项投递，补回执失败保留输入，成功后重新读取该轮', async () => {
-  const row = {
-    id: '19',
-    event: 'SUBMITTED',
-    action: 'CREATE_TASK',
-    status: 'UNKNOWN',
-    recipient: '采购甲',
-    attempts: 3,
-    revision: 0,
-    canResolve: true,
-  }
-  const delivered = { ...row, status: 'SENT', canResolve: false, receiptId: 'right-task' }
-  const list = vi.fn().mockReturnValueOnce([row]).mockReturnValue([delivered])
-  const resolve = vi.fn(({ receiptId }) =>
-    receiptId === 'wrong-task'
-      ? Response.json(
-          { code: 'POLICY_RECEIPT_UNVERIFIED', message: '收件人不匹配' },
-          { status: 409 },
-        )
-      : delivered,
-  )
-  await open(
-    PolicyReviewSettingsPage,
-    {},
-    {
-      [`GET ${settingsPath}`]: () => initialSettings,
-      [`GET ${deliveriesPath}`]: list,
-      [`POST ${deliveriesPath}/19/resolve`]: resolve,
-    },
-    {
-      ElDialog: {
-        props: ['modelValue'],
-        template:
-          '<section v-if="modelValue" role="dialog"><slot /><slot name="footer" /></section>',
-      },
-    },
-  )
-  const panel = wrapper.get('section[aria-label="飞书投递记录"]')
-  await panel.get('input').setValue('ZC-000057')
-  await panel.get('form').trigger('submit')
-  await vi.waitFor(() => expect(panel.text()).toContain('核对并处理'))
-  expect(list).toHaveBeenLastCalledWith({ policyId: '57', submissionVersion: '1' })
-  await click('核对并处理', panel)
-  await vi.waitFor(() => expect(panel.find('[role="dialog"] textarea').exists()).toBe(true))
-  const dialog = panel.get('[role="dialog"]')
-  await dialog.get('textarea').setValue('逐人核对了任务编号及单号')
-  await dialog.get('input[maxlength="128"]').setValue('wrong-task')
-  await click('核对并保存回执', dialog)
-  await vi.waitFor(() => expect(dialog.text()).toContain('收件人不匹配'))
-  expect(dialog.get('textarea').element.value).toBe('逐人核对了任务编号及单号')
-  expect(dialog.get('input[maxlength="128"]').element.value).toBe('wrong-task')
-  await dialog.get('input[maxlength="128"]').setValue('right-task')
-  await click('核对并保存回执', dialog)
-  await vi.waitFor(() => expect(panel.text()).toContain('飞书回执 right-task'))
-  expect(resolve).toHaveBeenLastCalledWith({
-    operation: 'CONFIRM_RECEIPT',
-    expectedStatus: 'UNKNOWN',
-    expectedAttempts: 3,
-    expectedRevision: 0,
-    receiptId: 'right-task',
-    reason: '逐人核对了任务编号及单号',
+it('首次读取审核预设即可提示业务群缺失，浏览页面只请求设置接口', async () => {
+  await open({
+    [`GET ${settingsPath}`]: () => ({ ...initialSettings, policyChatConfigured: false }),
   })
-  expect(list).toHaveBeenCalledTimes(2)
-  expect(button(panel, '核对并处理')).toBeUndefined()
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual([settingsPath])
+  expect(wrapper.text()).not.toMatch(/在途改派|飞书投递记录|配置版本/)
+  expect(wrapper.text()).toContain('FEISHU_POLICY_CHAT_ID')
+  expect(wrapper.findAll('button').filter((item) => item.text() === '保存审核分工')).toHaveLength(1)
+  const table = wrapper.get('table[aria-label="OPPO手机审核分工"]')
+  expect(table.findAll('thead th').map((heading) => heading.text())).toEqual([
+    '审核环节',
+    '适用范围',
+    '审核人',
+    '操作',
+  ])
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
 })
 
-it('服务端报告业务群未配置时提示部署人员', async () => {
-  await open(
-    PolicyReviewSettingsPage,
-    {},
-    {
-      [`GET ${settingsPath}`]: () => initialSettings,
-      [`PUT ${settingsPath}`]: () => ({
-        ...initialSettings,
-        version: 3,
-        policyChatConfigured: false,
-      }),
-    },
-  )
-  expect(wrapper.text()).not.toContain('FEISHU_POLICY_CHAT_ID')
-  await click('保存默认名单')
-  expect(wrapper.text()).toContain('请部署人员核对服务端环境变量 FEISHU_POLICY_CHAT_ID')
-  expect(button(wrapper, '保存默认名单').element.disabled).toBe(false)
-})
-
-it('两组按姓名部门分别查询，跨页勾选同名人员，用字符串 ID 保存并回显新版本', async () => {
+it('品牌和系列分别查询候选，跨页替换同名审核人，按目录 ID 保存并回显审核人', async () => {
+  const kSeries = { seriesId: '7', seriesName: 'K', productReviewer: null }
   const candidates = vi.fn(({ reviewGroup, page }) =>
     reviewGroup === 'PURCHASE'
       ? { items: [buyer, newBuyer], total: 2 }
@@ -186,22 +111,32 @@ it('两组按姓名部门分别查询，跨页勾选同名人员，用字符串 
   const save = vi.fn(() => ({
     version: 3,
     policyChatConfigured: true,
-    productReviewers: [first, second],
-    purchaseReviewers: [buyer, newBuyer],
+    brands: [
+      {
+        ...oppo,
+        purchaseReviewer: newBuyer,
+        series: [{ ...oppo.series[0], productReviewer: second }, kSeries],
+      },
+    ],
   }))
-  await open(
-    PolicyReviewSettingsPage,
-    {},
-    {
-      [`GET ${settingsPath}`]: () => ({ ...initialSettings, policyChatConfigured: false }),
-      [`GET ${settingsPath}/candidates`]: candidates,
-      [`PUT ${settingsPath}`]: save,
-    },
-  )
-  const product = wrapper.get('section[aria-label="产品运营审核人"]')
-  const purchase = wrapper.get('section[aria-label="采购审核人"]')
+  await open({
+    [`GET ${settingsPath}`]: () => ({
+      ...initialSettings,
+      policyChatConfigured: false,
+      brands: [{ ...oppo, series: [...oppo.series, kSeries] }],
+    }),
+    [`GET ${settingsPath}/candidates`]: candidates,
+    [`PUT ${settingsPath}`]: save,
+  })
   expect(wrapper.text()).toContain('FEISHU_POLICY_CHAT_ID')
-  await click('选择人员', product)
+  const productRows = wrapper.get('table tbody').findAll('tr')
+  expect(productRows.map((row) => row.get('th[scope=row]').text())).toEqual(['Reno', 'K'])
+  expect(productRows.map((row) => row.get('button').attributes('aria-label'))).toEqual([
+    'OPPO手机 · Reno · 产品运营初审，指定审核人',
+    'OPPO手机 · K · 产品运营初审，指定审核人',
+  ])
+  const product = await edit('OPPO手机 · Reno · 产品运营初审，指定审核人')
+  expect(product.get('h2').text()).toBe('选择产品运营初审人')
   await product.get('[aria-label="姓名"]').setValue(' 林宁 ')
   await product.get('[aria-label="部门"]').setValue('运营')
   await product.get('form').trigger('submit')
@@ -213,32 +148,217 @@ it('两组按姓名部门分别查询，跨页勾选同名人员，用字符串 
     page: '1',
     pageSize: '10',
   })
-  await product.get('input[type=checkbox]').setValue(true)
+  await product.get(`input[type=radio][value="${first.id}"]`).setValue(true)
   product.getComponent(ElPagination).vm.$emit('update:current-page', 2)
   await flushPromises()
-  expect(product.get('.candidate-rows').text()).toContain('运营二部')
-  await product.get('input[type=checkbox]').setValue(true)
+  expect(product.get('[role=radiogroup]').text()).toContain('运营二部')
+  await product.get(`input[type=radio][value="${second.id}"]`).setValue(true)
   product.getComponent(ElPagination).vm.$emit('update:current-page', 1)
   await flushPromises()
-  expect(product.get('input[type=checkbox]').element.checked).toBe(true)
-  await click('选择人员', purchase)
+  expect(product.get(`input[type=radio][value="${first.id}"]`).element.checked).toBe(false)
+  await click('确认选择', product)
+  const purchase = await edit('OPPO手机 · 全部系列 · 采购终审，更换审核人')
+  expect(purchase.get('h2').text()).toBe('选择采购终审人')
   expect(candidates).toHaveBeenLastCalledWith({
     reviewGroup: 'PURCHASE',
     page: '1',
     pageSize: '10',
   })
-  await purchase.findAll('input[type=checkbox]')[1].setValue(true)
-  await click('保存默认名单')
+  await purchase.get(`input[type=radio][value="${newBuyer.id}"]`).setValue(true)
+  await click('确认选择', purchase)
+  expect(save).not.toHaveBeenCalled()
+  await click('保存审核分工')
   expect(save).toHaveBeenCalledExactlyOnceWith({
     expectedVersion: 2,
-    productReviewerUserIds: [first.id, second.id],
-    purchaseReviewerUserIds: ['31', '32'],
+    brands: [
+      {
+        brandId: '1',
+        productMode: 'BY_SERIES',
+        purchaseUserId: newBuyer.id,
+        brandProductUserId: null,
+        series: [{ seriesId: '6', productUserId: second.id }],
+      },
+    ],
   })
-  expect(wrapper.text()).toContain('配置版本 3')
+  const assignments = wrapper.get('table[aria-label="OPPO手机审核分工"]')
+  expect(assignments.text()).toContain('采购乙')
+  expect(assignments.text()).toContain('运营二部')
+  expect(wrapper.text()).not.toContain('配置版本')
   expect(wrapper.text()).not.toContain('FEISHU_POLICY_CHAT_ID')
-  await product.get('button[aria-label^="移除 林宁 · 运营一部"]').trigger('click')
-  expect(product.get('input[type=checkbox]').element.checked).toBe(false)
-  expect(product.get('.picked-people').text()).toContain('运营二部')
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+})
+
+it('跨品牌逐系列更换初审人，一次保存保留其他系列的分工，新建系列待指定', async () => {
+  const [ace, digital, turbo] = onePlus.series
+  const newSeries = { seriesId: '34', seriesName: '新建系列', productReviewer: null }
+  const save = vi.fn(() => ({
+    ...initialSettings,
+    version: 3,
+    brands: [
+      { ...oppo, series: [{ ...oppo.series[0], productReviewer: second }] },
+      { ...onePlus, series: [{ ...ace, productReviewer: second }, digital, turbo, newSeries] },
+    ],
+  }))
+  await open({
+    [`GET ${settingsPath}`]: () => ({ ...initialSettings, brands: [oppo, onePlus] }),
+    [`GET ${settingsPath}/candidates`]: () => ({ items: [first, second], total: 2 }),
+    [`PUT ${settingsPath}`]: save,
+  })
+  const seriesEditor = await edit('OPPO手机 · Reno · 产品运营初审，指定审核人')
+  await seriesEditor.get(`input[type=radio][value="${second.id}"]`).setValue(true)
+  await click('确认选择', seriesEditor)
+  await chooseBrand('一加手机')
+  const brandTable = wrapper.get('table[aria-label="一加手机审核分工"]')
+  expect(wrapper.find('[aria-label="一加手机初审分工"]').exists()).toBe(false)
+  expect(brandTable.findAll('th[scope=row]').map((scope) => scope.text())).toEqual([
+    'Ace',
+    '数字系列',
+    'Turbo',
+    '全部系列',
+  ])
+  expect(brandTable.findAll('button').map((action) => action.attributes('aria-label'))).toEqual([
+    '一加手机 · Ace · 产品运营初审，更换审核人',
+    '一加手机 · 数字系列 · 产品运营初审，更换审核人',
+    '一加手机 · Turbo · 产品运营初审，更换审核人',
+    '一加手机 · 全部系列 · 采购终审，更换审核人',
+  ])
+  const aceEditor = await edit('一加手机 · Ace · 产品运营初审，更换审核人')
+  await click('清除选择', aceEditor)
+  await click('取消', aceEditor)
+
+  const reopened = await edit('一加手机 · Ace · 产品运营初审，更换审核人')
+  expect(reopened.get(`input[type=radio][value="${first.id}"]`).element.checked).toBe(true)
+  await reopened.get(`input[type=radio][value="${second.id}"]`).setValue(true)
+  await click('确认选择', reopened)
+  await chooseBrand('OPPO手机')
+  expect(
+    wrapper.get('button[aria-label="OPPO手机 · Reno · 产品运营初审，更换审核人"]').isVisible(),
+  ).toBe(true)
+  expect(save).not.toHaveBeenCalled()
+
+  await chooseBrand('一加手机')
+  const draftRows = wrapper.get('table[aria-label="一加手机审核分工"] tbody').findAll('tr')
+  expect(draftRows.map((row) => row.get('td small').text())).toEqual([
+    second.department,
+    first.department,
+    second.department,
+  ])
+  await click('保存审核分工')
+  expect(save).toHaveBeenCalledExactlyOnceWith({
+    expectedVersion: 2,
+    brands: [
+      {
+        brandId: oppo.brandId,
+        productMode: 'BY_SERIES',
+        purchaseUserId: buyer.id,
+        brandProductUserId: null,
+        series: [{ seriesId: '6', productUserId: second.id }],
+      },
+      {
+        brandId: onePlus.brandId,
+        productMode: 'BY_SERIES',
+        purchaseUserId: newBuyer.id,
+        brandProductUserId: null,
+        series: [
+          { seriesId: ace.seriesId, productUserId: second.id },
+          { seriesId: digital.seriesId, productUserId: first.id },
+          { seriesId: turbo.seriesId, productUserId: second.id },
+        ],
+      },
+    ],
+  })
+  const savedStage = wrapper.get('table[aria-label="一加手机审核分工"] tbody')
+  expect(savedStage.findAll('th[scope=row]').map((scope) => scope.text())).toEqual([
+    'Ace',
+    '数字系列',
+    'Turbo',
+    '新建系列',
+  ])
+  const newRow = savedStage.findAll('tr').at(-1)
+  expect(newRow.get('td').text()).toBe('未指定')
+  expect(newRow.get('button').attributes('aria-label')).toBe(
+    '一加手机 · 新建系列 · 产品运营初审，指定审核人',
+  )
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+})
+
+it('一加尚无标准系列时只能指派品牌采购', async () => {
+  await open({
+    [`GET ${settingsPath}`]: () => ({ ...initialSettings, brands: [{ ...onePlus, series: [] }] }),
+  })
+  const table = wrapper.get('table[aria-label="一加手机审核分工"]')
+  expect(table.get('tbody').text()).toContain('尚无标准系列')
+  expect(table.findAll('button').map((action) => action.attributes('aria-label'))).toEqual([
+    '一加手机 · 全部系列 · 采购终审，更换审核人',
+  ])
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+})
+
+it('同一采购分配到两个品牌时提示冲突，交换完两位采购后可保存', async () => {
+  const save = vi.fn(() => ({
+    ...initialSettings,
+    version: 3,
+    brands: [
+      { ...oppo, purchaseReviewer: newBuyer },
+      { ...onePlus, purchaseReviewer: buyer },
+    ],
+  }))
+  await open({
+    [`GET ${settingsPath}`]: () => ({ ...initialSettings, brands: [oppo, onePlus] }),
+    [`GET ${settingsPath}/candidates`]: () => ({ items: [buyer, newBuyer], total: 2 }),
+    [`PUT ${settingsPath}`]: save,
+  })
+  const firstPicker = await edit('OPPO手机 · 全部系列 · 采购终审，更换审核人')
+  await firstPicker.get(`input[value="${newBuyer.id}"]`).setValue(true)
+  await click('确认选择', firstPicker)
+  expect(wrapper.text()).toContain(
+    '采购乙只能负责一个品牌，请为「OPPO手机」和「一加手机」选择不同的采购。',
+  )
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+  expect(save).not.toHaveBeenCalled()
+  await chooseBrand('一加手机')
+  const secondPicker = await edit('一加手机 · 全部系列 · 采购终审，更换审核人')
+  await secondPicker.get(`input[value="${buyer.id}"]`).setValue(true)
+  await click('确认选择', secondPicker)
+  await click('保存审核分工')
+  expect(save).toHaveBeenCalledOnce()
+  expect(save.mock.calls[0][0].brands.map((brand) => brand.purchaseUserId)).toEqual([
+    newBuyer.id,
+    buyer.id,
+  ])
+})
+
+it('其他目录品牌选择按品牌初审时仍可保存共用初审人', async () => {
+  const brand = { ...onePlus, brandId: '3', brandName: '其他品牌' }
+  const save = vi.fn(() => ({
+    ...initialSettings,
+    version: 3,
+    brands: [{ ...brand, productMode: 'BY_BRAND', brandProductReviewer: second }],
+  }))
+  await open({
+    [`GET ${settingsPath}`]: () => ({ ...initialSettings, brands: [brand] }),
+    [`GET ${settingsPath}/candidates`]: () => ({ items: [second], total: 1 }),
+    [`PUT ${settingsPath}`]: save,
+  })
+  await wrapper.get('input[type=radio][value="BY_BRAND"]').setValue(true)
+  await flushPromises()
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+  const editor = await edit('其他品牌 · 全部系列 · 产品运营初审，指定审核人')
+  await editor.get(`input[type=radio][value="${second.id}"]`).setValue(true)
+  await click('确认选择', editor)
+  await click('保存审核分工')
+  expect(save).toHaveBeenCalledExactlyOnceWith({
+    expectedVersion: 2,
+    brands: [
+      {
+        brandId: brand.brandId,
+        productMode: 'BY_BRAND',
+        purchaseUserId: brand.purchaseReviewer.id,
+        brandProductUserId: second.id,
+        series: [],
+      },
+    ],
+  })
 })
 
 it('默认名单版本冲突时保留输入，管理员核对前不能重复保存', async () => {
@@ -247,80 +367,22 @@ it('默认名单版本冲突时保留输入，管理员核对前不能重复保�
     .mockReturnValueOnce(initialSettings)
     .mockReturnValue({ ...initialSettings, version: 3 })
   const save = vi.fn(() => Response.json({ message: '名单版本已变化' }, { status: 409 }))
-  await open(
-    PolicyReviewSettingsPage,
-    {},
-    { [`GET ${settingsPath}`]: get, [`PUT ${settingsPath}`]: save },
-  )
-  await wrapper.get('button[aria-label^="移除 采购甲"]').trigger('click')
-  await click('保存默认名单')
+  await open({
+    [`GET ${settingsPath}`]: get,
+    [`GET ${settingsPath}/candidates`]: () => ({ items: [buyer], total: 1 }),
+    [`PUT ${settingsPath}`]: save,
+  })
+  const purchase = await edit('OPPO手机 · 全部系列 · 采购终审，更换审核人')
+  await click('清除选择', purchase)
+  await click('确认选择', purchase)
+  await click('保存审核分工')
   expect(wrapper.text()).toContain('名单版本已变化')
   expect(wrapper.text()).not.toContain('采购甲')
-  expect(button(wrapper, '保存默认名单').element.disabled).toBe(true)
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
   await click('载入最新名单并替换当前选择')
-  expect(wrapper.text()).toContain('配置版本 3')
+  expect(get).toHaveBeenCalledTimes(2)
+  expect(button(wrapper, '保存审核分工').element.disabled).toBe(true)
+  expect(wrapper.text()).not.toContain('配置版本')
   expect(wrapper.text()).toContain('采购甲')
   expect(save).toHaveBeenCalledTimes(1)
-})
-
-it('在初审中改派未来采购，按旧轮次版本提交保留和新增的全部 ID 及原因', async () => {
-  const save = vi.fn(() => ({
-    id: '5',
-    recordVersion: 5,
-    submissionVersion: 2,
-    reviewStage: 'PRODUCT_REVIEW',
-  }))
-  await open(
-    PolicyReviewReassignment,
-    { round },
-    {
-      [`GET ${settingsPath}/candidates`]: () => ({ items: [buyer, newBuyer], total: 2 }),
-      'POST /api/admin/policy-reviews/5/reassign': save,
-    },
-  )
-  await click('改派本轮成员')
-  expect(wrapper.get('.picked-people').text()).not.toContain('运营二部')
-  await wrapper.get('input[value="PURCHASE_REVIEW"]').setValue()
-  await click('选择人员')
-  await wrapper.findAll('input[type=checkbox]')[1].setValue(true)
-  expect(wrapper.get('.reassign-diff').text()).toContain('新增：采购乙')
-  expect(button(wrapper, '保存改派').element.disabled).toBe(true)
-  await wrapper.get('textarea').setValue(' 采购增加值班人员 ')
-  await click('保存改派')
-  expect(save).toHaveBeenCalledExactlyOnceWith({
-    expectedStage: 'PRODUCT_REVIEW',
-    targetStage: 'PURCHASE_REVIEW',
-    recordVersion: 4,
-    submissionVersion: 2,
-    assigneeUserIds: ['31', '32'],
-    reason: '采购增加值班人员',
-  })
-  expect(wrapper.emitted('reload')).toHaveLength(1)
-  expect(wrapper.emitted('busy')).toEqual([[true], [false]])
-})
-
-it('改派晚于其他人的办理时保留原因并关闭重发，旧轮及旧流程没有改派按钮', async () => {
-  const save = vi.fn(() => Response.json({ message: '本轮已转入终审' }, { status: 409 }))
-  await open(
-    PolicyReviewReassignment,
-    { round },
-    {
-      [`GET ${settingsPath}/candidates`]: () => ({ items: [second], total: 1 }),
-      'POST /api/admin/policy-reviews/5/reassign': save,
-    },
-  )
-  await click('改派本轮成员')
-  await click('选择人员')
-  await wrapper.get('input[type=checkbox]').setValue(true)
-  await wrapper.get('textarea').setValue('另选值班人员')
-  await click('保存改派')
-  expect(wrapper.text()).toContain('本轮已转入终审')
-  expect(wrapper.get('textarea').element.value).toBe('另选值班人员')
-  expect(button(wrapper, '保存改派').element.disabled).toBe(true)
-  await click('重新读取本轮详情')
-  expect(wrapper.emitted('reload')).toHaveLength(1)
-  await wrapper.setProps({ round: { ...round, currentSubmissionVersion: 3 } })
-  expect(button(wrapper, '改派本轮成员')).toBeUndefined()
-  await wrapper.setProps({ round: { ...round, settingsVersion: null } })
-  expect(button(wrapper, '改派本轮成员')).toBeUndefined()
 })

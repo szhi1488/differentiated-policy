@@ -22,7 +22,6 @@ import {
 import { policySceneLabel, policyTime } from '../../../utils/policy-adapter'
 import AdminPolicyDetail from './AdminPolicyDetail.vue'
 import AdminPolicyHistory from './AdminPolicyHistory.vue'
-import PolicyReviewReassignment from '../review-settings/PolicyReviewReassignment.vue'
 import PolicyReviewRoundContent from '../../reviews/PolicyReviewRoundContent.vue'
 import '../../reviews/policy-reviews.css'
 import './admin-policies.css'
@@ -80,7 +79,6 @@ const rejectionOpen = ref(false)
 const rejectionReason = ref('')
 const rejectionInput = ref(null)
 const reviewBusy = ref(false)
-const reassignBusy = ref(false)
 const reviewError = ref(null)
 const reviewNeedsReload = computed(
   () =>
@@ -107,7 +105,7 @@ onScopeDispose(() => {
 })
 
 function refreshOnReturn() {
-  if (reviewBusy.value || reassignBusy.value) {
+  if (reviewBusy.value) {
     return
   }
   void reload()
@@ -117,7 +115,7 @@ function refreshOnReturn() {
 }
 
 function showDetail(row, mode = 'view') {
-  if (reviewBusy.value || reassignBusy.value) {
+  if (reviewBusy.value) {
     return
   }
   selectedId.value = row.id
@@ -143,7 +141,6 @@ watch(
   ([id, version]) => {
     reviewRequest?.abort()
     reviewBusy.value = false
-    reassignBusy.value = false
     if (id && version) {
       showDetail({ id, submissionVersion: Number(version) }, 'link')
     } else if (reviewTarget.value?.linked) {
@@ -157,13 +154,7 @@ watch(
 
 async function submitReview(decision) {
   const policy = selectedPolicy.value
-  if (
-    !detailOpen.value ||
-    reviewBusy.value ||
-    reassignBusy.value ||
-    reviewNeedsReload.value ||
-    !canReview.value
-  ) {
+  if (!detailOpen.value || reviewBusy.value || reviewNeedsReload.value || !canReview.value) {
     return
   }
   reviewBusy.value = true
@@ -410,9 +401,9 @@ watch(detailOpen, (open) => {
       width="min(1280px, calc(100% - 24px))"
       align-center
       destroy-on-close
-      :close-on-click-modal="!reviewBusy && !reassignBusy"
-      :close-on-press-escape="!reviewBusy && !reassignBusy"
-      :show-close="!reviewBusy && !reassignBusy"
+      :close-on-click-modal="!reviewBusy"
+      :close-on-press-escape="!reviewBusy"
+      :show-close="!reviewBusy"
     >
       <template #header="{ titleId, titleClass }">
         <div class="admin-policy-detail-header">
@@ -492,16 +483,7 @@ watch(detailOpen, (open) => {
           :round-busy="roundBusy"
           :round-error="roundError"
           @retry-round="roundError?.code === 'ROUND_RELOAD_REQUIRED' ? loadDetail() : loadRound()"
-        >
-          <template #member-actions>
-            <PolicyReviewReassignment
-              :round="round"
-              :disabled="reviewBusy || detailBusy || rejectionOpen || reviewNeedsReload"
-              @busy="reassignBusy = $event"
-              @reload="reloadReview"
-            />
-          </template>
-        </AdminPolicyDetail>
+        />
         <AdminPolicyHistory
           v-else-if="detailOpen && detailTab === 'history'"
           :key="selectedId"
@@ -512,7 +494,7 @@ watch(detailOpen, (open) => {
         <el-button
           type="danger"
           plain
-          :disabled="reviewBusy || reassignBusy || reviewNeedsReload"
+          :disabled="reviewBusy || reviewNeedsReload"
           @click="rejectionOpen = true"
         >
           驳回
@@ -520,7 +502,7 @@ watch(detailOpen, (open) => {
         <el-button
           type="primary"
           :loading="reviewBusy"
-          :disabled="reassignBusy || reviewNeedsReload"
+          :disabled="reviewNeedsReload"
           @click="submitReview('APPROVE')"
         >
           通过

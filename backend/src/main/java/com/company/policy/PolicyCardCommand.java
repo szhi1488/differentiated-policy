@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 
-/** 本机运维命令。单独启动一次，仅处理管理员在投递记录中指定的初审卡。 */
+/** 本机运维命令。单独启动一次，仅处理投递编号指定的初审卡。 */
 final class PolicyCardCommand {
     private static final Logger log = LoggerFactory.getLogger(PolicyCardCommand.class);
 

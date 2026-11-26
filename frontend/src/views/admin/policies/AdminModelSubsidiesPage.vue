@@ -26,6 +26,7 @@ const {
   refreshPlatforms,
   dates,
   brands,
+  purchaseScoped,
   modelOptions,
   configOptions,
   catalogStatus,
@@ -222,7 +223,11 @@ function reset() {
 
     <section class="model-subsidy-surface model-subsidy-query" aria-label="查询条件">
       <el-form
-        :disabled="catalogStatus !== 'success' || !hasPlatforms"
+        :disabled="
+          catalogStatus !== 'success' ||
+          !hasPlatforms ||
+          historyError?.code === 'POLICY_SUBSIDY_BRAND_FORBIDDEN'
+        "
         label-position="top"
         class="model-subsidy-filters"
         @submit.prevent="search"
@@ -335,8 +340,10 @@ function reset() {
     <el-empty
       v-else-if="catalogStatus === 'empty'"
       class="model-subsidy-surface"
-      description="商品目录暂无可查询的机型配置"
-    />
+      :description="purchaseScoped ? '暂无可查询的采购品牌机型' : '商品目录暂无可查询的机型配置'"
+    >
+      <el-button v-if="purchaseScoped" @click="loadCatalog()">刷新目录</el-button>
+    </el-empty>
     <div v-else-if="result" class="model-subsidy-workspace">
       <div class="model-subsidy-charts">
         <section

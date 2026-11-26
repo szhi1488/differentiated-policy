@@ -1,4 +1,4 @@
--- 在 Navicat 选中 differentiated policy 库，停止连接该库的项目后端后执行。
+-- 本脚本仅适用于已单独确认重建的旧 23 表结构。29 表空库建表请直接执行 schema.sql。
 -- 以下操作会永久删除当前库的 23 张项目表及全部表数据，保留数据库本身。
 -- 按外键依赖先删子表，再删父表。已删除的表会自动跳过。
 
@@ -26,4 +26,4 @@ DROP TABLE IF EXISTS `brand`;
 DROP TABLE IF EXISTS `user_platform_assignment`;
 DROP TABLE IF EXISTS `user_info`;
 
--- 在同一库执行 schema.sql 或 V1__create_policy_tables.sql 中的一份，重建全部空表。
+-- 新建 29 表的步骤及结构见 database-design.md。

@@ -309,8 +309,9 @@ public class PolicyProductCardBuilder {
     }
 
     private static String result(Content card) {
-        if ("REMOVED".equals(card.memberStatus())) return "本次指派已撤销";
-        if (card.decision() == null) return "本卡已停止办理";
+        if (card.decision() == null
+                || !("HANDLED".equals(card.memberStatus())
+                        || "PEER_HANDLED".equals(card.memberStatus()))) return "本卡已停止办理";
         String decision = "APPROVE".equals(card.decision()) ? "通过" : "拒绝";
         String result = card.signerName() + " 已" + decision;
         if ("PEER_HANDLED".equals(card.memberStatus())) result = "同组他人已处理\n" + result;

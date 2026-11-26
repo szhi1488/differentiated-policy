@@ -1,32 +1,30 @@
 # 页面接口总览
 
-更新日期 2026-11-25。申请人选品、申请及历史接口已接入。首提和重提均按本轮内容分流。整轮存在实际叠加，且来自各叠加段的全部参与政策整单所选商品 ID 集合完全相同时，运营从本轮私聊卡通过或退回。其余轮次直接进入采购终审。运营通过后转采购，采购在管理员「差异化政策」终审，通过即结束审核。管理员可查本公司已提交的政策、历轮审核与快照。接口同时提供单商品有效政策查询。管理员用户管理页面已接入七个后端接口。
+更新日期 2026-11-25。申请人选品、申请及历史接口已接入。首提和重提均按本轮内容分流。整轮存在实际叠加，且来自各叠加段的全部参与政策整单所选商品 ID 集合完全相同时，运营从本轮私聊卡通过或退回。其余轮次直接进入采购终审。运营通过后转采购，采购在管理员「差异化政策」终审，通过即结束审核。管理员可查本公司已提交的政策、历轮审核与快照。接口同时提供单商品有效政策查询。系统管理按账号、岗位权限和平台分工分开维护。
 
 ## 用户管理页面
 
-管理员 `#/admin/users` 分别加载服务端列表、全量统计和用户详情。确认调整角色或启停前，弹窗读取最新详情，用其中的 roleType、status 作为 expectedRoleType、expectedStatus。写入成功后同步刷新当前列表、统计及已打开的详情。[用户接口](user-api.md) · [页面规则](../architecture/admin-workspace.md#用户管理)
+用户管理页 `#/admin/users` 按姓名、部门、角色和账号状态筛选，分别加载列表、全量统计与账号详情。修改账号岗位或启停状态时，提交最新 `authVersion` 作为 `expectedVersion`，并刷新当前页面。[账号与岗位分配](user-api.md#账号与角色分配)
 
-| 页面能力 | 接口 | 当前状态 |
+| 页面 | 读取 | 保存 |
 | --- | --- | --- |
-| 用户列表 | `GET /api/admin/users` | 后端已实现姓名／部门、角色、状态筛选与分页，页面已接入 |
-| 顶部统计 | `GET /api/admin/users/stats` | 后端已实现四项全量计数，独立于列表筛选，页面已接入 |
-| 用户详情 | `GET /api/admin/users/{id}` | 后端已实现基础资料及应用内 openId，页面已接入 |
-| 查看负责平台 | `GET /api/admin/users/platform-assignments` | 分配弹窗按渠道展示本公司当前负责人 |
-| 保存负责平台 | `PATCH /api/admin/users/{id}/platforms` | 按 `expectedPlatforms` 核对该申请人的原分工及所选平台占用，冲突时重新读取。[分工接口](user-api.md#负责平台) |
-| 角色调整 | `PATCH /api/admin/users/{id}/role` | 后端已实现角色双向切换及并发、权限保护，页面已接入 |
-| 启用／停用 | `PATCH /api/admin/users/{id}/status` | 后端已实现启停及本人和最后有效管理员保护，页面已接入 |
+| 用户管理 | `GET /api/admin/users`、`/stats`、`/{id}` | `PATCH /api/admin/users/{id}/roles` 或 `/status` |
+| 角色管理 | `GET /api/admin/roles` | `POST /api/admin/roles` 或 `PUT /api/admin/roles/{id}` |
+| 平台分工 | `GET /api/admin/users/platform-assignments`、`/platform-candidates` | `PUT /api/admin/users/platform-assignments/{perspective}/{platformCode}` |
 
-409 或写入结果未知时，页面显示实际错误、重新读取详情并保留操作目标。目标 MySQL 并发和真实飞书会话仍待联调。[页面调用与刷新](user-api.md#页面调用与刷新) · [目标环境联调](user-api.md#目标环境联调)
+角色与平台团队各自使用版本。工作台在出现 409 时提示重新读取，防止用旧名单覆盖他人的更新。[岗位与平台接口](user-api.md)
 
 ## 机型补贴查询
 
-管理员页面 `#/admin/model-subsidies` 用目录汇总和补贴时间轴两个只读接口加载页面。首次进入先读取目录，再按首个机型配置、全部平台和北京时间本月 1 日至月末查询。重置时重新计算当前月份，同一工作台切换菜单后返回则用上次已应用的条件重新请求。两图、指针与明细共用一次时间轴响应。[页面规则](../architecture/admin-workspace.md#机型补贴查询)
+采购和管理员从「政策管理 → 机型补贴查询」进入 `#/admin/model-subsidies`。采购的品牌、机型和补贴明细取自「政策审核设置」中当前负责的品牌，管理员可以查全部品牌。首次进入先读取目录，再按首个机型配置、全部平台和北京时间本月 1 日至月末查询。两图、指针与明细共用一次时间轴响应。[页面规则](../architecture/admin-workspace.md#机型补贴查询)
 
 | 页面动作 | 接口 | 返回内容 |
 | --- | --- | --- |
-| 选择品牌、机型版本及配置 | `GET /api/admin/catalog/goods/summary?includeModelConfigurations=true` | `series[]`、`models[]` 和按机型去重的 `modelConfigurations[]` |
+| 选择品牌、机型版本及配置 | `GET /api/catalog/subsidy-options` | 可见范围内的 `brands[]`、`series[]`、`models[]`、`configurations[]` |
 | 查询、重置或定位当前时间 | `GET /api/admin/policies/subsidy-timeline` | 同一配置的零售与百亿时间轴、原单及选中时点的明细 |
 | 联调抽查切换时点 | `GET /api/admin/policies/effective` | 单个渠道、平台、商品及指定秒的实际采用名单 |
+
+未分配品牌的采购得到空目录。时间轴按机型 ID 核验品牌，指定时点的有效政策按商品 ID 核验品牌。采购直接查询范围外的 ID 返回 403 `POLICY_SUBSIDY_BRAND_FORBIDDEN`。调换品牌后，下次请求按新分工读取该品牌的获批政策，包括前任采购审核的政策。兼任运营的采购查负责平台的补贴时也受采购品牌限制。
 
 ### 申请人机型补贴查询
 
@@ -41,7 +39,7 @@
 
 ### 选择机型与配置
 
-管理员汇总接口的 `modelConfigurations[]` 每项含 `spuId`、`ram`、`rom`。机型通过 `seriesId` 关联品牌系列，通过 `spuId` 筛选实际存在的配置。选项覆盖全部销售状态，包含已下架、已停产商品。传输使用目录原值，例如 `1024GB`。省略参数时沿用商品中心原响应。[商品目录](catalog-api.md#已实现的标准商品目录)
+补贴目录的 `configurations[]` 每项含 `spuId`、`ram`、`rom`。机型通过 `seriesId` 关联品牌系列，通过 `spuId` 筛选实际存在的配置。选项覆盖全部销售状态，包含已下架、已停产商品。传输使用目录原值，例如 `1024GB`。[商品目录](catalog-api.md#已实现的标准商品目录)
 
 ### 查询补贴历史
 
@@ -101,7 +99,7 @@ GET /api/admin/policies/subsidy-timeline?spuId=101&ram=16GB&rom=512GB&dateFrom=2
 | ERP 按轮只读详情 | `GET /api/policy-reviews/{id}?submissionVersion=2` | 按指定轮次只读展示快照、逐段依据、成员及结果 |
 | 产品运营飞书初审 | `card.action.trigger` | 当前初审成员携带 `recordVersion`、`submissionVersion` 提交同意或退回。首个有效决定生效，退回须填写原因 |
 | 审核轮次附件 | `GET /api/policy-reviews/{id}/attachments/{attachmentId}/content?submissionVersion=2` | 按该轮详情阅读权及快照中的文件引用下载。[附件接口](attachment-api.md#政策绑定与历史保护) |
-| 管理员政策审核设置、在途改派 | `GET/PUT /api/admin/policy-review-settings`、`POST /api/admin/policy-reviews/{id}/reassign` | 设置供后续首提与重提使用。在政策详情改派只变更本轮目标组。[设置与改派](policy-review-settings.md) |
+| 管理员政策审核设置 | `GET/PUT /api/admin/policy-review-settings` | 管理员提前指定审核分工，之后的首提与重提按当时的设置冻结负责人。[审核设置](policy-review-settings.md) |
 | 差异化政策 `#/admin/policies` | `GET /api/admin/policies`、`GET /api/admin/policies/{id}`、`POST /api/admin/policies/{id}/review` | 筛选已提交政策并查看本轮快照，审核通过前复核本轮决定，未确认的组合由管理员驳回后重提 |
 | 管理员原单时间调整记录 | `GET /api/admin/policies/{id}` | 「当前申请」显示 `timeHistory.initialEnd` 和 `currentEnd`。其后的「时间调整记录」按详情自带的 `timeHistory.changes` 展示该单历次调整，再后为「审核记录」。[页签与字段](../architecture/frontend-development.md#政策审核详情的时间调整记录) |
 | 管理员历轮审核 | `GET /api/admin/policies/{id}/audit-logs`、`GET /api/admin/policies/{id}/audit-logs/{logId}` | 查看与审核窗口的「审核记录」页签分页读取历轮结果，支持查看指定轮次完整快照及附件；历史只读 |

@@ -45,6 +45,21 @@ public class PolicyAttachmentController {
                 attachments.downloadApplicantHistory(id, logId, attachmentId, user));
     }
 
+    @GetMapping("/api/policies/shared/{id}/attachments/{attachmentId}/content")
+    @Operation(summary = "下载本人负责平台最新正式轮次引用的附件")
+    public ResponseEntity<Resource> shared(
+            @PathVariable long id,
+            @PathVariable String attachmentId,
+            @RequestParam int submissionVersion,
+            HttpServletRequest request) {
+        return AttachmentController.content(
+                attachments.downloadShared(
+                        id,
+                        submissionVersion,
+                        attachmentId,
+                        sessions.requireLogin(request).user()));
+    }
+
     @GetMapping("/api/admin/policies/{id}/audit-logs/{logId}/attachments/{attachmentId}/content")
     @Operation(summary = "管理员下载指定申请提交轮次的附件")
     public ResponseEntity<Resource> admin(

@@ -144,7 +144,7 @@ class PolicyWorkflowRouteTest {
         var row =
                 new PolicyReviewMapper.AdjustmentCandidate(
                         96L, 42L, "RETAIL", SUBMISSION.minusDays(1), 7L, "[\"JD\"]", 3, null, null);
-        when(reviews.adjustmentCandidates("company", 7L, SUBMISSION, "2026-11-23"))
+        when(reviews.adjustmentCandidates("company", 7L, SUBMISSION, "2026-11-23", 1L, 3L))
                 .thenReturn(List.of(row));
         assertThatThrownBy(() -> coverage.workflowRoute(entry, proposed, SUBMISSION))
                 .isInstanceOfSatisfying(

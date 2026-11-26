@@ -12,8 +12,8 @@ public interface UserInfoMapper {
     // 登录时不得覆盖已有角色、部门或逻辑删除标记。
     @Insert(
             """
-        INSERT INTO user_info (tenant_key, open_id, union_id, name, avatar_url, role_type, is_deleted)
-        VALUES (#{tenantKey}, #{openId}, #{unionId}, #{name}, #{avatarUrl}, 'APPLICANT', 0)
+        INSERT INTO user_info (tenant_key, open_id, union_id, name, avatar_url, is_deleted)
+        VALUES (#{tenantKey}, #{openId}, #{unionId}, #{name}, #{avatarUrl}, 0)
         ON DUPLICATE KEY UPDATE
           name = CASE WHEN is_deleted = 0 THEN VALUES(name) ELSE name END,
           union_id = CASE WHEN is_deleted = 0 THEN COALESCE(VALUES(union_id), union_id) ELSE union_id END,
@@ -23,7 +23,7 @@ public interface UserInfoMapper {
 
     @Select(
             """
-        SELECT id, tenant_key, open_id, union_id, name, avatar_url, department, role_type, is_deleted
+        SELECT id, tenant_key, open_id, union_id, name, avatar_url, department, auth_version, is_deleted
         FROM user_info WHERE tenant_key = #{tenantKey} AND open_id = #{openId}
         """)
     UserInfo findIdentity(@Param("tenantKey") String tenantKey, @Param("openId") String openId);

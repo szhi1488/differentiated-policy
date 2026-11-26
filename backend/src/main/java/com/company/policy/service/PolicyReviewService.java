@@ -31,7 +31,7 @@ public interface PolicyReviewService {
     OverridePreview preview(
             CurrentUserResponse session, long id, int recordVersion, int submissionVersion);
 
-    /** 查询指定时点、渠道、平台和商品的有效政策，省略时点时使用当前时间。 */
+    /** 在当前可读品牌内查询指定时点、渠道、平台和商品的有效政策，省略时点时使用当前时间。 */
     Effective effective(
             CurrentUserResponse session,
             String perspective,
@@ -39,7 +39,7 @@ public interface PolicyReviewService {
             long goodsId,
             String at);
 
-    /** 读取管理员选定平台及机型的已通过原单、历史与后续计划。 */
+    /** 按采购负责品牌或管理员全品牌范围读取机型的已通过原单、历史与后续计划。 */
     PolicySubsidyTimeline subsidyTimeline(CurrentUserResponse session, PolicyTimelineQuery query);
 
     /** 分页查询本公司指定申请的历轮提交和审核记录。 */

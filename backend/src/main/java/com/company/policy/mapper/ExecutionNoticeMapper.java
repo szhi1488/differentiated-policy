@@ -89,13 +89,6 @@ public interface ExecutionNoticeMapper {
     int stillPaused(long id, int version);
 
     @Select(
-            """
-        SELECT payload_json FROM policy_review_delivery WHERE tenant_key=#{tenant}
-          AND notice_key LIKE CONCAT(#{prefix},'%') ORDER BY id DESC LIMIT 1
-        """)
-    String lastPlatformChange(String tenant, String prefix);
-
-    @Select(
             "SELECT COUNT(*) FROM policy_review_delivery WHERE tenant_key=#{tenant} AND notice_key LIKE CONCAT(#{prefix},'%')")
     int hasSchedule(String tenant, String prefix);
 

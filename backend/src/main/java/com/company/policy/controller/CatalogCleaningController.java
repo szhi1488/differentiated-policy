@@ -34,8 +34,8 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "商品清洗与识别", description = "查看清洗任务、结果，复核来源与重试技术失败")
 @ApiResponse(responseCode = "400", description = "请求或分页参数无效")
 @ApiResponse(responseCode = "401", description = "会话无效")
-@ApiResponse(responseCode = "403", description = "非有效管理员、租户未授权或写请求来源校验失败")
-@ApiResponse(responseCode = "404", description = "当前账套下不存在该资源")
+@ApiResponse(responseCode = "403", description = "无清洗或品牌权限，或写请求来源校验失败")
+@ApiResponse(responseCode = "404", description = "本人可见品牌中未找到此资源")
 @ApiResponse(responseCode = "409", description = "状态、版本或目录目标发生冲突")
 @ApiResponse(responseCode = "503", description = "账套未配置或数据库不可用")
 public class CatalogCleaningController {
@@ -57,8 +57,8 @@ public class CatalogCleaningController {
     }
 
     @GetMapping("/catalog/cleaning/jobs/active")
-    @Operation(summary = "查看账套当前正在运行的清洗任务")
-    @ApiResponse(responseCode = "204", description = "当前没有正在运行的任务")
+    @Operation(summary = "查看本人品牌当前正在运行的清洗任务")
+    @ApiResponse(responseCode = "204", description = "当前没有本人可见的运行任务")
     public ResponseEntity<Job> active(HttpServletRequest request) {
         Job job = service.active(sessions.requireLogin(request).user());
         return job == null ? ResponseEntity.noContent().build() : ResponseEntity.ok(job);

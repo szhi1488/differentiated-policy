@@ -6,13 +6,13 @@
 
 2026-11-15 用户确认源商品与标准商品一对一：清洗或人工审核通过后，`goods.sku_id` 延续该来源的原始 SKU，不同源 SKU 的相同配置颜色不再归并；无来源手工商品 SKU 为空。用户确认删除旧表后重建，执行顺序见 [Navicat 重建步骤](../sql/database-design.md#1-在-navicat-建表)。目标库调整由用户在 Navicat 执行。
 
-商品读取已接入后端 `JackyunGoodsService`，并实测一加、OPPO 两品牌的单页查询及续拉。已实现按 SKU 更新原文、建档日追溯、手动启动清洗及异常审核。管理员在源商品库右上角打开导入弹窗，选品牌并发起全量或按建档日期导入。[商品方案](catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+商品读取已接入后端 `JackyunGoodsService`，并实测一加、OPPO 两品牌的单页查询及续拉。已实现按 SKU 更新原文、建档日追溯、手动启动清洗及异常审核。采购在源商品库右上角打开导入弹窗，选品牌并发起全量或按建档日期导入。[商品方案](catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 产品与运行方式
 
-系统是嵌入飞书的公司内部 ERP，支持飞书客户端和普通浏览器访问，工作台按申请人与管理员角色分流。客户端通过 JS-SDK 免登，浏览器提供飞书扫码与网页 OAuth 授权，使用同一套服务端身份核验及会话。政策审核后端在现有账号上按轮指派产品运营与采购，支持初审、终审、按轮阅读和改派。[B 阶段基础](policy-workflow-phase-b.md) · [C 阶段站内审核](policy-workflow-phase-c.md)
+系统是嵌入飞书的公司内部 ERP，支持飞书客户端和普通浏览器访问，工作台按申请人与管理员角色分流。客户端通过 JS-SDK 免登，浏览器提供飞书扫码与网页 OAuth 授权，使用同一套服务端身份核验及会话。政策审核后端在现有账号上按轮指派产品运营与采购，支持初审、终审及按轮阅读，负责人按提交时的预设冻结。[B 阶段基础](policy-workflow-phase-b.md) · [C 阶段站内审核](policy-workflow-phase-c.md)
 
-飞书登录后按服务端 `user.roleType` 分流。ADMIN 进入「商品 → 源商品库」，其他角色沿用申请人工作台。申请人侧栏包括「提交政策」「我的提交」「机型补贴查询」。管理员可从「商品」查看清洗任务和标准目录，从「政策管理 → 差异化政策」查看或审核已提交政策。[管理员工作台](admin-workspace.md)
+飞书登录后按服务端会话的岗位与权限分流。管理员的商品分组只保留「商品中心」，默认从这里进入标准目录。采购默认进入「源商品库」，可导入原文和办理商品清洗。运营从「政策提交」填报，产品运营可查看本人初审记录。[管理员工作台](admin-workspace.md)
 
 两角色共用顶部栏，包含侧栏开关、当前位置、角色菜单搜索、帮助及登录人头像，侧栏复用同一份菜单视觉样式。申请人手机工作台可直接打开提交政策、我的提交和机型补贴查询。头像由登录服务保存到 `user_info.avatar_url`，经登录和会话接口的 `user.avatarUrl` 返回，缺失或加载失败时显示姓名首字。[实现及验证](frontend-development.md#2026-11-15-共用顶部导航与飞书头像)
 
@@ -80,7 +80,7 @@ E 阶段在本地完成卡片投递与回调验证。ERP 在提交事务内登�
 | `layouts/components/WorkspaceTopbar.vue`、`constants/navigation.js` | 两角色共用顶部栏；按当前角色已有菜单搜索、当前位置、帮助及头像；侧栏与搜索共用管理员菜单定义 |
 | `components/WorkspacePageHeading.vue`、`layouts/components/PolicyBanner.vue`、`assets/styles/brand.css` | 两角色共用标题、SVG 图标和横幅尺寸；侧栏、横幅、正文分别使用各自背景资源，正文背景由两角色布局共用容器铺满 |
 | `views/auth/FeishuLoginPage.vue` | 飞书客户端免登状态，普通浏览器扫码及网页授权入口 |
-| `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 管理员侧栏依次为系统管理、商品、政策管理；默认进入源商品库，支持分品牌导入及已落库原文列表，表格在窄屏容器内横向滚动 |
+| `layouts/AdminLayout.vue`、`views/admin/catalog/CatalogSourcesPage.vue` | 管理员商品入口为商品中心。采购在源商品库按品牌导入及查询原文，表格在窄屏容器内横向滚动 |
 | `views/admin/users/AdminUsersPage.vue`、`UserDetailDrawer.vue`、`UserAccountAction.vue`、`UserPlatformDialog.vue`、`composables/useUserManagement.js` | 管理员用户查询、角色调整、启停及分工，七个接口经 `api/admin-users.js` 调用 |
 | `views/admin/catalog/CatalogCleaningPage.vue` | 跨品牌查询、按品牌和日期预览、二次确认、进度、审核、重试和任务结果统计 |
 | `views/admin/catalog/CatalogCenterPage.vue` | 三级分类、即时筛选、分页、详情、手工新增、编辑、删除和字典维护 |

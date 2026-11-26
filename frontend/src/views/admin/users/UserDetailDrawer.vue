@@ -2,10 +2,11 @@
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import AppIcon from '../../../components/AppIcon.vue'
-import { USER_ROLE_LABELS, USER_STATUS_LABELS } from '../../../constants/users'
+import { roleLabels, USER_STATUS_LABELS } from '../../../constants/users'
 
 defineProps({
   open: Boolean,
+  roles: { type: Array, default: () => [] },
   user: { type: Object, default: null },
   restriction: { type: String, default: '' },
   currentId: { type: String, default: '' },
@@ -85,9 +86,7 @@ async function copyId(value) {
           <div>
             <dt>系统角色</dt>
             <dd>
-              <el-tag :type="user.roleType === 'ADMIN' ? 'primary' : 'info'" size="small">
-                {{ USER_ROLE_LABELS[user.roleType] }}
-              </el-tag>
+              {{ roleLabels(user.roleCodes, roles) }}
             </dd>
           </div>
           <div>
@@ -99,13 +98,6 @@ async function copyId(value) {
             </dd>
           </div>
         </dl>
-        <p class="admin-user-permissions">
-          {{
-            user.roleType === 'ADMIN'
-              ? '管理商品、审核政策，并管理系统用户。'
-              : '提交政策，查看和管理本人的申请。'
-          }}
-        </p>
       </section>
     </template>
     <template #footer>

@@ -12,8 +12,8 @@ export function usePolicyGoodsPicker(props) {
   const mode = ref('COMMON')
   const special = computed(() => mode.value === 'SPECIFIED')
   const initial = props.initialGoods.find((item) => item.brandId) ?? props.initialGoods[0]
-  const brandId = ref(initial?.brandId ?? '')
-  const seriesId = ref(initial?.seriesId ?? '')
+  const brandId = ref(props.lockedScope?.brandId ?? initial?.brandId ?? '')
+  const seriesId = ref(props.lockedScope?.seriesId ?? initial?.seriesId ?? '')
   const spuId = ref(initial?.spuId ?? '')
   const prefilledConfigs = new Set(props.existingGoods.map(policyConfigurationKey))
   const config = ref([...new Set(props.initialGoods.map(policyConfigurationKey))])
@@ -174,6 +174,9 @@ export function usePolicyGoodsPicker(props) {
   }
 
   function changeBrand(value) {
+    if (props.lockedScope) {
+      return
+    }
     brandId.value = value || ''
     if (!series.value.some(({ id }) => id === seriesId.value)) {
       seriesId.value = ''
@@ -182,6 +185,9 @@ export function usePolicyGoodsPicker(props) {
   }
 
   function changeSeries(value) {
+    if (props.lockedScope) {
+      return
+    }
     seriesId.value = value || ''
     reconcileModel()
   }
@@ -292,6 +298,16 @@ export function usePolicyGoodsPicker(props) {
           }
         }
       }
+      const selectedScopes = new Set(
+        [
+          ...next.values(),
+          ...props.existingGoods.filter((g) => !nextRemoved.has(g.id)),
+          ...(props.lockedScope ? [props.lockedScope] : []),
+        ].map((g) => [g.brandId, g.seriesId].join('/')),
+      )
+      if (selectedScopes.size > 1) {
+        throw new Error('每张政策只能申报一个品牌下的一个系列，请缩小所选配置。')
+      }
       commonGoods.value = next
       removed.value = nextRemoved
     } catch (error) {
@@ -353,6 +369,13 @@ export function usePolicyGoodsPicker(props) {
 
   function toggle(item, checked) {
     if (special.value && checked && !added.value.has(item.id)) {
+      if (
+        props.lockedScope &&
+        (item.brandId !== props.lockedScope.brandId || item.seriesId !== props.lockedScope.seriesId)
+      ) {
+        selectionError.value = '指定商品须与已选商品属于同一品牌、同一系列。'
+        return
+      }
       specifiedGood.value = new Map([[item.id, item]])
     }
   }

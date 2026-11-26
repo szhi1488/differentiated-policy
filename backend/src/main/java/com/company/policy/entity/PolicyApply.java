@@ -10,6 +10,8 @@ public class PolicyApply {
     private String tenantKey;
     private Long applicantId;
     private String applicantName;
+    private Long brandId;
+    private Long seriesId;
     private String channelType;
     private String platforms;
     private String writeOffType;

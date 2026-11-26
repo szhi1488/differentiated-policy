@@ -10,7 +10,7 @@ public interface PolicyFeishuSender {
     /** 将单个 ERP 投递动作发送到飞书并返回回执。 */
     String send(Delivery item);
 
-    /** 执行期提醒共用业务提醒队列，按业务类型确定飞书动作及回执核验方式。 */
+    /** 执行期提醒共用业务提醒队列，按业务类型确定实际飞书动作。 */
     static String deliveryAction(long policyId, String queueAction, JsonNode payload) {
         if (policyId == 0
                 && "GROUP_MESSAGE".equals(queueAction)
@@ -19,7 +19,7 @@ public interface PolicyFeishuSender {
         return queueAction;
     }
 
-    /** 按轮次、业务事件和指派生成在恢复及补发时使用的稳定 UUID。 */
+    /** 按轮次、业务事件和指派生成稳定 UUID，自动重试沿用同一编号。 */
     static String idempotencyKey(
             String tenant,
             long policyId,

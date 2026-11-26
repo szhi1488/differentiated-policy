@@ -117,6 +117,22 @@ const basicFields = computed(() => {
 </script>
 
 <template>
+  <section v-if="round || roundBusy || roundError" class="admin-policy-detail-section">
+    <p v-if="roundBusy" role="status">正在读取本轮审核信息…</p>
+    <el-alert
+      v-else-if="roundError"
+      title="本轮审核信息未能读取"
+      type="warning"
+      :closable="false"
+      show-icon
+    >
+      <p>{{ roundError.message }}</p>
+      <el-button link type="primary" @click="$emit('retry-round')">
+        {{ roundError.code === 'ROUND_RELOAD_REQUIRED' ? '重新读取政策' : '重新读取本轮审核信息' }}
+      </el-button>
+    </el-alert>
+    <PolicyReviewMembers v-else-if="round" :round="round" />
+  </section>
   <div class="admin-policy-detail-grid">
     <section class="admin-policy-detail-section">
       <h3>基本信息</h3>
@@ -238,23 +254,4 @@ const basicFields = computed(() => {
       </section>
     </section>
   </div>
-  <section v-if="round || roundBusy || roundError" class="admin-policy-detail-section">
-    <p v-if="roundBusy" role="status">正在读取本轮审核信息…</p>
-    <el-alert
-      v-else-if="roundError"
-      title="本轮审核信息未能读取"
-      type="warning"
-      :closable="false"
-      show-icon
-    >
-      <p>{{ roundError.message }}</p>
-      <el-button link type="primary" @click="$emit('retry-round')">
-        {{ roundError.code === 'ROUND_RELOAD_REQUIRED' ? '重新读取政策' : '重新读取本轮审核信息' }}
-      </el-button>
-    </el-alert>
-    <template v-else-if="round">
-      <PolicyReviewMembers :round="round" />
-      <slot name="member-actions" />
-    </template>
-  </section>
 </template>

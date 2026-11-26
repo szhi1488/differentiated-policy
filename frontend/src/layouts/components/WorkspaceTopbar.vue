@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
+import { canOpen } from '../../constants/navigation'
 
 const props = defineProps({
   user: { type: Object, default: null },
@@ -23,6 +24,11 @@ const currentGroup = computed(() =>
 const currentPage = computed(() =>
   currentGroup.value?.links.find(({ name }) => name === currentMenu.value),
 )
+const currentSection = computed(() =>
+  currentPage.value?.sections?.find(
+    (section) => section.name === route.name && section.name !== currentMenu.value,
+  ),
+)
 const avatarUrl = computed(() => {
   const url = props.user?.avatarUrl
   if (typeof url !== 'string') {
@@ -37,12 +43,23 @@ const avatarUrl = computed(() => {
 watch(avatarUrl, () => (avatarFailed.value = false))
 function suggestions(query, callback) {
   const search = query.trim().toLocaleLowerCase()
+  const results = props.groups.flatMap((group) =>
+    group.links.flatMap((link) => {
+      const children = (link.sections ?? []).filter(
+        (section) => section.name !== link.name && canOpen(props.user, section.name),
+      )
+      return [
+        { name: link.name, value: link.label, group: group.label },
+        ...children.map((section) => ({
+          name: section.name,
+          value: section.label,
+          group: `${group.label} / ${link.label}`,
+        })),
+      ]
+    }),
+  )
   callback(
-    props.groups.flatMap((group) =>
-      group.links
-        .filter((link) => `${group.label} ${link.label}`.toLocaleLowerCase().includes(search))
-        .map((link) => ({ ...link, value: link.label, group: group.label })),
-    ),
+    results.filter((item) => `${item.group} ${item.value}`.toLocaleLowerCase().includes(search)),
   )
 }
 function navigate(item) {
@@ -66,6 +83,7 @@ function navigate(item) {
     <el-breadcrumb class="workspace-breadcrumb" separator="/" aria-label="当前位置">
       <el-breadcrumb-item>{{ currentGroup?.label || roleLabel }}</el-breadcrumb-item>
       <el-breadcrumb-item v-if="currentPage">{{ currentPage.label }}</el-breadcrumb-item>
+      <el-breadcrumb-item v-if="currentSection">{{ currentSection.label }}</el-breadcrumb-item>
     </el-breadcrumb>
 
     <div class="workspace-topbar-actions">
@@ -97,10 +115,9 @@ function navigate(item) {
         <div class="workspace-topbar-panel">
           <strong>工作台使用帮助</strong>
           <p>搜索菜单可快速打开当前工作台页面，支持方向键选择、回车打开。</p>
-          <p v-if="roleLabel === '申请人'">
+          <p v-if="groups.some((group) => group.links.some((link) => link.name === 'apply'))">
             在「提交政策」填写申请，在「我的提交」查看进度和驳回原因，在「机型补贴查询」查看负责平台的已通过政策。切换菜单会保留当前填写内容，刷新前请先保存草稿。
           </p>
-          <p v-else>在「商品」导入、清洗和维护商品，在「政策管理」查看及审核政策申请。</p>
         </div>
       </el-popover>
       <div class="workspace-user" :aria-label="`当前用户：${displayName}`">

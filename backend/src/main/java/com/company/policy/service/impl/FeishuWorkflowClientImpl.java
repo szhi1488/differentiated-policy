@@ -4,7 +4,6 @@ import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.service.FeishuTenantTokenService;
 import com.company.policy.service.FeishuWorkflowClient;
-import com.company.policy.service.PolicyFeishuSender;
 import com.company.policy.service.PolicyFeishuSender.Failure;
 import com.company.policy.service.PolicyFeishuSender.Kind;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -19,7 +18,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -137,7 +135,7 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
             if (!data.path("has_more").booleanValue()) {
                 var sample = String.join("、", missing.stream().limit(3).toList());
                 throw new Failure(
-                        Kind.PERMANENT, "有 " + missing.size() + " 位收件人未加入业务群，请邀请入群后补发。" + sample);
+                        Kind.PERMANENT, "有 " + missing.size() + " 位收件人未加入业务群，本次群消息未发送。" + sample);
             }
             String next = data.path("page_token").asText("");
             if (next.isBlank() || !pages.add(next)) {
@@ -228,138 +226,6 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
             throw new Failure(Kind.PERMANENT, "外部回执格式无效");
         }
         return value;
-    }
-
-    @Override
-    public void verifyReceipt(
-            String action,
-            String receipt,
-            String recipient,
-            String idempotencyKey,
-            long assignmentId,
-            long policyId,
-            int version) {
-        if (recipient == null
-                || recipient.isBlank()
-                || idempotencyKey == null
-                || idempotencyKey.isBlank()) {
-            throw new Failure(Kind.PERMANENT, "投递收件人或业务标识缺失");
-        }
-        String id = pathId(receipt);
-        boolean verified;
-        if ("CREATE_TASK".equals(action)) {
-            JsonNode task = call("GET", TASKS + "/" + id + OPEN_ID, null).data().path("task");
-            verified =
-                    id.equals(task.path("guid").asText())
-                            && config.getAppId().equals(task.at("/creator/id").asText())
-                            && "app".equals(task.at("/creator/type").asText())
-                            && idempotencyKey.equals(task.path("extra").asText())
-                            && hasAssignee(task, recipient);
-        } else if ("SEND_CARD".equals(action)) {
-            var message = ownMessage(id);
-            verified =
-                    matchesCard(
-                            message,
-                            content(message),
-                            recipient,
-                            idempotencyKey,
-                            assignmentId,
-                            policyId,
-                            version);
-        } else {
-            throw new Failure(Kind.PERMANENT, "该投递动作不支持补录回执");
-        }
-        if (!verified) {
-            throw new Failure(Kind.PERMANENT, "飞书回执与本应用、本轮投递或收件人不符");
-        }
-    }
-
-    private JsonNode ownMessage(String id) {
-        var message =
-                call(
-                                "GET",
-                                MESSAGES
-                                        + "/"
-                                        + pathId(id)
-                                        + "?card_msg_content_type=user_card_content",
-                                null)
-                        .data()
-                        .at("/items/0");
-        if (!id.equals(message.path("message_id").asText())
-                || message.path("deleted").asBoolean()
-                || !config.getAppId().equals(message.at("/sender/id").asText())
-                || !"app".equals(message.at("/sender/sender_type").asText())
-                || !"app_id".equals(message.at("/sender/id_type").asText())
-                || !config.getTenantKey().equals(message.at("/sender/tenant_key").asText())) {
-            throw new Failure(Kind.PERMANENT, "飞书回执与本应用或本企业不符");
-        }
-        return message;
-    }
-
-    private boolean hasAssignee(JsonNode task, String recipient) {
-        for (JsonNode member : task.path("members")) {
-            if ("assignee".equals(member.path("role").asText())
-                    && "user".equals(member.path("type").asText())
-                    && recipient.equals(member.path("id").asText())) return true;
-        }
-        return false;
-    }
-
-    private JsonNode content(JsonNode message) {
-        try {
-            return json.readTree(message.at("/body/content").asText());
-        } catch (IOException malformed) {
-            return null;
-        }
-    }
-
-    @Override
-    public LocalDateTime verifyGroupReceipt(
-            String receipt,
-            String chatId,
-            String key,
-            String fingerprint,
-            LocalDateTime firstAttemptAt) {
-        var message = ownMessage(receipt);
-        var body = content(message);
-        if (body != null
-                && "post".equals(message.path("msg_type").asText())
-                && message.path("chat_id").asText().equals(chatId)) {
-            var rows = body.has("zh_cn") ? body.at("/zh_cn/content") : body.path("content");
-            var last = rows.path(rows.size() - 1);
-            if (key != null
-                    && !key.isBlank()
-                    && last.size() == 1
-                    && "text".equals(last.path(0).path("tag").asText())
-                    && ("投递编号 " + key).equals(last.path(0).path("text").asText())) return null;
-            if (PolicyGroupReceipt.matches(
-                    json, config.getAppId(), chatId, message, body, fingerprint, firstAttemptAt)) {
-                return PolicyGroupReceipt.messageTime(message);
-            }
-        }
-        throw new Failure(Kind.PERMANENT, "飞书群消息与本次投递的收件群、内容或发送时间不符");
-    }
-
-    private boolean matchesCard(
-            JsonNode message,
-            JsonNode content,
-            String recipient,
-            String key,
-            long assignmentId,
-            long policyId,
-            int version) {
-        if (content == null || !"interactive".equals(message.path("msg_type").asText()))
-            return false;
-        for (JsonNode value : content.findValues("value")) {
-            if (key.equals(value.path("deliveryKey").asText())
-                    && recipient.equals(value.path("recipientOpenId").asText())
-                    && Long.toString(assignmentId).equals(value.path("memberId").asText())
-                    && Long.toString(policyId).equals(value.path("policyId").asText())
-                    && version == value.path("round").asInt(-1)) return true;
-        }
-        String marker =
-                PolicyFeishuSender.noticeElementId(recipient, key, assignmentId, policyId, version);
-        return content.findValuesAsText("element_id").contains(marker);
     }
 
     private String receipt(JsonNode node) {

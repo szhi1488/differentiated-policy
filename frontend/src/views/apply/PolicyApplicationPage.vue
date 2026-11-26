@@ -126,6 +126,9 @@ const commonGoodsCount = computed(() =>
     0,
   ),
 )
+const selectedSeries = computed(() =>
+  form.value.cards.flatMap((card) => card.goods).find((g) => g.brandId && g.seriesId),
+)
 const editingCard = computed(() =>
   form.value.cards.find(({ key }) => key === goodsPicker.value?.cardKey),
 )
@@ -359,6 +362,7 @@ function updateTime(value) {
           v-if="goodsPicker"
           :editing="!!goodsPicker.cardKey"
           :initial-goods="initialGoods"
+          :locked-scope="selectedSeries"
           :existing-goods="editingCard?.goods ?? []"
           :added-keys="addedGoodsKeys"
           :specified-ids="specifiedIds"

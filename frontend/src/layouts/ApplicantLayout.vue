@@ -1,64 +1,37 @@
 <script setup>
-import { computed, onScopeDispose, provide, ref, watch } from 'vue'
+import { computed, provide, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import PolicyBanner from './components/PolicyBanner.vue'
 import WorkspaceTopbar from './components/WorkspaceTopbar.vue'
-import { APPLICANT_NAV_GROUPS } from '../constants/navigation'
+import { APPLICANT_NAV_GROUPS, visibleGroups, homePage } from '../constants/navigation'
 import { useWorkspaceSidebar } from './use-workspace-sidebar'
-import { useLatestQuery } from '../composables/useLatestQuery'
-import { readAssignedPlatforms } from '../api/policies'
-import { usePolicyForm } from '../composables/usePolicyForm'
 import { authSession } from '../composables/useAuthSession'
 import './workspace-navigation.css'
 import './applicant-layout.css'
 
+import { useWorkspacePolicyForm } from '../composables/useWorkspacePolicyForm'
+import { roleLabels } from '../constants/users'
 const route = useRoute()
 const router = useRouter()
 const policyMenuOpen = ref(true)
 const { collapsed, expanded, toggle } = useWorkspaceSidebar(520)
-const permissions = useLatestQuery()
-const refreshPlatforms = () => permissions.run(readAssignedPlatforms)
-const state = usePolicyForm(permissions.data, undefined, refreshPlatforms)
-provide('platformPermissions', { ...permissions, refreshPlatforms })
-const applicationRoute = computed(() => ({
-  name: 'apply',
-  query: state.record.value ? { policyId: state.record.value.id } : {},
-}))
-provide('policyForm', state)
+const applicationRoute = useWorkspacePolicyForm()
 provide('modelSubsidyLastQuery', ref(null))
-// 在地址变更前确认，取消导航时保留原地址、表单和附件；加载由申请页负责。
-const removePolicyGuard = router.beforeEach((to) => {
-  const id = to.query.policyId
-  if (to.name === 'apply' && to.query.round && (state.busy.value || state.confirming.value)) {
-    return false
-  }
-  if (
-    to.name === 'apply' &&
-    typeof id === 'string' &&
-    (id !== state.record.value?.id ||
-      state.loading.value ||
-      (to.query.round && Number(to.query.round) !== state.record.value?.submissionVersion))
-  ) {
-    return state.confirmPolicyReplacement()
-  }
-  return true
-})
-onScopeDispose(removePolicyGuard)
-watch(
-  authSession.revision,
-  () => {
-    state.clear()
-    void refreshPlatforms()
-  },
-  { flush: 'sync' },
-)
-onScopeDispose(state.clear)
+const navGroups = computed(() => visibleGroups(authSession.user.value, APPLICANT_NAV_GROUPS))
 </script>
 <template>
   <div class="workspace" :class="{ 'is-sidebar-collapsed': collapsed }">
     <aside id="applicant-sidebar" class="sidebar workspace-sidebar">
-      <router-link class="workspace-brand" :to="applicationRoute" aria-label="电商运营平台首页">
+      <router-link
+        class="workspace-brand"
+        :to="
+          homePage(authSession.user.value) === 'apply'
+            ? applicationRoute
+            : { name: homePage(authSession.user.value) }
+        "
+        aria-label="电商运营平台首页"
+      >
         <span class="logo-grid">
           <i></i>
           <i></i>
@@ -67,7 +40,7 @@ onScopeDispose(state.clear)
         </span>
         <strong>电商运营平台</strong>
       </router-link>
-      <nav class="workspace-sidebar-nav" aria-label="申请人导航">
+      <nav class="workspace-sidebar-nav" aria-label="运营导航">
         <button
           class="nav-group workspace-nav-group"
           type="button"
@@ -85,7 +58,7 @@ onScopeDispose(state.clear)
           :class="{ 'is-collapsed': !policyMenuOpen }"
         >
           <button
-            v-for="link in APPLICANT_NAV_GROUPS[0].links"
+            v-for="link in navGroups[0]?.links"
             :key="link.name"
             class="nav-item workspace-nav-item"
             :class="{ 'is-active': (route.meta.menu || route.name) === link.name }"
@@ -100,8 +73,8 @@ onScopeDispose(state.clear)
     <div class="applicant-body">
       <WorkspaceTopbar
         :user="authSession.user.value"
-        :groups="APPLICANT_NAV_GROUPS"
-        role-label="申请人"
+        :groups="navGroups"
+        :role-label="roleLabels(authSession.user.value?.roleCodes)"
         sidebar-id="applicant-sidebar"
         :menu-expanded="expanded"
         @toggle-menu="toggle"

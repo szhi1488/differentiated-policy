@@ -25,6 +25,49 @@ async function open(fetch) {
   })
   await flushPromises()
 }
+
+it('按冻结路由展示运营提交、当前审核人和待接手采购，初审退回止于该节点', async () => {
+  const round = reviewRound()
+  await open(() => Response.json(round))
+  const progress = () => wrapper.get('[aria-label="本轮审核进度"]')
+  const stages = () =>
+    progress()
+      .findAll('h4')
+      .map((item) => item.text())
+  expect(stages()).toEqual(['运营提交', '产品运营初审', '采购终审'])
+  expect(progress().text()).toContain(round.applicantName)
+  expect(progress().text()).toContain('2026-11-23 09:01:02')
+  expect(progress().get('[aria-current="step"]').text()).toContain('周晨')
+  expect(progress().text()).toContain('待初审通过')
+
+  Object.assign(round, { status: 'REJECTED', rejectedAtStage: 'PRODUCT_REVIEW', reviewStage: null })
+  Object.assign(round.productReviewers[0], {
+    decision: 'REJECT',
+    reason: '请确认叠加金额',
+    decidedAt: '2026-11-23T10:11:12+08:00',
+  })
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(stages()).toEqual(['运营提交', '产品运营初审'])
+  expect(progress().text()).toContain('请确认叠加金额')
+  expect(progress().text()).toContain('2026-11-23 10:11:12')
+})
+
+it('直达采购时仅显示运营提交和指派采购', async () => {
+  const round = reviewRound()
+  Object.assign(round, {
+    reviewStage: 'PURCHASE_REVIEW',
+    requiresProductReview: false,
+    productReviewers: [],
+    changeSummary: null,
+  })
+  await open(() => Response.json(round))
+  const progress = wrapper.get('[aria-label="本轮审核进度"]')
+  expect(progress.findAll('h4').map((item) => item.text())).toEqual(['运营提交', '采购终审'])
+  expect(progress.get('[aria-current="step"]').text()).toContain('陈杉')
+  expect(progress.text()).not.toContain('待初审通过')
+})
+
 it('逐段呈现原拟名单、商品、核销和补贴，并将表单与调整证明固定到所查轮次', async () => {
   await open(() => Response.json(reviewRound()))
   const changes = wrapper.get('[aria-label="逐段执行依据"]').text()

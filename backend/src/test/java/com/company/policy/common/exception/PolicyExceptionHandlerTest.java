@@ -62,7 +62,15 @@ class PolicyExceptionHandlerTest {
 
     private static LoginSessionService sessions(String role) {
         var sessions = mock(LoginSessionService.class);
-        var user = new CurrentUserResponse("1", "open-id", "tenant", "测试人员", role, null);
+        var user =
+                new CurrentUserResponse(
+                        "1",
+                        "open-id",
+                        "tenant",
+                        "测试人员",
+                        java.util.List.of(role),
+                        java.util.List.of(),
+                        null);
         when(sessions.requireLogin(any())).thenReturn(new AuthSessionResponse(user, Instant.MAX));
         return sessions;
     }

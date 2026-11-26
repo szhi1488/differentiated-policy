@@ -6,6 +6,7 @@ import { usePolicyGoodsPicker } from '../../../composables/usePolicyGoodsPicker'
 import { catalogConfigLabel } from '../../../utils/catalog-dictionary'
 
 const props = defineProps({
+  lockedScope: Object,
   editing: { type: Boolean, default: false },
   initialGoods: { type: Array, default: () => [] },
   existingGoods: { type: Array, default: () => [] },
@@ -96,13 +97,16 @@ function checked(item) {
           : '选择配置后整组加入，包含该机型配置下的全部在售商品。'
       }}
     </p>
+    <p class="policy-picker-instruction">
+      每张政策限同一品牌、同一系列。普通和指定商品共用此范围。
+    </p>
     <div class="policy-picker-filters">
       <el-select
         :model-value="brandId"
+        :disabled="!!lockedScope || selecting"
         placeholder="全部品牌"
         aria-label="商品品牌"
         clearable
-        :disabled="selecting"
         :loading="optionsBusy"
         @update:model-value="changeBrand"
       >
@@ -110,10 +114,10 @@ function checked(item) {
       </el-select>
       <el-select
         :model-value="seriesId"
+        :disabled="!!lockedScope || selecting"
         placeholder="全部系列"
         aria-label="商品系列"
         clearable
-        :disabled="selecting"
         :loading="optionsBusy"
         @update:model-value="changeSeries"
       >

@@ -16,7 +16,7 @@ import java.util.List;
 
 /** 供申请人保存草稿、提交政策，并查询本人的申请和审核记录。 */
 public interface PolicyApplyService {
-    List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session);
+    List<ChannelPlatform> assignedPlatforms(CurrentUserResponse session, String usage);
 
     /** 按申请人当前负责的平台分工查询机型补贴历史和后续计划。 */
     PolicySubsidyTimeline subsidyTimeline(CurrentUserResponse session, PolicyTimelineQuery query);
@@ -48,6 +48,10 @@ public interface PolicyApplyService {
 
     /** 按筛选条件分页查询本人的政策申请。 */
     Page<Summary> mine(CurrentUserResponse session, PolicyListQuery query);
+
+    Page<Summary> shared(CurrentUserResponse session, PolicyListQuery query);
+
+    Detail sharedDetail(CurrentUserResponse session, long id);
 
     /** 分页查询本人指定申请的历轮提交和审核记录。 */
     Page<AuditSummary> auditLogs(CurrentUserResponse session, long id, int page, int pageSize);

@@ -6,6 +6,10 @@ const cleaningPath = '/api/admin/catalog/cleaning'
 const goodsPath = '/api/admin/catalog/goods'
 const dictionaryPath = '/api/admin/catalog/dictionary'
 
+export function readCatalogSourceBrands(signal) {
+  return request('/api/admin/catalog/source-brands', { signal })
+}
+
 export function readCatalogDictionary(signal) {
   return request(dictionaryPath, { signal })
 }

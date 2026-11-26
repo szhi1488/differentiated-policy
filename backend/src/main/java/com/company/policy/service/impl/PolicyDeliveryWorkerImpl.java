@@ -2,9 +2,9 @@ package com.company.policy.service.impl;
 
 import static com.company.policy.service.impl.PolicyApplyServiceImpl.now;
 
-import com.company.policy.mapper.PolicyDeliveryAdminMapper;
 import com.company.policy.mapper.PolicyDeliveryMapper;
 import com.company.policy.mapper.PolicyDeliveryMapper.Item;
+import com.company.policy.mapper.PolicyDeliveryMapper.TrialCard;
 import com.company.policy.service.PolicyDeliveryWorker;
 import com.company.policy.service.PolicyFeishuSender;
 import com.company.policy.service.PolicyFeishuSender.Delivery;
@@ -24,7 +24,6 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
     private static final int MAX_ATTEMPTS = 5;
     private final String tenant;
     private final PolicyDeliveryMapper queue;
-    private final PolicyDeliveryAdminMapper admin;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private final PolicyFeishuSender sender;
@@ -32,13 +31,11 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
     PolicyDeliveryWorkerImpl(
             @Value("${feishu.tenant-key:}") String tenant,
             PolicyDeliveryMapper queue,
-            PolicyDeliveryAdminMapper admin,
             TransactionTemplate tx,
             ObjectMapper json,
             PolicyFeishuSender sender) {
         this.tenant = tenant;
         this.queue = queue;
-        this.admin = admin;
         this.tx = tx;
         this.json = json;
         this.sender = sender;
@@ -80,17 +77,13 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
                             return claim(id, owner, at);
                         });
         deliver(claim);
-        var current = admin.read(tenant, row.id());
+        var current = queue.trialState(tenant, row.id());
         if (current == null) return new TrialResult("NOT_FOUND", null, "申请或投递登记已移除。");
         return new TrialResult(current.deliveryStatus(), current.receiptId(), current.lastError());
     }
 
-    private PolicyDeliveryAdminMapper.Row originalCard(long id, int version, String key) {
-        return admin.list(tenant, id, version).stream()
-                .filter(
-                        row ->
-                                "SEND_CARD".equals(row.actionType())
-                                        && "PRODUCT".equals(row.groupCode()))
+    private TrialCard originalCard(long id, int version, String key) {
+        return queue.trialCards(tenant, id, version).stream()
                 .filter(
                         row ->
                                 PolicyFeishuSender.idempotencyKey(
@@ -98,7 +91,7 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
                                                 id,
                                                 version,
                                                 row.eventKey(),
-                                                row.actionType(),
+                                                "SEND_CARD",
                                                 row.recipientKey())
                                         .equals(key))
                 .findFirst()
@@ -132,14 +125,13 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
         return true;
     }
 
-    // 租约转手后迟到的真实回执仍能解除未知状态；人工核对之后的旧请求不能覆盖新处置。
+    // 租约转手后，迟到回执仍可确认同一次投递。
     private boolean acceptLateReceipt(Delivery item, String receipt, LocalDateTime at) {
         var attempt = queue.lockAttempt(item.id());
         if (attempt == null) return false;
         try {
             var current = (ObjectNode) json.readTree(attempt.payloadJson());
-            if (!item.payload().path("firstAttemptAt").equals(current.path("firstAttemptAt"))
-                    || !item.payload().path("manualHistory").equals(current.path("manualHistory")))
+            if (!item.payload().path("firstAttemptAt").equals(current.path("firstAttemptAt")))
                 return false;
             if ("SENDING".equals(attempt.deliveryStatus())) {
                 // 记录可信回执供当前执行者收口，不改动它的租约或状态。
@@ -191,16 +183,9 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
                 && !("PURCHASE_DECIDED".equals(item.eventKey())
                         && "APPROVE".equals(payload.path("decision").asText())))
             return stop(id, uncertain, "仅采购终审通过后可发送审核群公告。", "CANCELLED");
-        boolean removalNotice = removalNotice(item, payload);
-        if (create && !removalNotice && !active(item))
-            return stop(id, uncertain, "本轮节点已结束或该指派已撤销。", "CANCELLED");
+        if (create && !active(item)) return stop(id, uncertain, "本轮节点已结束或该指派已失效。", "CANCELLED");
 
-        if (create
-                && (item.openId() == null
-                        || item.openId().isBlank()
-                        || ("PURCHASE".equals(item.groupCode())
-                                && !removalNotice
-                                && !"ADMIN".equals(item.roleType()))))
+        if (create && (item.openId() == null || item.openId().isBlank() || !item.eligible()))
             return stop(id, uncertain, "收件人缺少有效飞书身份或对应岗位资格。", "FAILED");
         String prior = null;
         if (isClosing(action)) {
@@ -257,15 +242,6 @@ class PolicyDeliveryWorkerImpl implements PolicyDeliveryWorker {
                         uncertain);
         queue.claim(id, owner, at.plusSeconds(90), payload.toString());
         return new Claim(delivery, owner, item.attempts() + 1, uncertain, first);
-    }
-
-    static boolean removalNotice(Item item, ObjectNode payload) {
-        String action = item.actionType();
-        return "SEND_CARD".equals(action)
-                && item.eventKey().startsWith("REASSIGNED_")
-                && "PURCHASE".equals(item.groupCode())
-                && "REMOVED".equals(item.memberStatus())
-                && "REMOVED".equals(payload.path("outcome").asText());
     }
 
     private Claim stop(long id, boolean uncertain, String reason, String status) {

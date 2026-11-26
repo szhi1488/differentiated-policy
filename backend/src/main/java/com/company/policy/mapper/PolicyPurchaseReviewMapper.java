@@ -12,6 +12,22 @@ import org.apache.ibatis.annotations.Update;
 public interface PolicyPurchaseReviewMapper {
     record Permission(long policyId, long memberId) {}
 
+    // 预指派在首提时已经冻结。采购只能读实际转入终审的轮次，已结束轮以采购签署记录为准。
+    String VISIBLE_ASSIGNMENTS =
+            """
+            FROM policy_review_member m JOIN policy_review_round pr ON pr.policy_id=m.policy_id
+              AND pr.tenant_key=m.tenant_key AND pr.version=m.version
+            WHERE m.group_code='PURCHASE' AND m.member_status IN ('ACTIVE','HANDLED') AND (
+              (pr.stage='PURCHASE_REVIEW' AND (
+                (JSON_CONTAINS(pr.route_json, '{"requiresProductReview":false}') AND NOT EXISTS (
+                  SELECT 1 FROM policy_review_member pm WHERE pm.policy_id=pr.policy_id
+                    AND pm.tenant_key=pr.tenant_key AND pm.version=pr.version AND pm.group_code='PRODUCT'))
+                OR EXISTS (SELECT 1 FROM policy_review_decision pd WHERE pd.policy_id=pr.policy_id
+                  AND pd.tenant_key=pr.tenant_key AND pd.version=pr.version AND pd.group_code='PRODUCT' AND pd.decision='APPROVE')))
+              OR (pr.stage='FINISHED' AND EXISTS (SELECT 1 FROM policy_review_decision bd
+                WHERE bd.policy_id=pr.policy_id AND bd.tenant_key=pr.tenant_key AND bd.version=pr.version AND bd.group_code='PURCHASE')))
+            """;
+
     String DECISION_JOINS =
             """
         LEFT JOIN policy_review_decision product ON product.policy_id=r.policy_id AND product.version=r.version
@@ -23,7 +39,7 @@ public interface PolicyPurchaseReviewMapper {
 
     String ASSIGNED_PURCHASE =
             """
-               (a.workflow_version=1 AND r.stage='PURCHASE_REVIEW' AND m.id IS NOT NULL AND purchase.member_id IS NULL
+               (r.stage='PURCHASE_REVIEW' AND m.id IS NOT NULL AND purchase.member_id IS NULL
                 AND ((JSON_CONTAINS(r.route_json, '{"requiresProductReview":false}')
                       AND product.member_id IS NULL AND NOT EXISTS (
                         SELECT 1 FROM policy_review_member prior WHERE prior.policy_id=r.policy_id
@@ -40,7 +56,7 @@ public interface PolicyPurchaseReviewMapper {
         FROM policy_apply p
         JOIN policy_audit_log a ON a.policy_id=p.id AND a.tenant_key=p.tenant_key
           AND a.version=p.current_version AND a.audit_status='SUBMITTED'
-        JOIN user_info u ON u.id=#{userId} AND u.tenant_key=p.tenant_key AND u.role_type='ADMIN'
+        JOIN user_info u ON u.id=#{userId} AND u.tenant_key=p.tenant_key
           AND u.is_deleted=0
         JOIN policy_review_round r ON r.policy_id=p.id AND r.version=a.version AND r.tenant_key=p.tenant_key
         JOIN policy_review_member m ON m.policy_id=r.policy_id AND m.version=r.version
@@ -53,6 +69,8 @@ public interface PolicyPurchaseReviewMapper {
           AND
         """
                     + ASSIGNED_PURCHASE
+                    + " AND "
+                    + ReviewPermissions.PURCHASE
                     + " </script>")
     @Options(flushCache = Options.FlushCachePolicy.TRUE, useCache = false)
     List<Permission> permissions(String tenant, long userId, List<Long> ids);
@@ -100,14 +118,6 @@ public interface PolicyPurchaseReviewMapper {
         WHERE policy_id=#{id} AND version=#{version} AND tenant_key=#{tenant} AND stage=#{stage}
         """)
     int advance(String tenant, long id, int version, String stage, String nextStage);
-
-    @Update(
-            """
-        UPDATE policy_review_member SET member_status='REMOVED'
-        WHERE id=#{memberId} AND policy_id=#{id} AND version=#{version} AND tenant_key=#{tenant}
-          AND group_code='PURCHASE' AND member_status='ACTIVE'
-        """)
-    int removeIneligibleBuyer(String tenant, long id, int version, long memberId);
 
     @Insert(
             """

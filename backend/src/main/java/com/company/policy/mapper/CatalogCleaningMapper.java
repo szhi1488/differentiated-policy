@@ -20,7 +20,6 @@ public interface CatalogCleaningMapper {
             " FROM source_goods_item item WHERE "
                     + SCOPE
                     + """
-         <if test="brand != null">AND item.brand_name = #{brand}</if>
          <if test="keyword != null">
            AND (LOCATE(#{keyword}, item.goods_name) > 0 OR LOCATE(#{keyword}, item.goods_no) > 0)
          </if>
@@ -64,11 +63,12 @@ public interface CatalogCleaningMapper {
             "<script> SELECT item.*, "
                     + SourceGoodsItemMapper.CREATED_DATE_COLUMN
                     + FILTER
+                    + SourceGoodsItemMapper.BRAND_SCOPE
                     + TAB
                     + " ORDER BY item.id DESC LIMIT #{limit} OFFSET #{offset} </script>")
     List<SourceGoodsItem> results(
             String sourceKey,
-            String brand,
+            List<String> brands,
             LocalDate createdDate,
             boolean unknownDate,
             String keyword,
@@ -79,15 +79,21 @@ public interface CatalogCleaningMapper {
     @Select(
             "<script> SELECT item.clean_status AS status, COUNT(*) AS total "
                     + FILTER
+                    + SourceGoodsItemMapper.BRAND_SCOPE
                     + " GROUP BY item.clean_status </script>")
     List<Count> counts(
             String sourceKey,
-            String brand,
+            List<String> brands,
             LocalDate createdDate,
             boolean unknownDate,
             String keyword);
 
-    @Select("<script> SELECT COUNT(*) " + FILTER + ELIGIBLE + " </script>")
+    @Select(
+            "<script> SELECT COUNT(*) "
+                    + FILTER
+                    + " AND item.brand_name = #{brand} "
+                    + ELIGIBLE
+                    + " </script>")
     long eligibleCount(
             String sourceKey,
             String brand,
@@ -117,13 +123,18 @@ public interface CatalogCleaningMapper {
     CatalogCleaningJob active(String sourceKey);
 
     @Select(
-            "SELECT * FROM catalog_clean_job WHERE "
+            "<script> SELECT * FROM catalog_clean_job WHERE "
                     + SCOPE
-                    + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}")
-    List<CatalogCleaningJob> jobs(String sourceKey, int limit, long offset);
+                    + SourceGoodsItemMapper.BRAND_SCOPE
+                    + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset} </script>")
+    List<CatalogCleaningJob> jobs(String sourceKey, List<String> brands, int limit, long offset);
 
-    @Select("SELECT COUNT(*) FROM catalog_clean_job WHERE " + SCOPE)
-    long countJobs(String sourceKey);
+    @Select(
+            "<script> SELECT COUNT(*) FROM catalog_clean_job WHERE "
+                    + SCOPE
+                    + SourceGoodsItemMapper.BRAND_SCOPE
+                    + "</script>")
+    long countJobs(String sourceKey, List<String> brands);
 
     @Insert(
             """
@@ -140,6 +151,7 @@ public interface CatalogCleaningMapper {
             "<script> INSERT INTO catalog_clean_job_item (job_id, source_id, source_version) "
                     + "SELECT #{jobId}, item.id, item.record_version "
                     + FILTER
+                    + " AND item.brand_name = #{brand} "
                     + ELIGIBLE
                     + " </script>")
     int insertMembers(

@@ -30,6 +30,7 @@ import org.springframework.transaction.support.TransactionTemplate;
             "policy.review-delivery-enabled=false"
         })
 class PolicyDeliveryWorkerTest {
+    @Autowired com.company.policy.service.AuthorizationService roles;
     @Autowired PolicyDeliveryWorker worker;
     @Autowired PolicyDeliveryAttemptGuard guard;
     @Autowired JdbcTemplate jdbc;
@@ -42,36 +43,44 @@ class PolicyDeliveryWorkerTest {
 
     @BeforeEach
     void prepare() {
+        jdbc.update("MERGE INTO brand(id,name) KEY(id) VALUES(80000,'测试品牌')");
+        jdbc.update("MERGE INTO series(id,brand_id,name) KEY(id) VALUES(80000,80000,'测试系列')");
         for (var table :
                 List.of(
                         "policy_review_delivery",
                         "policy_review_member",
                         "policy_review_round",
                         "policy_time_change",
+                        "policy_round_platform",
                         "policy_audit_log",
                         "policy_apply",
+                        "sys_user_role",
                         "user_info")) jdbc.update("DELETE FROM " + table);
         for (int i = 1; i <= 5; i++)
-            jdbc.update(
-                    "INSERT INTO user_info(id,tenant_key,open_id,name,role_type) VALUES (?,'company',?,'用户',?)",
+            com.company.policy.ReviewAccounts.create(
+                    jdbc,
+                    roles,
                     i,
+                    "company",
                     "open-" + i,
-                    i >= 4 ? "ADMIN" : "APPLICANT");
+                    "用户",
+                    i == 1 ? "OPERATIONS" : i >= 4 ? "PURCHASE" : "PRODUCT_OPS");
         jdbc.update(
                 """
-                INSERT INTO policy_apply(id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
-                VALUES(11,'company','D001',1,'申请人','RETAIL','PENDING',1,2)
+                INSERT INTO policy_apply(brand_id,series_id,id,tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
+                VALUES(80000,80000,11,'company','D001',1,'申请人','RETAIL','PENDING',1,2)
                 """);
         jdbc.update(
-                "INSERT INTO policy_audit_log(tenant_key,policy_id,version,snapshot_data) VALUES('company',11,1,'{}')");
+                "INSERT INTO policy_audit_log(brand_id,series_id,perspective,tenant_key,policy_id,version,snapshot_data) VALUES(80000,80000,'RETAIL','company',11,1,'{}')");
         jdbc.update(
                 "INSERT INTO policy_review_round(tenant_key,policy_id,version,settings_version,stage,route_json) VALUES('company',11,1,1,'PRODUCT_REVIEW','{}')");
         for (int i = 2; i <= 5; i++)
             jdbc.update(
-                    "INSERT INTO policy_review_member(id,policy_id,version,tenant_key,group_code,user_id,display_name) VALUES(?,11,1,'company',?,?,'成员')",
+                    "INSERT INTO policy_review_member(id,policy_id,version,tenant_key,group_code,user_id,display_name,member_status) VALUES(?,11,1,'company',?,?,'成员',?)",
                     i,
                     i >= 4 ? "PURCHASE" : "PRODUCT",
-                    i);
+                    i,
+                    i == 3 || i == 5 ? "REMOVED" : "ACTIVE");
         doAnswer(
                         call -> {
                             Delivery d = call.getArgument(0);
@@ -89,14 +98,14 @@ class PolicyDeliveryWorkerTest {
         registerSubmitted();
         add("SUBMITTED", "GROUP_MESSAGE", 0);
         String target =
-                PolicyFeishuSender.idempotencyKey("company", 11, 1, "SUBMITTED", "SEND_CARD", 3);
+                PolicyFeishuSender.idempotencyKey("company", 11, 1, "SUBMITTED", "SEND_CARD", 2);
         String group =
                 PolicyFeishuSender.idempotencyKey(
                         "company", 11, 1, "SUBMITTED", "GROUP_MESSAGE", 0);
         doAnswer(
                         c -> {
                             Delivery item = c.getArgument(0);
-                            assertThat(item.memberId()).isEqualTo(3);
+                            assertThat(item.memberId()).isEqualTo(2);
                             assertThat(item.idempotencyKey()).isEqualTo(target);
                             guard.prepare(item, item.openId(), "trial-card");
                             return "om_trial";
@@ -109,9 +118,9 @@ class PolicyDeliveryWorkerTest {
         assertThat(result)
                 .isEqualTo(new PolicyDeliveryWorker.TrialResult("SENT", "om_trial", null));
         assertThat(worker.processTrialCard(11, 1, target)).isEqualTo(result);
-        assertThat(value("attempts", "SEND_CARD", 2)).isEqualTo("0");
+
         assertThat(value("attempts", "GROUP_MESSAGE", 0)).isEqualTo("0");
-        assertThat(value("payload_json", "SEND_CARD", 3)).contains("trial-card");
+        assertThat(value("payload_json", "SEND_CARD", 2)).contains("trial-card");
         verify(sender).send(any());
         verifyNoMoreInteractions(sender);
     }
@@ -119,6 +128,9 @@ class PolicyDeliveryWorkerTest {
     @Test
     void trialStopsForRemovedAssignmentAndRespectsManualReconciliation() {
         registerSubmitted();
+        jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=2");
+        jdbc.update("UPDATE policy_review_member SET member_status='ACTIVE' WHERE id=3");
+        add("SUBMITTED", "SEND_CARD", 3);
         var removed =
                 PolicyFeishuSender.idempotencyKey("company", 11, 1, "SUBMITTED", "SEND_CARD", 2);
         var uncertain =
@@ -184,13 +196,11 @@ class PolicyDeliveryWorkerTest {
                 .when(sender)
                 .send(any());
         assertThat(worker.processOne()).isTrue();
-        assertThat(worker.processOne()).isTrue();
         assertThat(value("delivery_status", "SEND_CARD", 2)).isEqualTo("UNKNOWN");
-        assertThat(value("receipt_id", "SEND_CARD", 3)).isEqualTo("card-3");
         due();
         assertThat(worker.processOne()).isTrue();
         assertThat(worker.processOne()).isFalse();
-        assertThat(remote).hasSize(2);
+        assertThat(remote).hasSize(1);
         assertThat(
                         calls.stream()
                                 .filter(d -> d.memberId() == 2)
@@ -201,8 +211,7 @@ class PolicyDeliveryWorkerTest {
 
         // 决定落库，所有卡片各自更新。第一次更新失败，仅重试这张卡。
         jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
-        jdbc.update(
-                "UPDATE policy_review_member SET member_status=CASE id WHEN 2 THEN 'HANDLED' ELSE 'PEER_HANDLED' END WHERE group_code='PRODUCT'");
+        jdbc.update("UPDATE policy_review_member SET member_status='HANDLED' WHERE id=2");
         tx.executeWithoutResult(
                 s ->
                         events.decided(
@@ -227,42 +236,18 @@ class PolicyDeliveryWorkerTest {
                 .send(any());
         drain();
         assertThat(value("delivery_status", "UPDATE_CARD", 2)).isEqualTo("RETRY");
-        assertThat(value("receipt_id", "UPDATE_CARD", 3)).isEqualTo("card-3");
         assertThat(calls.stream().filter(d -> d.action().equals("GROUP_MESSAGE"))).isEmpty();
-        assertThat(calls.stream().filter(d -> d.action().equals("SEND_CARD"))).hasSize(2);
-        assertThat(calls.stream().filter(d -> d.action().equals("CREATE_TASK"))).hasSize(2);
+        assertThat(calls.stream().filter(d -> d.action().equals("SEND_CARD"))).hasSize(1);
+        assertThat(calls.stream().filter(d -> d.action().equals("CREATE_TASK"))).hasSize(1);
         due();
         drain();
         assertThat(value("receipt_id", "UPDATE_CARD", 2)).isEqualTo("card-2");
-        assertThat(calls).hasSize(7);
+        assertThat(calls).hasSize(4);
         assertThat(
                         jdbc.queryForList(
-                                "SELECT task_guid FROM policy_review_member WHERE group_code='PURCHASE'",
+                                "SELECT task_guid FROM policy_review_member WHERE group_code='PURCHASE' AND member_status='ACTIVE'",
                                 String.class))
-                .containsExactlyInAnyOrder(
-                        value("receipt_id", "CREATE_TASK", 4),
-                        value("receipt_id", "CREATE_TASK", 5));
-    }
-
-    @Test
-    void removedAndReaddedAssignmentsHaveDifferentCardsAndStaleUnsentCardsAreCancelled() {
-        registerSubmitted();
-        assertThat(worker.processOne()).isTrue();
-        jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=2");
-        jdbc.update(
-                "INSERT INTO policy_review_member(id,policy_id,version,tenant_key,group_code,user_id,display_name,assignment_no) VALUES(6,11,1,'company','PRODUCT',2,'重新加入',2)");
-        add("REASSIGNED_3", "UPDATE_CARD", 2);
-        add("REASSIGNED_4", "SEND_CARD", 6);
-        jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=3");
-        add("REASSIGNED_5", "UPDATE_CARD", 3);
-        drain();
-        assertThat(value("receipt_id", "UPDATE_CARD", 2))
-                .isEqualTo(value("receipt_id", "SEND_CARD", 2));
-        assertThat(value("receipt_id", "SEND_CARD", 6))
-                .isNotEqualTo(value("receipt_id", "SEND_CARD", 2));
-        assertThat(value("delivery_status", "SEND_CARD", 3)).isEqualTo("CANCELLED");
-        assertThat(value("delivery_status", "UPDATE_CARD", 3)).isEqualTo("CANCELLED");
-        assertThat(calls).extracting(Delivery::memberId).containsExactly(2L, 2L, 6L);
+                .containsExactlyInAnyOrder(value("receipt_id", "CREATE_TASK", 4));
     }
 
     @Test
@@ -282,6 +267,7 @@ class PolicyDeliveryWorkerTest {
     @Test
     void crashBeforeGuardRetriesOnlyTheStillActiveAssignment() {
         registerSubmitted();
+        add("SUBMITTED", "SEND_CARD", 3);
         // 模拟两条动作均已领取，但进程在写前指纹落库前退出。
         jdbc.update(
                 """
@@ -335,7 +321,7 @@ class PolicyDeliveryWorkerTest {
                 s -> events.submitted("company", 11, 1, false, "直接采购", LocalDateTime.now()));
         var first = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")).minusSeconds(95);
         jdbc.update(
-                "UPDATE policy_review_delivery SET delivery_status='SENDING',attempts=1,lease_owner='crashed',lease_until=DATE '2001-01-01',payload_json=? WHERE recipient_key=4",
+                "UPDATE policy_review_delivery SET delivery_status='SENDING',attempts=1,lease_owner='crashed',lease_until=DATE '2001-01-01',payload_json=? WHERE recipient_key=4 AND action_type='CREATE_TASK'",
                 "{\"stage\":\"PURCHASE_REVIEW\",\"requestFingerprint\":\"same-task\",\"requestRecipient\":\"open-4\",\"firstAttemptAt\":\""
                         + first
                         + "\"}");
@@ -344,25 +330,23 @@ class PolicyDeliveryWorkerTest {
                         c -> {
                             Delivery d = c.getArgument(0);
                             calls.add(d);
-                            if (d.memberId() != 4 && seen.add(d.idempotencyKey()))
+                            if (d.action().equals("SEND_CARD") && seen.add(d.idempotencyKey()))
                                 throw new Failure(Kind.RETRYABLE, "限频");
                             return "recovered-" + d.memberId();
                         })
                 .when(sender)
                 .send(any());
         drain();
-        assertThat(value("delivery_status", "SEND_CARD", 5)).isEqualTo("RETRY");
+        assertThat(value("delivery_status", "SEND_CARD", 4)).isEqualTo("RETRY");
         assertThat(value("receipt_id", "CREATE_TASK", 4)).isEqualTo("recovered-4");
-        assertThat(value("delivery_status", "CREATE_TASK", 5)).isEqualTo("RETRY");
         due();
         drain();
-        assertThat(value("receipt_id", "SEND_CARD", 5)).isEqualTo("recovered-5");
-        assertThat(value("receipt_id", "CREATE_TASK", 5)).isEqualTo("recovered-5");
-        assertThat(calls.stream().filter(d -> d.memberId() == 4)).hasSize(2);
+        assertThat(value("receipt_id", "SEND_CARD", 4)).isEqualTo("recovered-4");
+        assertThat(calls.stream().filter(d -> d.memberId() == 4)).hasSize(3);
     }
 
     @Test
-    void creationAcknowledgedAfterRevocationIsClosedWithItsOwnReceipt() throws Exception {
+    void creationAcknowledgedAfterDecisionIsClosedWithItsOwnReceipt() throws Exception {
         add("SUBMITTED", "SEND_CARD", 2);
         var started = new CountDownLatch(1);
         var finish = new CountDownLatch(1);
@@ -385,8 +369,8 @@ class PolicyDeliveryWorkerTest {
         try {
             var sending = pool.submit(worker::processOne);
             assertThat(started.await(8, TimeUnit.SECONDS)).isTrue();
-            jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=2");
-            add("REASSIGNED_3", "UPDATE_CARD", 2);
+            jdbc.update("UPDATE policy_review_member SET member_status='HANDLED' WHERE id=2");
+            add("PRODUCT_DECIDED", "UPDATE_CARD", 2);
             assertThat(worker.processOne()).isFalse();
             jdbc.update(
                     "UPDATE policy_review_delivery SET lease_until=DATE '2001-01-01' WHERE action_type='SEND_CARD'");
@@ -451,19 +435,20 @@ class PolicyDeliveryWorkerTest {
         }
     }
 
-    @Test
-    void uncertainRequestCannotBeResentToAChangedRecipientOrWithChangedContent() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void uncertainRequestCannotBeResentToAChangedRecipientOrWithChangedContent(
+            boolean changeRecipient) {
         add("SUBMITTED", "SEND_CARD", 2);
-        add("SUBMITTED", "SEND_CARD", 3);
         doAnswer(
                         c -> {
                             Delivery d = c.getArgument(0);
                             String recipient =
-                                    d.uncertain() && d.memberId() == 2
+                                    d.uncertain() && changeRecipient
                                             ? "other-recipient"
                                             : d.openId();
                             String fingerprint =
-                                    d.uncertain() && d.memberId() == 3
+                                    d.uncertain() && !changeRecipient
                                             ? "different-card"
                                             : "original";
                             guard.prepare(d, recipient, fingerprint);
@@ -475,14 +460,14 @@ class PolicyDeliveryWorkerTest {
         drain();
         due();
         drain();
-        for (int member : List.of(2, 3)) {
+        for (int member : List.of(2)) {
             assertThat(value("delivery_status", "SEND_CARD", member)).isEqualTo("UNKNOWN");
             assertThat(value("next_attempt_at", "SEND_CARD", member)).isNull();
             assertThat(value("payload_json", "SEND_CARD", member))
                     .contains("open-" + member, "original")
                     .doesNotContain("different-card", "other-recipient");
         }
-        assertThat(calls).hasSize(2);
+        assertThat(calls).hasSize(1);
     }
 
     @Test
@@ -509,6 +494,22 @@ class PolicyDeliveryWorkerTest {
                 .isZero();
         assertThat(calls).extracting(Delivery::action).containsExactly("CREATE_TASK");
         assertThat(calls).allMatch(d -> "open-4".equals(d.openId()));
+    }
+
+    @Test
+    void losingTheReviewRoleStopsDeliveryEvenWithAdministratorPermissions() {
+        registerSubmitted();
+        com.company.policy.RbacFixture.setRole(jdbc, 2, "ADMIN");
+        drain();
+        assertThat(value("delivery_status", "SEND_CARD", 2)).isEqualTo("FAILED");
+        jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
+        add("SUBMITTED", "CREATE_TASK", 4);
+        add("SUBMITTED", "SEND_CARD", 4);
+        com.company.policy.RbacFixture.setRole(jdbc, 4, "ADMIN");
+        drain();
+        assertThat(value("delivery_status", "CREATE_TASK", 4)).isEqualTo("FAILED");
+        assertThat(value("delivery_status", "SEND_CARD", 4)).isEqualTo("FAILED");
+        verifyNoInteractions(sender);
     }
 
     private void registerSubmitted() {

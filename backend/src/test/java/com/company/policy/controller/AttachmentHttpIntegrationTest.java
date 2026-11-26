@@ -4,11 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
-import com.company.policy.entity.UserInfo;
-import com.company.policy.mapper.UserInfoMapper;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.AuthSessionResponse;
-import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -42,7 +39,7 @@ class AttachmentHttpIntegrationTest {
     @LocalServerPort int port;
     @Autowired ObjectMapper json;
     @MockitoBean LoginSessionService sessions;
-    @MockitoBean UserInfoMapper accounts;
+    @Autowired com.company.policy.service.UserInfoService accounts;
 
     @DynamicPropertySource
     static void storage(DynamicPropertyRegistry registry) {
@@ -52,12 +49,7 @@ class AttachmentHttpIntegrationTest {
     @Test
     void realHttpAcceptsFilesAboveDefaultLimitAndReturns413AboveTwentyMiB() throws Exception {
         var user =
-                new CurrentUserResponse(
-                        "1", "http-owner", "attachment-http", "附件联调", "APPLICANT", null);
-        var account = new UserInfo();
-        account.setId(1L);
-        account.setIsDeleted(0);
-        when(accounts.findIdentity("attachment-http", "http-owner")).thenReturn(account);
+                accounts.saveVerifiedIdentity("attachment-http", "http-owner", null, "附件联调", null);
         when(sessions.requireLogin(any()))
                 .thenReturn(new AuthSessionResponse(user, Instant.now().plusSeconds(600)));
         var client = HttpClient.newHttpClient();

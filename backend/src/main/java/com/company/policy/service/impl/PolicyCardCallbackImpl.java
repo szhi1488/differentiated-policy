@@ -66,14 +66,15 @@ class PolicyCardCallbackImpl implements PolicyCardCallback {
                 || binding.assignmentNo() != assignment
                 || record > binding.recordVersion()) return unavailable();
         if (!current(binding, round)) return handled(binding);
-        // 其他成员改派时保留者仍使用原卡。读取具体指派当下的主单版本，随后在共同事务内加锁复核。
+        // 按卡片绑定的本轮指派读取主单版本，办理时在事务内加锁复核。
         var actor =
                 new CurrentUserResponse(
                         Long.toString(binding.userId()),
                         openId,
                         tenant,
                         binding.name(),
-                        binding.roleType(),
+                        java.util.List.of(),
+                        java.util.List.of(),
                         null);
         String reason =
                 "REJECT".equals(decision) ? action.at("/form_value/reason").textValue() : null;

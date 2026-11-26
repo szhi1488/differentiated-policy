@@ -22,7 +22,8 @@ public interface CatalogDictionaryMapper {
             """
         SELECT 'brand' AS type, b.id, CAST(NULL AS SIGNED) AS parent_id, b.name,
           (EXISTS (SELECT 1 FROM series s WHERE s.brand_id = b.id)
-           OR EXISTS (SELECT 1 FROM source_goods_item src WHERE src.catalog_brand_id = b.id)) AS in_use
+           OR EXISTS (SELECT 1 FROM source_goods_item src WHERE src.catalog_brand_id = b.id)
+           OR EXISTS (SELECT 1 FROM policy_review_brand_owner o WHERE o.brand_id=b.id)) AS in_use
         FROM brand b
         UNION ALL
         SELECT 'series', s.id, s.brand_id, s.name,
@@ -31,6 +32,9 @@ public interface CatalogDictionaryMapper {
                     + MODEL_IN_USE
                     + """
           )
+          OR EXISTS (SELECT 1 FROM policy_review_series_owner o WHERE o.series_id=s.id)
+          OR EXISTS (SELECT 1 FROM policy_apply p WHERE p.series_id=s.id)
+          OR EXISTS (SELECT 1 FROM policy_audit_log a WHERE a.series_id=s.id)
         FROM series s
         UNION ALL
         SELECT 'color', c.id, CAST(NULL AS SIGNED), c.color_name,
@@ -48,6 +52,17 @@ public interface CatalogDictionaryMapper {
 
     @Select("SELECT id FROM source_goods_item WHERE catalog_brand_id = #{id} LIMIT 1 FOR UPDATE")
     Long linkedSource(long id);
+
+    @Select("SELECT EXISTS(SELECT 1 FROM policy_review_brand_owner WHERE brand_id=#{id})")
+    boolean hasReviewBrand(long id);
+
+    @Select(
+            """
+           SELECT EXISTS(SELECT 1 FROM policy_review_series_owner WHERE series_id=#{id})
+               OR EXISTS(SELECT 1 FROM policy_apply WHERE series_id=#{id})
+               OR EXISTS(SELECT 1 FROM policy_audit_log WHERE series_id=#{id})
+           """)
+    boolean hasPolicySeries(long id);
 
     @Select("SELECT id FROM spu WHERE series_id = #{id} ORDER BY id FOR UPDATE")
     List<Long> lockModels(long id);

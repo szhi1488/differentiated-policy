@@ -49,7 +49,7 @@ Java 生产代码根包为 `backend/src/main/java/com/company/policy/`。包名�
 
 #### 服务接口与注释
 
-每个服务接口在声明上方用一句中文 Javadoc（`/** … */`）说明它负责的业务。接口声明的每个方法也各写一句，说明调用方能完成什么操作；有多个重载时分别说明适用场景。权限方法应写清校验范围，例如 `CatalogAccess.requireAdmin` 校验商品管理权限，`requirePolicyAdmin` 校验政策审核权限。[CatalogAccess 源码](../../backend/src/main/java/com/company/policy/service/CatalogAccess.java)
+每个服务接口在声明上方用一句中文 Javadoc（`/** … */`）说明它负责的业务。接口声明的每个方法也各写一句，说明调用方能完成什么操作；有多个重载时分别说明适用场景。权限方法应写清校验范围，例如 `CatalogAccess.requirePermission` 校验当前企业有效账号的具体权限，`requireApplicant` 校验政策填报权限。[CatalogAccess 源码](../../backend/src/main/java/com/company/policy/service/CatalogAccess.java)
 
 调用方通过构造器注入服务接口。`service.impl` 下的实现类使用 `@Service`，类声明上方省略职责备注。实现内部按需注释锁顺序、事务边界或历史数据兼容等具体原因。共用的清洗规则、表单校验、快照编解码和外部签名按业务放在 `support` 的对应子包。[服务层现状](system-overview.md#2026-11-17-服务层整理)
 

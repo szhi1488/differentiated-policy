@@ -5,7 +5,6 @@
   min-width: 0;
   gap: 16px;
 }
-.admin-users-heading,
 .admin-users-heading-actions {
   display: flex;
   align-items: center;

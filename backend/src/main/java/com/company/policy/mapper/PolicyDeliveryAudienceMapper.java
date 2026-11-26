@@ -6,16 +6,21 @@ import org.apache.ibatis.annotations.Select;
 
 @Mapper
 public interface PolicyDeliveryAudienceMapper {
-    record Recipient(long id, String openId, String roleType) {}
+    record Recipient(long id, String openId) {}
 
     @Select(
             """
-            <script>SELECT id, open_id, role_type FROM user_info
+            <script>SELECT u.id, u.open_id FROM user_info u
             WHERE tenant_key=#{tenant} AND is_deleted=0 AND id IN
             <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            <if test="permission!=null"> AND
+            """
+                    + RoleAccessMapper.PERMISSION_FOR_USER
+                    + """
+            </if>
             ORDER BY id</script>
             """)
-    List<Recipient> recipients(String tenant, List<Long> ids);
+    List<Recipient> recipients(String tenant, List<Long> ids, String permission);
 
     @Select(
             """

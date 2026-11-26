@@ -154,9 +154,20 @@ public interface CatalogGoodsMapper {
         LEFT JOIN source_goods_item source ON source.goods_id = g.id
           AND source.catalog_brand_id = g.brand_id
         """;
-    String FILTER =
+    // 商品中心以标准商品品牌关联审核分工。无分工时分页、统计和详情都限定为空集。
+    String BRAND_SCOPE =
             """
-        <where>
+        <if test="brandNames != null">
+          <choose><when test="brandNames.isEmpty()">AND 1=0</when>
+          <otherwise>AND g.brand_id IN (SELECT id FROM brand WHERE name IN
+            <foreach collection="brandNames" item="brand" open="(" separator="," close=")">#{brand}</foreach>)
+          </otherwise></choose>
+        </if>
+        """;
+    String FILTER =
+            "<where>"
+                    + BRAND_SCOPE
+                    + """
           <if test="query.brandId != null">AND g.brand_id = #{query.brandId}</if>
           <if test="query.brandName != null">AND b.name = #{query.brandName}</if>
           <if test="query.seriesName != null">AND LOCATE(#{query.seriesName}, s.name) > 0</if>
@@ -218,13 +229,15 @@ public interface CatalogGoodsMapper {
             @Param("keywords") List<String> keywords,
             @Param("size") int size,
             @Param("offset") long offset,
-            @Param("applicant") boolean applicant);
+            @Param("applicant") boolean applicant,
+            @Param("brandNames") List<String> brandNames);
 
     @Select("<script>SELECT COUNT(*) " + JOINED + FILTER + "</script>")
     long count(
             @Param("query") CatalogGoodsQuery query,
             @Param("keywords") List<String> keywords,
-            @Param("applicant") boolean applicant);
+            @Param("applicant") boolean applicant,
+            @Param("brandNames") List<String> brandNames);
 
     @Select(
             "<script>"
@@ -265,12 +278,16 @@ public interface CatalogGoodsMapper {
             s.name AS series_name, p.id AS spu_id, p.name AS model_name, p.edition, g.ram, g.rom
         """
                     + JOINED
+                    + "<where>"
+                    + BRAND_SCOPE
                     + """
-        <if test="onSaleOnly">WHERE g.status = 1</if>
+        <if test="onSaleOnly">AND g.status = 1</if>
+        </where>
         ORDER BY brand_id, series_id, spu_id, g.ram, g.rom
         </script>
         """)
-    List<CatalogConfiguration> catalogConfigurations(@Param("onSaleOnly") boolean onSaleOnly);
+    List<CatalogConfiguration> catalogConfigurations(
+            @Param("onSaleOnly") boolean onSaleOnly, @Param("brandNames") List<String> brandNames);
 
     record CatalogConfiguration(
             long brandId,
@@ -283,31 +300,49 @@ public interface CatalogGoodsMapper {
             String ram,
             String rom) {}
 
-    @Select(COLUMNS + JOINED + BOUND_SOURCE + " WHERE g.id = #{id}")
-    CatalogGoods find(long id);
+    @Select(
+            "<script>"
+                    + COLUMNS
+                    + JOINED
+                    + BOUND_SOURCE
+                    + " WHERE g.id = #{id} "
+                    + BRAND_SCOPE
+                    + "</script>")
+    CatalogGoods find(long id, @Param("brandNames") List<String> brandNames);
 
     @Select(
             """
-        SELECT b.name AS brand_name, s.id AS series_id, s.name AS series_name,
+        <script>SELECT b.name AS brand_name, s.id AS series_id, s.name AS series_name,
                COUNT(*) AS total,
                COUNT(CASE WHEN g.status = 1 THEN 1 END) AS active,
                COUNT(CASE WHEN g.status = 4 THEN 1 END) AS stopped
         FROM goods g JOIN brand b ON b.id = g.brand_id JOIN series s ON s.id = g.series_id
-        GROUP BY b.id, b.name, s.id, s.name ORDER BY b.id, s.id
+        <where>
+        """
+                    + BRAND_SCOPE
+                    + """
+        </where> GROUP BY b.id, b.name, s.id, s.name ORDER BY b.id, s.id</script>
         """)
-    List<SeriesCount> seriesCounts();
+    List<SeriesCount> seriesCounts(@Param("brandNames") List<String> brandNames);
 
     @Select(
             """
-        SELECT g.series_id, p.id AS spu_id, p.name AS model_name, p.edition,
+        <script>SELECT g.series_id, p.id AS spu_id, p.name AS model_name, p.edition,
                COUNT(*) AS total, COUNT(CASE WHEN g.status = 1 THEN 1 END) AS active
         FROM goods g JOIN spu p ON p.id = g.spu_id
-        GROUP BY g.series_id, p.id, p.name, p.edition ORDER BY g.series_id, p.name, p.edition, p.id
+        <where>
+        """
+                    + BRAND_SCOPE
+                    + """
+        </where> GROUP BY g.series_id, p.id, p.name, p.edition ORDER BY g.series_id, p.name, p.edition, p.id</script>
         """)
-    List<ModelCount> modelCounts();
+    List<ModelCount> modelCounts(@Param("brandNames") List<String> brandNames);
 
-    @Select("SELECT DISTINCT ram, rom FROM goods ORDER BY ram, rom")
-    List<Memory> configurations();
+    @Select(
+            "<script>SELECT DISTINCT ram, rom FROM goods g <where>"
+                    + BRAND_SCOPE
+                    + "</where> ORDER BY ram, rom</script>")
+    List<Memory> configurations(@Param("brandNames") List<String> brandNames);
 
     record SeriesCount(
             String brandName,
@@ -319,8 +354,11 @@ public interface CatalogGoodsMapper {
 
     record Memory(String ram, String rom) {}
 
-    @Select("SELECT DISTINCT spu_id, ram, rom FROM goods ORDER BY spu_id, ram, rom")
-    List<ModelConfiguration> modelConfigurations();
+    @Select(
+            "<script>SELECT DISTINCT spu_id, ram, rom FROM goods g <where>"
+                    + BRAND_SCOPE
+                    + "</where> ORDER BY spu_id, ram, rom</script>")
+    List<ModelConfiguration> modelConfigurations(@Param("brandNames") List<String> brandNames);
 
     record ModelConfiguration(long spuId, String ram, String rom) {}
 

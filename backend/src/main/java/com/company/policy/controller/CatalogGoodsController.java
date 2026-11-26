@@ -28,10 +28,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin/catalog/goods")
-@Tag(name = "商品中心", description = "查询、新增、编辑和停用公司共用的标准商品")
+@Tag(name = "商品中心", description = "采购可查负责品牌的标准商品，具备商品维护权限的账号可查询和管理全公司标准商品。")
 @ApiResponse(responseCode = "400", description = "商品字段、筛选条件或分页无效")
 @ApiResponse(responseCode = "401", description = "会话无效")
-@ApiResponse(responseCode = "403", description = "非公司有效管理员")
+@ApiResponse(responseCode = "403", description = "账号缺少相应读取或维护权限")
 @ApiResponse(responseCode = "503", description = "公司租户未配置或数据库不可用")
 public class CatalogGoodsController {
     private final CatalogGoodsService goods;
@@ -116,7 +116,7 @@ public class CatalogGoodsController {
     }
 
     @GetMapping("/summary")
-    @Operation(summary = "查看商品统计、品牌系列及机型版本计数和配置选项")
+    @Operation(summary = "查看可见品牌的商品统计、系列、机型版本及配置选项")
     public Summary summary(
             @Parameter(description = "附加各机型实际存在的 RAM、ROM，涵盖全部销售状态")
                     @RequestParam(defaultValue = "false")

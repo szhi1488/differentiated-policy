@@ -64,7 +64,7 @@ mapping_status 和 mapping_origin 保存当前有效结果，clean_status 保存
 
 同一 SKU 原文变化后更新来源行并标为待清洗，保留已有规格和颜色。命中直接排除词时解除该来源现有映射并释放旧商品的原始 SKU，保留商品记录和历轮政策引用。其他候选与映射不一致时交人工复核。自动排除后业务字段变化可进入下一轮清洗，已人工排除的来源继续保留排除。未映射的待审商品可在开始清洗时勾选「同时重新识别未建立映射的待审商品」。
 
-独立清洗任务使用 RUNNING、COMPLETED、PARTIAL、FAILED。COMPLETED 表示本轮已分流，允许仍有待人工审核。PARTIAL 表示有技术失败或成员在确认后变化而跳过，全部技术失败时为 FAILED。任务进度和结果按固定成员统计。
+独立清洗任务使用 RUNNING、COMPLETED、PARTIAL、FAILED。COMPLETED 表示本轮已分流，允许仍有待人工审核。PARTIAL 表示有技术失败或成员在确认后变化而跳过，全部技术失败时为 FAILED。每批按固定的任务成员统计。采购在「商品清洗与识别 → 清洗记录」查看进度和结果，在结果页办理待审核商品、重试技术失败的商品。清洗任务结束后不向飞书群发送通知。
 
 后端以 `CatalogCleaningJob` 映射任务主表，以 `CatalogCleaningJobItem` 映射任务明细。执行器读取明细保存的来源版本，按 `job_id` 和 `source_id` 更新仍为 `PENDING` 的结果。
 

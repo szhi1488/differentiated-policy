@@ -50,9 +50,14 @@ public interface PolicyCoverageService {
     List<PolicyApplicability.AdjustmentOption> adjustableFor(
             PolicyApply applicant, LocalDateTime asOf);
 
-    /** 查询某一时刻已通过并按确认决定生效的全部政策。 */
+    /** 在可读品牌内查询指定商品在某一时刻实际生效的政策。 */
     Effective effective(
-            String tenant, String channel, String platform, long goodsId, LocalDateTime at);
+            String tenant,
+            String channel,
+            String platform,
+            long goodsId,
+            LocalDateTime at,
+            List<String> brandNames);
 
     /** 一次回放多个范围，返回指定获批原单在该时点实际采用的商品或配置范围。 */
     List<PolicyApplicability.Scope> adoptedScopes(
@@ -62,7 +67,10 @@ public interface PolicyCoverageService {
             List<PolicyApplicability.Scope> scopes,
             LocalDateTime at);
 
-    /** 仅在调用方已授权的渠道平台内回放原单和逐段决定，空范围返回空轨道。 */
+    /** 在可读品牌和渠道平台内回放原单和逐段决定。品牌为 null 时可查询全部品牌。 */
     PolicySubsidyTimeline subsidyTimeline(
-            String tenant, PolicyTimelineQuery query, List<ChannelPlatform> scopes);
+            String tenant,
+            PolicyTimelineQuery query,
+            List<ChannelPlatform> scopes,
+            List<String> brandNames);
 }

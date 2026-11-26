@@ -65,8 +65,8 @@ export function useSourceGoods() {
     createdDate.value = nextDate
   }
 
-  function reset() {
-    brand.value = 'all'
+  function reset(defaultBrand = 'all') {
+    brand.value = defaultBrand
     input.value = ''
     createdDateInput.value = null
     return search()

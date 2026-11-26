@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { roleSession } from '../fixtures/role-session'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, nextTick, ref } from 'vue'
@@ -8,6 +9,7 @@ import { createWorkspaceRouter } from '../../src/router'
 import PolicySubsidyTimeline from '../../src/components/PolicySubsidyTimeline.vue'
 import AdminModelSubsidiesPage from '../../src/views/admin/policies/AdminModelSubsidiesPage.vue'
 import { useSubsidyTimelineNavigation } from '../../src/composables/useSubsidyTimelineNavigation'
+import { authSession } from '../../src/composables/useAuthSession'
 import { readTimelineHistory } from '../../src/utils/policy-timeline'
 import {
   billionGroupHistory,
@@ -72,10 +74,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (path) => {
       const url = new URL(path, 'http://localhost')
-      if (
-        url.pathname === '/api/admin/catalog/goods/summary' &&
-        url.searchParams.get('includeModelConfigurations') === 'true'
-      ) {
+      if (url.pathname === '/api/catalog/subsidy-options') {
         return Response.json(directory)
       }
       if (url.pathname !== '/api/admin/policies/subsidy-timeline') {
@@ -95,6 +94,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   wrapper?.unmount()
+  authSession.setLogin(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -307,8 +307,8 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
     removeEventListener() {},
   }))
   const catalog = structuredClone(directory)
-  catalog.models.push({ seriesId: '12', spuId: '23', modelName: '一加 15' })
-  catalog.modelConfigurations.push(
+  catalog.models.push({ seriesId: '12', id: '23', name: '一加 15' })
+  catalog.configurations.push(
     { spuId: '23', ram: '12GB', rom: '256GB' },
     { spuId: '23', ram: '16GB', rom: '1024GB' },
   )
@@ -316,7 +316,7 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
   let tracks = []
   fetch.mockImplementation(async (path) => {
     const url = new URL(path, 'http://localhost')
-    if (url.pathname === '/api/admin/catalog/goods/summary') {
+    if (url.pathname === '/api/catalog/subsidy-options') {
       return Response.json(catalog)
     }
     if (url.pathname === '/api/admin/policies') {
@@ -325,7 +325,7 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
     requests.push(Object.fromEntries(url.searchParams))
     return Response.json({ ...history, tracks })
   })
-  const user = { id: '1', roleType: 'ADMIN' }
+  const user = { id: '1', ...roleSession('ADMIN') }
   const router = createWorkspaceRouter(createMemoryHistory(), { user: ref(user) })
   async function navigate(name) {
     await router.push({ name })
@@ -370,7 +370,7 @@ it('切回机型补贴查询时按上次已应用的条件重新取数，重置�
   expect(timelines()[0].props('label')).toContain('一加 15')
 
   await navigate('admin-policies')
-  catalog.modelConfigurations.pop()
+  catalog.configurations.pop()
   await navigate('admin-model-subsidies')
   expect(requests.at(-1)).toEqual({ ...requests[2], ram: '12GB', rom: '256GB' })
   await button('重置').trigger('click')
@@ -928,13 +928,115 @@ it('目录为空时只读目录，目录错误可重试，无示例回退', asyn
   fetch.mockResolvedValueOnce(Response.json({ message: '目录服务不可用' }, { status: 503 }))
   await openPage()
   expect(wrapper.get('[role="alert"]').text()).toContain('目录服务不可用')
-  fetch.mockResolvedValueOnce(Response.json({ series: [], models: [], modelConfigurations: [] }))
+  fetch.mockResolvedValueOnce(
+    Response.json({ brands: [], series: [], models: [], configurations: [] }),
+  )
   await button('重试').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain('商品目录暂无可查询的机型配置')
   expect(fetch).toHaveBeenCalledTimes(2)
   expect(timelines()).toHaveLength(0)
 })
+
+function mockPurchaseSubsidies() {
+  authSession.setLogin({ user: roleSession('PURCHASE') })
+  const scope = { brandId: null, requests: [] }
+  fetch.mockImplementation(async (path) => {
+    const url = new URL(path, 'http://localhost')
+    const brands = directory.brands.filter((item) => item.id === scope.brandId)
+    const series = directory.series.filter((item) => item.brandId === scope.brandId)
+    const models = directory.models.filter((item) => series.some((s) => s.id === item.seriesId))
+    if (url.pathname === '/api/catalog/subsidy-options') {
+      return Response.json({
+        brands,
+        series,
+        models,
+        configurations: directory.configurations.filter((item) =>
+          models.some((m) => m.id === item.spuId),
+        ),
+      })
+    }
+    const spuId = url.searchParams.get('spuId')
+    scope.requests.push(spuId)
+    if (!models.some((item) => item.id === spuId)) {
+      return Response.json(
+        { code: 'POLICY_SUBSIDY_BRAND_FORBIDDEN', message: '该品牌分工已变更' },
+        { status: 403 },
+      )
+    }
+    return Response.json(history)
+  })
+  return scope
+}
+
+it('采购在原页取得、切换及撤销品牌后只查当前机型，返回页面时丢弃旧品牌的查询缓存', async () => {
+  const scope = mockPurchaseSubsidies()
+  const cache = ref(null)
+  const options = { global: { provide: { modelSubsidyLastQuery: cache } } }
+  wrapper = mount(AdminModelSubsidiesPage, options)
+  await flushPromises()
+  expect(wrapper.text()).toContain('暂无可查询的采购品牌机型')
+  expect(scope.requests).toEqual([])
+
+  scope.brandId = '1'
+  await button('刷新目录').trigger('click')
+  await flushPromises()
+  const oppo = directory.models[0].id
+  expect(scope.requests).toEqual([oppo])
+  expect(select('品牌').props('modelValue')).toBe('OPPO手机')
+  const picker = wrapper.getComponent({ name: 'ElDatePicker' })
+  const draftDates = ['2026-12-01', '2026-12-10']
+  picker.vm.$emit('update:modelValue', draftDates)
+  select('平台').vm.$emit('update:modelValue', 'JD')
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(scope.requests).toEqual([oppo, oppo])
+  expect(lastParams().has('platformCode')).toBe(false)
+  expect(picker.props('modelValue')).toEqual(draftDates)
+  expect(select('平台').props('modelValue')).toBe('JD')
+
+  scope.brandId = '2'
+  document.dispatchEvent(new Event('visibilitychange'))
+  await flushPromises()
+  expect(scope.requests).toEqual([oppo, oppo, '22'])
+  expect(select('品牌').props('modelValue')).toBe('一加手机')
+  expect(timelines()[0].props('label')).toContain('一加 13')
+
+  wrapper.unmount()
+  scope.brandId = '1'
+  wrapper = mount(AdminModelSubsidiesPage, options)
+  await flushPromises()
+  expect(scope.requests).toEqual([oppo, oppo, '22', oppo])
+  expect(select('品牌').props('modelValue')).toBe('OPPO手机')
+  scope.brandId = null
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(cache.value).toBeNull()
+  expect(scope.requests).toHaveLength(4)
+  expect(timelines()).toHaveLength(0)
+  expect(select('品牌').props('modelValue')).toBe('')
+  scope.brandId = '2'
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(scope.requests.at(-1)).toBe('22')
+})
+
+it('采购打开页面后分工变动，服务端拒绝旧品牌后重试会重新取目录', async () => {
+  const scope = mockPurchaseSubsidies()
+  scope.brandId = '1'
+  await openPage()
+  scope.brandId = '2'
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+  expect(wrapper.get('[role="alert"]').text()).toContain('该品牌分工已变更')
+  expect(timelines()).toHaveLength(0)
+  await button('重试').trigger('click')
+  await flushPromises()
+  expect(scope.requests).toEqual([directory.models[0].id, directory.models[0].id, '22'])
+  expect(select('品牌').props('modelValue')).toBe('一加手机')
+  expect(timelines()[0].props('label')).toContain('一加 13')
+})
+
 it('查询错误清除旧明细，重试沿用原请求并显示后端结果', async () => {
   await openPage()
   select('平台').vm.$emit('update:modelValue', 'PDD')

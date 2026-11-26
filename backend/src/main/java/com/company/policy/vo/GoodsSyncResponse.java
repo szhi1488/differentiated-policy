@@ -40,6 +40,8 @@ public record GoodsSyncResponse(
 
     public record Overview(boolean configured, List<GoodsSyncResponse> jobs) {}
 
+    public record SourceBrands(List<String> brandNames) {}
+
     public record Source(
             String id,
             String brandName,

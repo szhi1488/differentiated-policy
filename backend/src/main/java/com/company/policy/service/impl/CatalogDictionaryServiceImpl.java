@@ -34,7 +34,7 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
     @Override
     @Transactional(readOnly = true)
     public List<CatalogDictionaryEntry> list(CurrentUserResponse session) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         return dictionary.entries().stream()
                 .map(
                         row ->
@@ -50,7 +50,7 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
     @Override
     @Transactional
     public void create(CurrentUserResponse session, Type type, Create request) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         String name = normalizedName(type, request.name());
         Long parent = request.parentId();
         if ((type == Type.series) != (parent != null)) {
@@ -75,7 +75,7 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void rename(CurrentUserResponse session, Type type, long id, Rename request) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         String name = normalizedName(type, request.name());
         if (lockCurrent(type, id, request.expectedName()).equals(name)) {
             return;
@@ -91,7 +91,7 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void delete(CurrentUserResponse session, Type type, long id, String expectedName) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         lockCurrent(type, id, expectedName);
         requireUnused(type, id);
         try {
@@ -128,8 +128,10 @@ public class CatalogDictionaryServiceImpl implements CatalogDictionaryService {
                 switch (type) {
                     case brand ->
                             dictionary.linkedSeries(id) != null
-                                    || dictionary.linkedSource(id) != null;
-                    case series -> dictionary.hasReferencedModel(id);
+                                    || dictionary.linkedSource(id) != null
+                                    || dictionary.hasReviewBrand(id);
+                    case series ->
+                            dictionary.hasReferencedModel(id) || dictionary.hasPolicySeries(id);
                     case color -> dictionary.linkedGoods(id) != null;
                 };
         if (used) {

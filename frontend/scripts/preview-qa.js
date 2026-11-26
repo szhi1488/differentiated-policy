@@ -1,10 +1,11 @@
+import { roleSession } from '../tests/fixtures/role-session.js'
 import { existsSync } from 'node:fs'
 import { preview } from 'vite'
 
-const role = process.argv[2] ?? 'APPLICANT'
-const ports = { APPLICANT: 4174, ADMIN: 4175, GUEST: 4176 }
+const role = process.argv[2] ?? 'OPERATIONS'
+const ports = { OPERATIONS: 4174, ADMIN: 4175, GUEST: 4176, PURCHASE: 4177, PRODUCT_OPS: 4178 }
 if (!Object.hasOwn(ports, role)) {
-  throw new Error('预览模式必须为 APPLICANT、ADMIN 或 GUEST。')
+  throw new Error('预览模式必须为 OPERATIONS、PURCHASE、PRODUCT_OPS、ADMIN 或 GUEST。')
 }
 if (!existsSync(new URL('../dist/index.html', import.meta.url))) {
   throw new Error('找不到前端构建产物，请先运行 npm run build。')
@@ -28,7 +29,7 @@ const server = await preview({
             }
             response.end(
               JSON.stringify({
-                user: { id: 'qa', tenantKey: 'qa', name: '界面验收', roleType: role },
+                user: { id: 'qa', tenantKey: 'qa', name: '界面验收', ...roleSession(role) },
               }),
             )
             return

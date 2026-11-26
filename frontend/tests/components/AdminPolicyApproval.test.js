@@ -232,10 +232,10 @@ it.each(['查看', '审核'])('%s先显示申请商品与附件，轮次失败�
   expect(wrapper.text()).toContain('Reno17 Pro')
   expect(wrapper.text()).toContain('服务暂时不可用，请稍后重试')
   expect(button(wrapper, '通过')).toBeUndefined()
-  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="本轮审核进度"]').exists()).toBe(false)
   await button(wrapper, '重新读取本轮审核信息').trigger('click')
   await flushPromises()
-  expect(wrapper.find('[aria-label="本轮审核成员"]').exists()).toBe(true)
+  expect(wrapper.find('[aria-label="本轮审核进度"]').exists()).toBe(true)
   expect(Boolean(button(wrapper, '通过'))).toBe(mode === '审核')
   expect(fetch.mock.calls.filter(([path]) => path === '/api/admin/policies/5')).toHaveLength(1)
 })
@@ -293,6 +293,7 @@ it('采购从当前轮查看初审签署人和同组结办，迟到的终审自�
         ...policy,
         currentSubmissionVersion: 2,
         allowedActions: handled ? [] : ['APPROVE', 'REJECT'],
+        requiresProductReview: true,
         productReviewers: [
           {
             assignmentId: '1',
@@ -317,7 +318,7 @@ it('采购从当前轮查看初审签署人和同组结办，迟到的终审自�
   await flushPromises()
   await wrapper.get('[aria-label="审核政策 ZC-000005"]').trigger('click')
   await flushPromises()
-  const members = () => wrapper.get('[aria-label="本轮审核成员"]').text()
+  const members = () => wrapper.get('[aria-label="本轮审核进度"]').text()
   expect(members()).toContain('初审签署人')
   expect(members()).toContain('2026-11-23 12:10:00')
   expect(members()).toContain('同组他人已处理')

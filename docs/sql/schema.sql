@@ -1,8 +1,7 @@
--- 差异化政策管理：公司共用商品目录、平台分工、审核工作流及时间调整二十三表，MySQL 8.0.16+。
--- 仅供空库首次建表；在Navicat选中已存在的目标库后整份执行。
--- 不创建数据库、不删除或清空表、不插入真实或示例业务数据。
--- 不使用IF NOT EXISTS掩盖结构差异；如已存在同名表，请停止并核对。
--- MySQL DDL隐式提交，失败后先检查已成功部分，不要直接重跑整份脚本。
+-- 差异化政策管理系统 · MySQL 8.0.16 及以上 · 29 张空表
+-- 在 Navicat 中先选中目标空库，再按本文件顺序执行一次；字符编码为 UTF-8。
+-- 本文件仅设置当前连接的字符集和时区，并按外键依赖建表。角色、审核人员和平台分工在应用接入后配置。
+-- DDL 隐式提交。若出现错误，在 Navicat 核对首条报错和已建立的表后继续。
 
 SET NAMES utf8mb4;
 SET time_zone = '+08:00';
@@ -15,39 +14,103 @@ CREATE TABLE `user_info` (
   `name` VARCHAR(64) NOT NULL COMMENT '用户姓名',
   `avatar_url` VARCHAR(2048) DEFAULT NULL COMMENT '飞书头像 HTTPS 地址，登录时同步',
   `department` VARCHAR(128) DEFAULT NULL COMMENT '所属部门',
-  `role_type` VARCHAR(32) NOT NULL DEFAULT 'APPLICANT' COMMENT 'APPLICANT-申请人，ADMIN-管理员',
-  `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '0-未删除，1-已删除',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '0-启用，1-停用',
+  `auth_version` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '角色或启停变化时递增的账号授权版本',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间，北京时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-
+    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间，北京时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_user_id_tenant` (`id`, `tenant_key`),
   UNIQUE KEY `uk_user_tenant_open_id` (`tenant_key`, `open_id`),
+  CONSTRAINT `ck_user_deleted` CHECK (`is_deleted` IN (0, 1)),
+  CONSTRAINT `ck_user_auth_version` CHECK (`auth_version` >= 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='飞书身份、本地账号及授权版本';
 
-  CONSTRAINT `ck_user_role`
-    CHECK (`role_type` IN ('APPLICANT', 'ADMIN')),
-  CONSTRAINT `ck_user_deleted`
-    CHECK (`is_deleted` IN (0, 1))
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci
-  COMMENT='用户与角色映射表';
+CREATE TABLE `sys_role` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '岗位角色主键',
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '所属飞书企业',
+  `role_code` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '企业内稳定的岗位编码',
+  `role_name` VARCHAR(64) NOT NULL COMMENT '岗位显示名称',
+  `is_builtin` TINYINT NOT NULL DEFAULT 0 COMMENT '1-系统内置，0-自定义',
+  `is_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT '1-启用，0-停用',
+  `version` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '角色属性或权限集变化时递增',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间，北京时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间，北京时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_role_tenant_code` (`tenant_key`, `role_code`),
+  UNIQUE KEY `uk_sys_role_id_tenant` (`id`, `tenant_key`),
+  CONSTRAINT `ck_sys_role_code` CHECK (
+    CHAR_LENGTH(`role_code`) > 0 AND CHAR_LENGTH(`role_code`) = CHAR_LENGTH(TRIM(`role_code`))),
+  CONSTRAINT `ck_sys_role_name` CHECK (CHAR_LENGTH(TRIM(`role_name`)) > 0),
+  CONSTRAINT `ck_sys_role_flags` CHECK (`is_builtin` IN (0, 1) AND `is_enabled` IN (0, 1)),
+  CONSTRAINT `ck_sys_role_admin` CHECK (
+    `role_code` <> 'ADMIN' OR (`is_builtin` = 1 AND `is_enabled` = 1)),
+  CONSTRAINT `ck_sys_role_version` CHECK (`version` >= 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='企业岗位及有效状态';
 
-CREATE TABLE `user_platform_assignment` (
-  `tenant_key` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '飞书公司标识',
-  `perspective` VARCHAR(16) COLLATE utf8mb4_bin NOT NULL COMMENT '零售或百亿渠道',
-  `platform_code` VARCHAR(32) COLLATE utf8mb4_bin NOT NULL COMMENT '平台编码',
-  `user_id` BIGINT NOT NULL COMMENT '负责申请人',
-  PRIMARY KEY (`tenant_key`, `perspective`, `platform_code`),
-  KEY `idx_assignment_user_tenant` (`user_id`, `tenant_key`),
-  CONSTRAINT `fk_assignment_user` FOREIGN KEY (`user_id`, `tenant_key`)
+CREATE TABLE `sys_user_role` (
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '授权所属企业',
+  `user_id` BIGINT NOT NULL COMMENT '已核验身份的本地账号',
+  `role_id` BIGINT NOT NULL COMMENT '授予的岗位角色',
+  PRIMARY KEY (`tenant_key`, `user_id`, `role_id`),
+  KEY `idx_sys_user_role_members` (`tenant_key`, `role_id`, `user_id`),
+  KEY `idx_sys_user_role_account_fk` (`user_id`, `tenant_key`),
+  KEY `idx_sys_user_role_role_fk` (`role_id`, `tenant_key`),
+  CONSTRAINT `fk_sys_user_role_account` FOREIGN KEY (`user_id`, `tenant_key`)
     REFERENCES `user_info` (`id`, `tenant_key`),
-  CONSTRAINT `ck_assignment_platform` CHECK (
+  CONSTRAINT `fk_sys_user_role_role` FOREIGN KEY (`role_id`, `tenant_key`)
+    REFERENCES `sys_role` (`id`, `tenant_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='账号与岗位的多对多授权';
+
+CREATE TABLE `sys_role_permission` (
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '角色所属企业',
+  `role_id` BIGINT NOT NULL COMMENT '获得权限的角色',
+  `permission_code` VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '后端登记的业务动作及数据范围编码',
+  PRIMARY KEY (`tenant_key`, `role_id`, `permission_code`),
+  KEY `idx_role_permission_role_fk` (`role_id`, `tenant_key`),
+  CONSTRAINT `fk_role_permission_role` FOREIGN KEY (`role_id`, `tenant_key`)
+    REFERENCES `sys_role` (`id`, `tenant_key`),
+  CONSTRAINT `ck_role_permission_code` CHECK (
+    CHAR_LENGTH(`permission_code`) > 0 AND CHAR_LENGTH(`permission_code`) = CHAR_LENGTH(TRIM(`permission_code`)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='岗位的业务权限集';
+
+CREATE TABLE `platform_team` (
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '团队所属企业',
+  `perspective` VARCHAR(16) NOT NULL COMMENT '零售或百亿渠道',
+  `platform_code` VARCHAR(32) NOT NULL COMMENT '渠道内的平台编码',
+  `version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '分工版本，从未分配为 0，同组变更时递增',
+  `updated_by` BIGINT DEFAULT NULL COMMENT '最后修改分工的本地账号，初始化可空',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP COMMENT '分工更新时间，北京时间',
+  PRIMARY KEY (`tenant_key`, `perspective`, `platform_code`),
+  KEY `idx_platform_team_editor` (`updated_by`, `tenant_key`),
+  CONSTRAINT `fk_platform_team_editor` FOREIGN KEY (`updated_by`, `tenant_key`)
+    REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_platform_team_channel` CHECK (
     (`perspective` = 'RETAIL' AND `platform_code` IN
       ('KUAISHOU','PDD','JD','DOUYIN','TMALL','TAOBAO','ZHAOSHANG','DEWU','UNICOM','GOV_ENTERPRISE'))
     OR (`perspective` = 'BILLION' AND `platform_code` IN ('PDD','TAOBAO','UNICOM')))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='申请人渠道平台分工';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='渠道平台分工和并发版本';
+
+CREATE TABLE `user_platform_assignment` (
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '团队所属企业',
+  `perspective` VARCHAR(16) NOT NULL COMMENT '零售或百亿渠道',
+  `platform_code` VARCHAR(32) NOT NULL COMMENT '渠道内的平台编码',
+  `user_id` BIGINT NOT NULL COMMENT '平台负责成员的本地账号',
+  `member_kind` VARCHAR(16) NOT NULL COMMENT 'SUBMITTER-指定提交人，MEMBER-共同负责成员',
+  `submitter_slot` TINYINT GENERATED ALWAYS AS (
+    CASE WHEN `member_kind` = 'SUBMITTER' THEN 1 ELSE NULL END) STORED COMMENT '提交人占唯一席位，其他成员为空',
+  PRIMARY KEY (`tenant_key`, `perspective`, `platform_code`, `user_id`),
+  UNIQUE KEY `uk_assignment_submitter` (`tenant_key`, `perspective`, `platform_code`, `submitter_slot`),
+  KEY `idx_assignment_member_scope` (`tenant_key`, `user_id`, `member_kind`, `perspective`, `platform_code`),
+  KEY `idx_assignment_user_tenant` (`user_id`, `tenant_key`),
+  CONSTRAINT `fk_assignment_team` FOREIGN KEY (`tenant_key`, `perspective`, `platform_code`)
+    REFERENCES `platform_team` (`tenant_key`, `perspective`, `platform_code`),
+  CONSTRAINT `fk_assignment_user` FOREIGN KEY (`user_id`, `tenant_key`)
+    REFERENCES `user_info` (`id`, `tenant_key`),
+  CONSTRAINT `ck_assignment_member_kind` CHECK (`member_kind` IN ('SUBMITTER', 'MEMBER'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='渠道平台多人负责及唯一指定提交人';
 
 CREATE TABLE `brand` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '品牌主键',
@@ -58,7 +121,6 @@ CREATE TABLE `brand` (
   UNIQUE KEY `uk_brand_name_binding` (`id`, `name`),
   CONSTRAINT `ck_brand_name` CHECK (CHAR_LENGTH(TRIM(`name`)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='标准品牌字典';
-
 
 CREATE TABLE `series` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '系列主键',
@@ -71,7 +133,6 @@ CREATE TABLE `series` (
   CONSTRAINT `fk_series_brand` FOREIGN KEY (`brand_id`) REFERENCES `brand` (`id`),
   CONSTRAINT `ck_series_name` CHECK (CHAR_LENGTH(TRIM(`name`)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='品牌下的标准系列';
-
 
 CREATE TABLE `spu` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '标准机型主键',
@@ -89,7 +150,6 @@ CREATE TABLE `spu` (
   CONSTRAINT `ck_spu_edition` CHECK (CHAR_LENGTH(`edition`) = CHAR_LENGTH(TRIM(`edition`)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='标准机型及独立版本';
 
-
 CREATE TABLE `color_dict` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '颜色主键',
   `color_name` VARCHAR(64) NOT NULL COMMENT '颜色名称',
@@ -97,7 +157,6 @@ CREATE TABLE `color_dict` (
   UNIQUE KEY `uk_color_dict_name` (`color_name`),
   CONSTRAINT `ck_color_dict_name` CHECK (CHAR_LENGTH(TRIM(`color_name`)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='独立颜色表';
-
 
 CREATE TABLE `goods` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '标准商品主键',
@@ -134,12 +193,11 @@ CREATE TABLE `goods` (
   CONSTRAINT `ck_goods_status` CHECK (`status` IN (1, 2, 3, 4))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='具体机型版本、配置及颜色的标准商品';
 
-
 CREATE TABLE `goods_sync_job` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '同步任务主键，一个任务只导入一个品牌',
   `source_key` VARCHAR(64) NOT NULL COMMENT '服务端受控账套标识，不保存凭证',
   `brand_name` VARCHAR(50) NOT NULL COMMENT '任务品牌：OPPO手机或一加手机',
-  `requester_id` BIGINT NOT NULL COMMENT '发起管理员',
+  `requester_id` BIGINT NOT NULL COMMENT '发起商品导入的本地账号',
   `idempotency_key` VARCHAR(64) NOT NULL COMMENT '任务创建幂等键',
   `status` VARCHAR(16) NOT NULL DEFAULT 'QUEUED' COMMENT 'QUEUED、RUNNING、PAUSED、SUCCEEDED、CANCELLED',
   `sync_mode` VARCHAR(16) NOT NULL DEFAULT 'FULL' COMMENT 'FULL 全量、CREATED 按建档日、MODIFIED 按变更日',
@@ -182,7 +240,6 @@ CREATE TABLE `goods_sync_job` (
   CONSTRAINT `ck_job_blockup` CHECK (`include_blockup` IN (0, 1))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='单品牌原始导入任务及最新断点';
 
-
 CREATE TABLE `catalog_clean_job` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '独立清洗任务主键',
   `source_key` VARCHAR(64) NOT NULL,
@@ -210,7 +267,6 @@ CREATE TABLE `catalog_clean_job` (
   CONSTRAINT `ck_clean_job_scope` CHECK (`include_reviews` IN (0, 1) AND (`target_source_id` IS NULL OR (`created_date` IS NULL AND `include_reviews` = 0))),
   CONSTRAINT `ck_clean_job_lease` CHECK ((`worker_token` IS NULL AND `lease_until` IS NULL) OR (`status` = 'RUNNING' AND `worker_token` IS NOT NULL AND `lease_until` IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='按本地商品范围手动启动的清洗任务';
-
 
 CREATE TABLE `source_goods_item` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '本地来源商品稳定主键',
@@ -290,7 +346,6 @@ CREATE TABLE `source_goods_item` (
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='当前 SKU 来源字段及内联标准映射';
 
-
 CREATE TABLE `catalog_clean_job_item` (
   `job_id` BIGINT NOT NULL COMMENT '清洗任务',
   `source_id` BIGINT NOT NULL COMMENT '本地来源商品',
@@ -303,7 +358,6 @@ CREATE TABLE `catalog_clean_job_item` (
   CONSTRAINT `fk_clean_item_source` FOREIGN KEY (`source_id`) REFERENCES `source_goods_item` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `ck_clean_item_outcome` CHECK (`outcome` IN ('PENDING', 'AUTO_PASSED', 'MANUAL_PASSED', 'REVIEW_REQUIRED', 'EXCLUDED', 'ERROR', 'SKIPPED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='清洗确认时的 SKU 范围与逐条结果';
-
 
 CREATE TABLE `catalog_operation_log` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '商品导入记录主键',
@@ -332,7 +386,6 @@ CREATE TABLE `catalog_operation_log` (
   CONSTRAINT `ck_catalog_log_after` CHECK (`after_data` IS NULL OR JSON_TYPE(`after_data`) = 'OBJECT')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='商品导入记录与来源建档日证据';
 
-
 CREATE TABLE `policy_apply` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '政策申请主键',
   `policy_no` VARCHAR(32) NOT NULL COMMENT '政策单号，创建草稿时生成',
@@ -341,6 +394,8 @@ CREATE TABLE `policy_apply` (
   `applicant_id` BIGINT NOT NULL COMMENT '本地申请人 ID',
   `applicant_name` VARCHAR(64) NOT NULL COMMENT '申请人姓名快照',
   `channel_type` VARCHAR(20) NOT NULL COMMENT 'RETAIL-零售，BILLION-百亿',
+  `brand_id` BIGINT DEFAULT NULL COMMENT '当前表单所选标准品牌',
+  `series_id` BIGINT DEFAULT NULL COMMENT '当前表单所选标准系列',
   `platforms` JSON DEFAULT NULL COMMENT '整单已选平台编码数组',
   `write_off_type` VARCHAR(20) DEFAULT NULL COMMENT 'SALES-销售维度，ACTIVATION-激活维度',
   `scene_types` JSON DEFAULT NULL COMMENT '零售实际选中的国补、地补、自补编码数组，未填及百亿为 SQL NULL',
@@ -361,6 +416,7 @@ CREATE TABLE `policy_apply` (
   UNIQUE KEY `uk_apply_policy_no` (`policy_no`),
   UNIQUE KEY `uk_apply_extension_source` (`extension_source_id`, `tenant_key`),
   UNIQUE KEY `uk_apply_tenant_binding` (`id`, `tenant_key`),
+  KEY `idx_apply_series_brand` (`series_id`, `brand_id`),
   KEY `idx_apply_mine` (`applicant_id`, `tenant_key`, `is_deleted`, `created_at`, `id`),
   KEY `idx_apply_status` (`tenant_key`, `is_deleted`, `status`, `created_at`, `id`),
 
@@ -368,6 +424,12 @@ CREATE TABLE `policy_apply` (
     FOREIGN KEY (`applicant_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
   CONSTRAINT `fk_apply_extension_source`
     FOREIGN KEY (`extension_source_id`, `tenant_key`) REFERENCES `policy_apply` (`id`, `tenant_key`),
+  CONSTRAINT `fk_apply_series_brand`
+    FOREIGN KEY (`series_id`, `brand_id`) REFERENCES `series` (`id`, `brand_id`),
+  CONSTRAINT `ck_apply_catalog_scope` CHECK (
+    (`brand_id` IS NOT NULL AND `series_id` IS NOT NULL)
+    OR (`brand_id` IS NULL AND `series_id` IS NULL AND `status` IN ('DRAFT', 'REJECTED'))
+  ),
   CONSTRAINT `ck_apply_channel` CHECK (`channel_type` IN ('RETAIL', 'BILLION')),
   CONSTRAINT `ck_apply_platforms` CHECK (`platforms` IS NULL OR JSON_TYPE(`platforms`) = 'ARRAY'),
   CONSTRAINT `ck_apply_goods_form` CHECK (`goods_form_json` IS NULL OR JSON_TYPE(`goods_form_json`) = 'OBJECT'),
@@ -399,8 +461,10 @@ CREATE TABLE `policy_audit_log` (
   `policy_id` BIGINT NOT NULL COMMENT '政策申请 ID',
   `tenant_key` VARCHAR(64) NOT NULL COMMENT '与政策和审核人相同的租户',
   `version` INT UNSIGNED NOT NULL COMMENT '正式提交轮次，从 1 开始',
+  `brand_id` BIGINT NOT NULL COMMENT '本轮申报的唯一标准品牌',
+  `series_id` BIGINT NOT NULL COMMENT '本轮申报的唯一标准系列',
+  `perspective` VARCHAR(16) NOT NULL COMMENT '本轮冻结的渠道，RETAIL-零售，BILLION-百亿',
   `snapshot_data` JSON NOT NULL COMMENT '本轮提交的完整内容快照',
-  `workflow_version` TINYINT NOT NULL DEFAULT 1 COMMENT '0 旧采购路径，1 按轮次节点办理',
   `audit_status` VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED' COMMENT 'SUBMITTED-待审，APPROVED-通过，REJECTED-驳回',
   `auditor_id` BIGINT DEFAULT NULL COMMENT '本地审核人 ID',
   `auditor_name` VARCHAR(64) DEFAULT NULL COMMENT '审核人姓名快照',
@@ -410,6 +474,9 @@ CREATE TABLE `policy_audit_log` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_policy_audit_round` (`policy_id`, `version`),
+  UNIQUE KEY `uk_audit_round_catalog` (`policy_id`, `version`, `brand_id`, `series_id`),
+  UNIQUE KEY `uk_audit_round_channel` (`policy_id`, `version`, `tenant_key`, `perspective`),
+  KEY `idx_audit_series_brand` (`series_id`, `brand_id`),
   KEY `idx_policy_audit_tenant` (`policy_id`, `tenant_key`),
   KEY `idx_policy_audit_auditor` (`auditor_id`, `tenant_key`),
 
@@ -418,7 +485,9 @@ CREATE TABLE `policy_audit_log` (
   CONSTRAINT `fk_policy_audit_user`
     FOREIGN KEY (`auditor_id`, `tenant_key`) REFERENCES `user_info` (`id`, `tenant_key`),
   CONSTRAINT `ck_policy_audit_snapshot` CHECK (`version` > 0 AND JSON_TYPE(`snapshot_data`) = 'OBJECT'),
-  CONSTRAINT ck_policy_audit_workflow CHECK (workflow_version IN (0,1)),
+  CONSTRAINT `fk_audit_series_brand`
+    FOREIGN KEY (`series_id`, `brand_id`) REFERENCES `series` (`id`, `brand_id`),
+  CONSTRAINT `ck_audit_channel` CHECK (`perspective` IN ('RETAIL', 'BILLION')),
   CONSTRAINT `ck_policy_audit_result` CHECK (
     (`audit_status` = 'SUBMITTED' AND `auditor_id` IS NULL AND `auditor_name` IS NULL
       AND `audit_comment` IS NULL AND `audit_time` IS NULL)
@@ -426,6 +495,24 @@ CREATE TABLE `policy_audit_log` (
       AND `auditor_name` IS NOT NULL AND `audit_time` IS NOT NULL)
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='每轮提交快照和审核结果';
+
+CREATE TABLE `policy_round_platform` (
+  `policy_id` BIGINT NOT NULL COMMENT '政策申请 ID',
+  `version` INT UNSIGNED NOT NULL COMMENT '正式提交轮次',
+  `tenant_key` VARCHAR(64) NOT NULL COMMENT '与提交轮次和平台团队相同的企业',
+  `perspective` VARCHAR(16) NOT NULL COMMENT '本轮冻结的渠道',
+  `platform_code` VARCHAR(32) NOT NULL COMMENT '该轮整单勾选的平台',
+
+  PRIMARY KEY (`policy_id`, `version`, `platform_code`),
+  KEY `idx_round_platform_scope` (`tenant_key`, `perspective`, `platform_code`, `policy_id`, `version`),
+  KEY `idx_round_platform_channel` (`policy_id`, `version`, `tenant_key`, `perspective`),
+  CONSTRAINT `fk_round_platform_audit`
+    FOREIGN KEY (`policy_id`, `version`, `tenant_key`, `perspective`)
+    REFERENCES `policy_audit_log` (`policy_id`, `version`, `tenant_key`, `perspective`),
+  CONSTRAINT `fk_round_platform_team`
+    FOREIGN KEY (`tenant_key`, `perspective`, `platform_code`)
+    REFERENCES `platform_team` (`tenant_key`, `perspective`, `platform_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='每轮正式提交的整单渠道平台';
 
 CREATE TABLE `policy_time_change` (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '本次已生效调整的唯一编号',
@@ -474,6 +561,8 @@ CREATE TABLE `policy_goods_detail` (
   `policy_id` BIGINT NOT NULL COMMENT '政策申请 ID',
   `version` INT UNSIGNED NOT NULL COMMENT '所属正式提交轮次',
   `platform_code` VARCHAR(32) NOT NULL COMMENT '实际适用的具体平台编码',
+  `brand_id` BIGINT NOT NULL COMMENT '与本轮及实际商品机型一致的标准品牌',
+  `series_id` BIGINT NOT NULL COMMENT '与本轮及实际商品机型一致的标准系列',
   `spu_id` BIGINT NOT NULL COMMENT '标准机型及版本',
   `ram` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '配置 RAM，统一 GB',
   `rom` VARCHAR(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '配置 ROM，统一 GB',
@@ -482,12 +571,19 @@ CREATE TABLE `policy_goods_detail` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_policy_goods_round_platform` (`policy_id`, `version`, `platform_code`, `goods_id`),
+  KEY `idx_policy_goods_round_catalog` (`policy_id`, `version`, `brand_id`, `series_id`),
+  KEY `idx_policy_goods_spu_catalog` (`spu_id`, `brand_id`, `series_id`),
   KEY `idx_policy_goods_config` (`spu_id`, `ram`, `rom`, `platform_code`, `goods_id`),
   KEY `idx_policy_goods_binding` (`goods_id`, `spu_id`, `ram`, `rom`),
 
   CONSTRAINT `fk_policy_goods_round`
-    FOREIGN KEY (`policy_id`, `version`) REFERENCES `policy_audit_log` (`policy_id`, `version`),
-  CONSTRAINT `fk_policy_goods_spu` FOREIGN KEY (`spu_id`) REFERENCES `spu` (`id`),
+    FOREIGN KEY (`policy_id`, `version`, `brand_id`, `series_id`)
+    REFERENCES `policy_audit_log` (`policy_id`, `version`, `brand_id`, `series_id`),
+  CONSTRAINT `fk_policy_goods_platform`
+    FOREIGN KEY (`policy_id`, `version`, `platform_code`)
+    REFERENCES `policy_round_platform` (`policy_id`, `version`, `platform_code`),
+  CONSTRAINT `fk_policy_goods_spu`
+    FOREIGN KEY (`spu_id`, `brand_id`, `series_id`) REFERENCES `spu` (`id`, `brand_id`, `series_id`),
   CONSTRAINT `fk_policy_goods_sku`
     FOREIGN KEY (`goods_id`, `spu_id`, `ram`, `rom`) REFERENCES `goods` (`id`, `spu_id`, `ram`, `rom`),
   CONSTRAINT `ck_policy_goods_platform` CHECK (
@@ -509,15 +605,40 @@ CREATE TABLE policy_review_settings (
   CONSTRAINT fk_review_settings_editor FOREIGN KEY (updated_by, tenant_key) REFERENCES user_info (id, tenant_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='企业政策审核设置';
 
-CREATE TABLE policy_review_setting_member (
-  tenant_key VARCHAR(64) NOT NULL COMMENT '企业',
-  group_code VARCHAR(16) NOT NULL COMMENT 'PRODUCT 产品运营，PURCHASE 采购',
-  user_id BIGINT NOT NULL COMMENT '本地人员 ID',
-  PRIMARY KEY (tenant_key, group_code, user_id),
-  CONSTRAINT ck_review_setting_group CHECK (group_code IN ('PRODUCT','PURCHASE')),
-  CONSTRAINT fk_review_setting_parent FOREIGN KEY (tenant_key) REFERENCES policy_review_settings (tenant_key),
-  CONSTRAINT fk_review_setting_user FOREIGN KEY (user_id, tenant_key) REFERENCES user_info (id, tenant_key)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='企业当前两组审核名单';
+CREATE TABLE policy_review_brand_owner (
+  tenant_key VARCHAR(64) NOT NULL COMMENT '审核分工所属企业',
+  brand_id BIGINT NOT NULL COMMENT '标准品牌',
+  purchase_user_id BIGINT NOT NULL COMMENT '管理员预先指定的品牌终审采购',
+  product_mode VARCHAR(16) NOT NULL COMMENT '初审按系列 BY_SERIES 或按品牌 BY_BRAND',
+  brand_product_user_id BIGINT DEFAULT NULL COMMENT '按品牌初审时预先指定的产品运营',
+  PRIMARY KEY (tenant_key, brand_id),
+  KEY idx_review_brand_purchase (purchase_user_id, tenant_key),
+  KEY idx_review_brand_product (brand_product_user_id, tenant_key),
+  KEY idx_review_brand_catalog (brand_id),
+  CONSTRAINT fk_review_brand_settings FOREIGN KEY (tenant_key) REFERENCES policy_review_settings (tenant_key),
+  CONSTRAINT fk_review_brand_catalog FOREIGN KEY (brand_id) REFERENCES brand (id),
+  CONSTRAINT fk_review_brand_purchase FOREIGN KEY (purchase_user_id, tenant_key) REFERENCES user_info (id, tenant_key),
+  CONSTRAINT fk_review_brand_product FOREIGN KEY (brand_product_user_id, tenant_key) REFERENCES user_info (id, tenant_key),
+  CONSTRAINT ck_review_brand_product_mode CHECK (
+    (product_mode = 'BY_BRAND' AND brand_product_user_id IS NOT NULL)
+    OR (product_mode = 'BY_SERIES' AND brand_product_user_id IS NULL)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='管理员预设的品牌采购和品牌初审分工';
+
+CREATE TABLE policy_review_series_owner (
+  tenant_key VARCHAR(64) NOT NULL COMMENT '审核分工所属企业',
+  series_id BIGINT NOT NULL COMMENT '标准系列',
+  brand_id BIGINT NOT NULL COMMENT '该标准系列所属品牌',
+  product_user_id BIGINT NOT NULL COMMENT '管理员预先指定的系列初审产品运营',
+  PRIMARY KEY (tenant_key, series_id),
+  KEY idx_review_series_brand (tenant_key, brand_id),
+  KEY idx_review_series_catalog (series_id, brand_id),
+  KEY idx_review_series_product (product_user_id, tenant_key),
+  CONSTRAINT fk_review_series_brand FOREIGN KEY (tenant_key, brand_id)
+    REFERENCES policy_review_brand_owner (tenant_key, brand_id),
+  CONSTRAINT fk_review_series_catalog FOREIGN KEY (series_id, brand_id) REFERENCES series (id, brand_id),
+  CONSTRAINT fk_review_series_product FOREIGN KEY (product_user_id, tenant_key) REFERENCES user_info (id, tenant_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='管理员预设的系列初审产品运营';
 
 CREATE TABLE policy_review_round (
   policy_id BIGINT NOT NULL COMMENT '申请 ID',
@@ -550,9 +671,11 @@ CREATE TABLE policy_review_member (
   member_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '有效、移除、本人办理或同组他人处理',
   task_guid VARCHAR(128) DEFAULT NULL COMMENT '本次指派的飞书待办 GUID',
   active_user_id BIGINT GENERATED ALWAYS AS (CASE WHEN member_status = 'ACTIVE' THEN user_id ELSE NULL END) STORED,
+  active_review_slot TINYINT GENERATED ALWAYS AS (CASE WHEN member_status = 'ACTIVE' AND group_code IN ('PRODUCT','PURCHASE') THEN 1 ELSE NULL END) STORED COMMENT '每轮每个审核节点唯一的有效指派',
   PRIMARY KEY (id),
   UNIQUE KEY uk_review_member_assignment (policy_id, version, group_code, user_id, assignment_no),
   UNIQUE KEY uk_review_member_active (policy_id, version, group_code, active_user_id),
+  UNIQUE KEY uk_review_member_active_slot (policy_id, version, group_code, active_review_slot),
   UNIQUE KEY uk_review_member_group (id, policy_id, version, tenant_key, group_code),
   UNIQUE KEY uk_review_member_round (id, policy_id, version, tenant_key),
   UNIQUE KEY uk_review_member_task (tenant_key, task_guid),

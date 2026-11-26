@@ -1,23 +1,31 @@
 # 数据库设计与字段字典
 
-本项目使用 MySQL 8.0.16 及以上版本，当前空库基线包含二十三张表。商品目录由公司共用。政策通过申请、提交轮次和已核验的账号关联商品明细、审核决定、改期及飞书投递记录。
+本项目使用 MySQL 8.0.16 及以上版本，当前空库基线包含 **29 张表**。新增角色授权、平台团队及按品牌和系列预设的审核负责人。商品目录由公司共用。业务关联与提交案例见[角色、平台和审核分工设计](role-platform-review-design.md)。
+
+前后端按本基线读写。首次飞书登录初始化内置岗位、权限和渠道平台，同时建立运营账号。首位管理员授权后，从工作台配置平台团队和品牌、系列审核负责人。
 
 ## 1. 在 Navicat 建表
 
 项目由用户在 Navicat 建表，后端启动时不会自动创建或更新目标库结构。
 
-1. 核对 Navicat 与后端指向同一目标库，检查 MySQL 版本和现有表。首次建表请选择空库。
-2. 在空库中执行 [schema.sql](schema.sql) 或 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 其中一份。两份内容相同。刷新后按[二十三表清单](#2-二十三表清单和约束)核对表名。若中途报错，保留错误和已建表的定义，核实原因后从尚未成功的部分继续。
-3. 启动后端，用飞书登录生成默认申请人账号。首次配置管理员时，由用户核对目标账号并在 Navicat 将该账号的 `user_info.role_type` 设为 `ADMIN`，重新进入工作台后按业务需要设置审核名单、分配平台或导入商品。
+1. 在 Navicat 中创建或选中目标空数据库，核对连接、数据库名、MySQL 版本及现有表数为 0。
+2. 对该库运行 [schema.sql](schema.sql) 或 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) **其中一份一次**。两者内容相同，已按外键依赖顺序排列。
+3. 刷新“表”，按[29 表清单](#2-二十九表清单和约束)核对表名。预期得到 29 张空表。MySQL DDL 会隐式提交，如中途报错，记录失败的语句和已建表名再定位。
 
-**已有表的库**先核对实际表结构和需保留的数据。如需整体重建，须另行确认本次目标库及删除范围，先停止后端写入，并备份数据库及同一时点的 `POLICY_STORAGE_ROOT` 附件目录。确认重建后，由用户在选定的库执行 [drop_all_tables.sql](drop_all_tables.sql)，再按上面的空库步骤建表。删表会永久清除项目表中的账号、商品、政策、审核记录及附件引用。磁盘附件和已发出的飞书消息仍在原处。
+两份基线只创建结构。首次登录后，将核验过的本地账号通过 `sys_user_role` 授予管理员。管理员配置其他人员和具体品牌、系列的审核分工。仓库中的 [drop_all_tables.sql](drop_all_tables.sql) 仅适用于旧 23 表，本次空库建表无需使用。
 
-## 2. 二十三表清单和约束
+<a id="2-二十三表清单和约束"></a>
+
+## 2. 二十九表清单和约束
 
 | 表 | 职责 | 关键关联 |
 | --- | --- | --- |
-| user_info | 飞书身份、本地角色 | tenant_key + open_id 唯一；停用身份仍占唯一键 |
-| user_platform_assignment | 当前申请人分工 | (tenant_key, perspective, platform_code) 主键，每个渠道平台至多一位负责人，零售和百亿的同名平台独立分配 |
+| user_info | 飞书身份、启停与授权版本 | tenant_key + open_id 唯一，停用身份仍占唯一键 |
+| sys_role | 本企业的岗位角色 | 企业内角色编码唯一 |
+| sys_user_role | 账号担任的岗位 | 企业、用户、角色联合主键，两端均核对所属企业 |
+| sys_role_permission | 岗位可用的权限项 | 企业、角色、权限编码联合主键 |
+| platform_team | 渠道平台团队及分工版本 | 企业、渠道、平台联合主键，零售和百亿同名平台分别配置 |
+| user_platform_assignment | 平台负责成员与指定提交人 | 同平台同人只一行，可以有多位共同成员，数据库保证最多一名提交人 |
 | brand | 公司品牌字典 | 名称直接对应吉客云 brandName，名称唯一 |
 | series | 品牌下的标准系列 | 同品牌下系列名称唯一 |
 | spu | 标准机型及版本 | 同品牌下机型名称 + 版本唯一 |
@@ -29,16 +37,18 @@
 | source_goods_item | 当前 SKU 来源及内联映射 | sku_id 唯一，非空 goods_id 唯一，任务须匹配来源账套及品牌，标准商品须匹配来源品牌 |
 | catalog_operation_log | 源商品变更前后值、导入任务操作和建档日命中记录 | `entity_type` 区分对象，`entity_id` 保存对应的本地主键 |
 | policy_apply | 政策申请与当前编辑表单 | 申请人与政策同租户 |
-| policy_audit_log | 每轮完整提交快照和审核结果 | 每单每轮唯一，审核人与政策同租户 |
+| policy_audit_log | 每轮完整提交快照和审核结果 | 每单每轮唯一，冻结渠道、唯一品牌及系列，审核人与政策同企业 |
+| policy_round_platform | 本轮正式勾选的平台 | 每单、轮次、平台唯一，渠道与该轮快照和平台团队一致 |
 | policy_time_change | 已生效的原单改期流水 | 关联原单获批轮次、实际办理人和可选的发起轮次，按版本与幂等标识唯一 |
-| policy_goods_detail | 逐轮、逐平台的实际选中商品 | 归属对应提交轮次，商品 ID 与机型配置匹配 |
-| policy_review_settings | 企业名单版本及修改者 | 一企业一行 |
-| policy_review_setting_member | 产品运营、采购两组名单 | 同企业同组按用户去重 |
+| policy_goods_detail | 逐轮、逐平台的实际选中商品 | 品牌、系列与正式轮次和机型一致，平台属于该轮，商品 ID 与机型配置匹配 |
+| policy_review_settings | 企业审核分工的配置版本及修改者 | 一企业一行 |
+| policy_review_brand_owner | 品牌唯一终审采购及初审方式 | 按品牌初审时记录产品运营，按系列初审时关联系列分工 |
+| policy_review_series_owner | 系列唯一初审产品运营 | 关联已配置的品牌及其标准系列、同企业产品运营 |
 | policy_review_round | 本轮阶段与路由快照 | 关联当轮审核及同企业申请 |
-| policy_review_member | 节点成员及个人任务 | 锁定人员和当次指派，保留改派与结办 |
+| policy_review_member | 节点成员及个人任务 | 本轮每个审核节点最多一名有效指派人，提交时冻结负责人，办理后留存结办状态 |
 | policy_review_decision | 节点实际决定 | 每单每轮每组最多一条 |
-| policy_review_reassignment | 在途改派轨迹 | 保存同组变更前后指派及操作人 |
-| policy_review_delivery | 审核投递及执行期、平台交接和商品批次提醒 | 审核按轮次、事件、动作和收件方去重，独立提醒按企业与 notice_key 去重 |
+| policy_review_reassignment | 已停用的在途改派表 | 保留既有表结构和历史数据，当前流程不读写 |
+| policy_review_delivery | 审核投递及执行期、平台交接和商品导入异常暂停提醒 | 审核按轮次、事件、动作和收件方去重，独立提醒按企业与 notice_key 去重 |
 
 完整关联图及业务见 [确认方案](../architecture/catalog-admin-design.md)。来源到标准商品的关联保存在来源表。
 
@@ -104,7 +114,7 @@
 
 - `policy_apply` 按申请保存基本字段、整单平台和当前草稿。草稿可缺时间或商品。商品卡 JSON 保留稳定的卡片和方案标识、普通卡及指定卡选中的具体商品 ID、是否跟随整单平台、方案参数、各平台分配及指定商品数量。百亿的零售专属字段为空。档案附件存文件 ID 或外部链接，文件正文由附件存储管理。已实现 FILE 引用的上传者校验和服务端名称回填，物理删除检查当前 JSON 和所有提交快照引用，绑定与删除使用上传者用户行锁。
 - `policy_audit_log` 每次提交或重提插入一行，内容快照含完整基础信息、商品卡、方案分配、标准 ID、服务端生成的品牌系列型号版本配置与颜色显示值、数量、时间、备注和附件引用。审核只更新这一轮的结果、审核人、意见和时间。
-- `policy_goods_detail` 按实际平台和所选商品展开，绑定 `(policy_id, version)`。普通卡和指定卡均须保存 `goods_id`，以 `(goods_id, spu_id, ram, rom)` 校验商品归属。新增或未勾选的商品不进入本轮。明细供商品筛选、覆盖候选和商品引用检查使用。补贴、数量及历史展示字段从同轮快照读取。
+- `policy_round_platform` 冻结该轮正式勾选的平台。`policy_goods_detail` 按实际平台和所选商品展开，外键将每条明细绑定到本轮已勾选的平台及唯一品牌、系列。普通卡和指定卡均保存 `goods_id`，以 `(goods_id, spu_id, ram, rom)` 校验商品归属。补贴、数量及历史展示字段从同轮快照读取。
 - 提交时后端从同一份已校验表单生成快照与明细，按版本更新申请并在同一事务中写入。每次业务写入递增 `record_version`，每次正式提交递增 `current_version`。审核按当前待审轮次条件更新。详细流程见 [状态机](../business/status-machine.md)。
 
 本人未提交草稿允许物理删除 `policy_apply`，条件为 `DRAFT`、`current_version=0`、本人归属、`is_deleted=0` 和当前记录版本，并排除已有 `policy_audit_log`、`policy_goods_detail` 引用。删除与保存、提交采用同一主表行的条件写入。其他状态的申请及历史继续保留，磁盘附件独立处理。
@@ -145,9 +155,9 @@
 
 ### 本轮完整性与并发
 
-- 名单设置以企业为单位，锁定设置行后按用户 ID 升序锁申请人、设置操作人及所选账号（取本动作所需的人员），以配置版本检查并发保存。提交在同一事务读取该版本和所选有效成员，再按政策已有的平台/商品/机型锁定顺序复核交叉依据。整单快照、工作流轮、成员及待投递事件共进退。
-- 节点写入按企业和申请、轮次核对最新状态与业务版本，锁定同一轮和本组成员后检查资格。并发办理及改派必须在相同顺序串行化。每轮每组至多一条决定，其 `member_id` 只能关联本企业、本申请、本轮、本组的指派。其余成员可标记「同组他人已处理」，实际签署人以决定行为准。
-- 成员再次加入同一组时使用新的 `assignment_no` 与指派 ID，旧行保留以对照早期任务及回执。生成列保证同人同组最多一条有效指派。设置版本号和成员姓名部门一起冻结；默认名单修改后可从轮成员和改派前后清单恢复当时的人选。服务端检查两关实际办理人不同，改派必须校验现行资格、记录原因。
+- 管理员在运营提交前，按品牌指定终审采购，按 OPPO 和一加各自的标准系列指定初审产品运营。管理员保存分工时锁定企业设置行并校验版本。运营提交时系统在同一事务读取已生效设置，按需要的节点登记其预设人员，冻结所用设置版本。所需负责人缺失、停用、自审或两关只能由同一人办理时，提交失败，表单可继续编辑。
+- 节点写入按企业、申请、轮次核对最新状态与业务版本，同一轮的审核决定按统一顺序串行。每轮每个审核节点最多一条有效指派和一条成功决定，决定行的 `member_id` 必须关联本企业、本申请、本轮、本组的指派。产品运营可按实际签署人查自己的初审记录。
+- 改长期分工从下一次首提或重提起生效。在途替换另记原因、前后人员及当次指派 ID。再次派给同一人使用新的 `assignment_no`，此前的签署、任务及回执仍可追溯。
 - 相同事件的一条群消息用接收键 0，每个个人动作以实际指派 ID 去重。动作与本地业务在一个事务登记，外部投递在提交后进行。后台按状态、下次尝试时间、租约截止和 ID 领取登记，按业务唯一键及回执逐项对账。退回时可给原申请人建立独立的 REVISION 修改指派，个人投递仍关联该指派。这类修改任务没有审核签署权。并发与重试需在目标环境复核。
 
 ### 数据库与服务端校验
@@ -155,13 +165,13 @@
 | 范围 | 数据库 | 服务端 |
 | --- | --- | --- |
 | 身份与历史 | 同租户账号外键、每单每轮唯一、明细关联本轮、外键限制删除 | 校验有效身份和权限，正常业务过滤主表逻辑删除，保护每轮快照与历史明细 |
-| 平台与颜色 | 正式明细平台编码、商品复合外键、同轮同平台同商品唯一 | 校验渠道与整单平台、卡片与方案分配、选中商品在售、同平台跨卡重复选中同一商品 |
+| 平台与商品 | 每个平台最多一名指定提交人。正式明细的品牌、系列与本轮及机型一致，平台属于该轮。同轮同平台同商品唯一 | 校验运营在全部勾选平台的提交资格和账号状态；需有商品，核对在售、卡片和方案分配，拦截跨卡重复选品 |
 | 数量和补贴 | 快照和草稿使用 JSON 对象 | 指定颜色按平台选填参考数量，留空保存为 NULL，填写 0 原样保存。补贴仅保存所选方式的参数，金额按 `DECIMAL(10,2)`、比例按 `DECIMAL(5,2)` 百分数的精度校验 |
 | 日期和提交完整性 | 草稿和待审申请同时填写时间时，开始早于截止 | 获批政策按原单最新实际截止执行，含截止秒；调整记录保留每次生效依据 |
 
 ### 权限、历史与任务
 
-登录时须识别停用记录并拒绝登录。申请人编辑自己的草稿，审核节点须校验本企业有效账号及本轮指派，采购另须具备管理员角色。明细和日志经父政策授权。商品中心的编辑、删除及字典维护须检查历史商品或机型引用。正式提交与商品改规格、删除共享事务锁定约定，提交完成前重新验证目录，具体并发验收见第 5 节。
+登录时须识别停用记录并拒绝登录。运营编辑自己的草稿，共同负责成员通过最新正式轮次的平台交集查看政策。采购具备对应终审权限并获本轮有效指派才可办理，系统管理员签署时也要核对本轮指派、自审及两关分离约束。明细、日志和附件按父政策及具体轮次鉴权。商品中心的编辑、删除及字典维护须检查历史商品或机型引用。[权限和数据范围](role-platform-review-design.md)
 
 goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式、北京时间日期、查询阶段和当前阶段游标。按修改日先查商品修改，再重置游标查 SKU 修改。终态任务只保留该任务最后位置，日志不保存游标、worker_token 或完整上游响应。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSED 占同账套唯一槽。暂停任务可在冷却后恢复，或结束并保留已落库原文。源商品的首次和最近导入任务引用要求同账套和品牌。
 
@@ -186,14 +196,26 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | name | VARCHAR(64) | 否 | — | 用户姓名 |
 | avatar_url | VARCHAR(2048) | 是 | NULL | 飞书头像 HTTPS 地址；登录时同步 |
 | department | VARCHAR(128) | 是 | NULL | 所属部门 |
-| role_type | VARCHAR(32) | 否 | 'APPLICANT' | APPLICANT-申请人，ADMIN-管理员 |
+| auth_version | INT UNSIGNED | 否 | 1 | 用户角色或启停变更时由服务端递增，供并发校验 |
 | is_deleted | TINYINT | 否 | 0 | 0-未删除，1-已删除 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 创建时间 |
 | updated_at | DATETIME | 否 | CURRENT_TIMESTAMP |  |
 
-2026-11-17 已实现的用户列表、全量统计、详情、角色调整和启停直接使用上述字段，无需改表。用户管理将现有 `is_deleted=0/1` 映射为启用／停用，允许管理员查看两种状态；登录仍读取并拒绝停用身份，不能按不存在的账号重新创建。部门可空，本轮不增加通讯录同步。
+用户管理将 `is_deleted=0/1` 映射为启用／停用。角色关系独立存放，账号与历史申请的 ID 保持稳定。现行单角色接口的实现及历史验收见[用户管理接口](../api/user-api.md)。
 
-角色接口仅在实际变更时更新 `role_type` 和 `updated_at`，用目标当前角色及启停值做旧值校验，事务内锁定操作人和目标账号并保护有效管理员。不新增版本号或角色操作历史表，不改变用户 ID、飞书身份、启停和政策历史。启停接口只更新 `is_deleted` 和 `updated_at`，沿用相同的锁顺序及旧值校验，原有角色与业务关联继续保留。[用户管理接口及验证范围](../api/user-api.md)
+### sys_role、sys_user_role 与 sys_role_permission
+
+| 表 | 字段与约束 |
+| --- | --- |
+| `sys_role` | 自增主键 `id BIGINT`、`tenant_key VARCHAR(64)`、`role_code VARCHAR(64)`、`role_name VARCHAR(64)`、`is_builtin TINYINT` 默认 0、`is_enabled TINYINT` 默认 1、`version INT UNSIGNED` 默认 1、创建和更新时间。角色编码在企业内唯一，`(id,tenant_key)` 供同企业外键引用。`ADMIN` 行必须是已启用的内置角色 |
+| `sys_user_role` | `tenant_key,user_id,role_id` 为联合主键；用户和角色分别引用所属企业的记录。可反向按角色查人 |
+| `sys_role_permission` | `tenant_key,role_id,permission_code VARCHAR(80)` 为联合主键，权限项由应用登记。服务端检查编码和角色版本，同角色的变更即时作用于持有人 |
+
+四个内置岗位编码为 `ADMIN`（系统管理员）、`PURCHASE`（采购）、`OPERATIONS`（运营）、`PRODUCT_OPS`（产品运营）。系统管理员拥有全部功能，其他岗位按授权动作和具体数据范围办理。一人可兼岗。自我授权限制、最后一名有效管理员及岗位启停规则由应用事务校验。
+
+### platform_team
+
+主键 `(tenant_key,perspective,platform_code)` 标识企业内一个渠道平台。`version INT UNSIGNED` 初始为 0，用于整组分工并发校验。`updated_by BIGINT` 可空，关联最后修改的同企业账号，`updated_at DATETIME` 记录最后保存时间。零售与百亿分别分工。团队行可先于成员建立，支持在空平台上锁定首次分配。
 
 ### user_platform_assignment
 
@@ -201,10 +223,12 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | --- | --- | --- |
 | `tenant_key` | VARCHAR(64) | 本地账号所属飞书企业，区分大小写 |
 | `perspective` | VARCHAR(16) | RETAIL 或 BILLION |
-| `platform_code` | VARCHAR(32) | 渠道可用的平台编码，取值由检查约束限定 |
-| `user_id` | BIGINT | 当前负责人的本地 ID，和 tenant_key 组成外键指向 user_info |
+| `platform_code` | VARCHAR(32) | 与企业、渠道共同引用平台团队 |
+| `user_id` | BIGINT | 当前成员的本地 ID，和 tenant_key 组成外键指向 user_info |
+| `member_kind` | VARCHAR(16) | SUBMITTER 指定提交人或 MEMBER 共同成员 |
+| `submitter_slot` | TINYINT 生成列 | SUBMITTER 取 1，普通成员为空 |
 
-每条记录表示一个当前负责人，未分配的渠道平台没有记录。主键限定同一企业内每个渠道平台至多一人负责。同一账号可在两个渠道分别持有同名平台。草稿与审核快照保存各自的申请人和平台。
+主键 `(tenant_key,perspective,platform_code,user_id)` 允许多人共同负责。团队加 `submitter_slot` 的唯一键阻止出现第二名提交人。团队是否具备一名启用且有资格的提交人，由整组分工与正式提交事务核对。同账号可以在零售和百亿分别负责同名平台。
 
 ### brand
 
@@ -385,6 +409,7 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | tenant_key | VARCHAR(64) | 否 | — | 会话确定的租户 |
 | applicant_id | BIGINT | 否 | — | 同租户的本地账号 |
 | applicant_name | VARCHAR(64) | 否 | — | 申请人姓名快照 |
+| brand_id、series_id | BIGINT | 是 | NULL | 当前编辑表单的标准品牌、系列，两者须同时有值或同时为空。空值仅限草稿或退回编辑，非空时复合外键核对系列归属 |
 | channel_type | VARCHAR(20) | 否 | — | RETAIL 或 BILLION |
 | platforms | JSON | 是 | NULL | 整单平台编码数组 |
 | write_off_type | VARCHAR(20) | 是 | NULL | SALES 或 ACTIVATION |
@@ -410,14 +435,19 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | policy_id | BIGINT | 否 | — | 关联 policy_apply.id |
 | tenant_key | VARCHAR(64) | 否 | — | 与申请及审核人相同 |
 | version | INT UNSIGNED | 否 | — | 提交轮次，从 1 开始 |
+| brand_id、series_id | BIGINT | 否 | — | 本轮冻结的唯一标准品牌与系列，复合外键引用系列及其所属品牌 |
+| perspective | VARCHAR(16) | 否 | — | 本轮冻结的 RETAIL 或 BILLION 渠道，供该轮平台引用 |
 | snapshot_data | JSON | 否 | — | 每轮正式提交的表单、商品、附件引用及本轮适用范围决定。随单调整申请写入 `$.consent.endAdjustments`，生效的改期与新增段采用决定另存时间调整流水。本轮采用的规则版本和逐段决定保存在 `$.consent`。由 Java 记录类 `PolicySnapshotData` 定义格式。[按轮快照读写](../api/policy-api.md#提交快照的存储与回读) |
-| workflow_version | TINYINT | 否 | 1 | 普通提交轮次写 1；采购授权核对实际阶段、指派与本轮决定 |
 | audit_status | VARCHAR(20) | 否 | SUBMITTED | SUBMITTED、APPROVED、REJECTED |
 | auditor_id | BIGINT | 是 | NULL | 同租户的审核人账号 |
 | auditor_name | VARCHAR(64) | 是 | NULL | 审核人姓名快照 |
 | audit_comment | VARCHAR(512) | 是 | NULL | 本轮审核意见 |
 | audit_time | DATETIME | 是 | NULL | 本轮审核时间 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 本轮提交时间 |
+
+### policy_round_platform
+
+字段为 `policy_id BIGINT`、`version INT UNSIGNED`、`tenant_key VARCHAR(64)`、`perspective VARCHAR(16)`、`platform_code VARCHAR(32)`，均必填。主键 `(policy_id,version,platform_code)`。一组复合外键关联正式轮次的企业和渠道，另一组引用对应的渠道平台团队。草稿没有本轮行。共同成员查询时按企业、渠道和平台反查正式轮次，并与申请的 `current_version` 匹配。退回编辑期间仍可查最近正式提交的内容。
 
 ### policy_time_change
 
@@ -431,29 +461,43 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | policy_id | BIGINT | 否 | — | 与 version 关联提交记录 |
 | version | INT UNSIGNED | 否 | — | 对应提交轮次 |
 | platform_code | VARCHAR(32) | 否 | — | 实际适用的平台编码 |
+| brand_id、series_id | BIGINT | 否 | — | 同时关联本轮申报范围以及该条商品的机型归属 |
 | spu_id | BIGINT | 否 | — | 标准机型及版本 |
 | ram、rom | VARCHAR(20) ASCII | 否 | — | 配置容量，统一 GB |
 | goods_id | BIGINT | 否 | — | 普通卡或指定卡实际选中的标准商品 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 本轮明细写入时间 |
 
-### 工作流七表字段
+<a id="工作流七表字段"></a>
+
+### 预设审核分工与工作流字段
 
 以下时间均为北京时间 DATETIME，企业键 `tenant_key` 为 VARCHAR(64) 并与账号/申请具有相同的二进制排序规则。轮次外键沿用 `policy_id BIGINT` 和 `version INT UNSIGNED`。除标明可空的字段外，其余列均必填或由数据库生成。
 
 | 表 | 字段、取值与默认值 | 核对用途 |
 | --- | --- | --- |
 | `policy_review_settings` | `tenant_key` 主键；`version INT` 默认 0；`updated_by BIGINT` 可空，关联同企业本地账号；`updated_at` 默认当前时间 | 未配置为版本 0，更新成功后版本递增 |
-| `policy_review_setting_member` | `tenant_key,group_code VARCHAR(16),user_id BIGINT` 联合主键；组为 PRODUCT 或 PURCHASE，人员关联同企业账号 | 同组同人只保存一次。采购资格、启停及禁止自审由服务端核验 |
+| `policy_review_brand_owner` | `(tenant_key,brand_id)` 主键，`purchase_user_id BIGINT` 必填，`product_mode VARCHAR(16)` 取 BY_BRAND 或 BY_SERIES，`brand_product_user_id BIGINT` 按模式可空 | 同一企业每个品牌提前指定一名采购。按品牌初审必须填产品运营，按系列初审该字段必须为空。配置关联标准品牌、企业设置与同企业账号 |
+| `policy_review_series_owner` | `(tenant_key,series_id)` 主键，`brand_id BIGINT,product_user_id BIGINT` 必填 | 外键同时核对标准系列的所属品牌、已配置品牌以及同企业人员。确认品牌采用 BY_SERIES 后，管理员为每个系列预设一名初审产品运营 |
 | `policy_review_round` | `policy_id,version` 主键；`tenant_key`；`settings_version INT` 须大于 0；`stage VARCHAR(24)`；`route_json JSON` 对象；`created_at` 默认当前时间 | 阶段为 PRODUCT_REVIEW、PURCHASE_REVIEW 或 FINISHED。整单路由、样本轮次、触发段和展示依据从冻结的 JSON 读取 |
-| `policy_review_member` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code,user_id`；`display_name VARCHAR(64)`、`department VARCHAR(128)`（可空）为指派时快照；`assignment_no INT` 默认 1；`member_status VARCHAR(16)` 默认 ACTIVE；`task_guid VARCHAR(128)` 可空；`active_user_id BIGINT` 生成 | 组为 PRODUCT 或 PURCHASE；REVISION 用于退回后给原申请人的修改指派。设置与节点决定只接受前两组。ACTIVE、REMOVED、HANDLED、PEER_HANDLED 分别为有效、移除、本人办理、同组他人处理。未送达可无 GUID，非空 GUID 在企业内唯一 |
+| `policy_review_member` | `id BIGINT` 自增，`policy_id,version,tenant_key,group_code,user_id` 标识指派，`display_name VARCHAR(64)`、可空的 `department VARCHAR(128)` 保存人员快照。`assignment_no INT` 默认 1，`member_status VARCHAR(16)` 默认 ACTIVE，`task_guid VARCHAR(128)` 可空，`active_user_id BIGINT`、`active_review_slot TINYINT` 为生成列 | PRODUCT 和 PURCHASE 节点仅 ACTIVE 行的 `active_review_slot` 为 1，轮次、组、该列的唯一键确保最多一名当前审核人，保留已办理及移除记录。REVISION 供原提交人修改。飞书待办 GUID 非空时在企业内唯一 |
 | `policy_review_decision` | `policy_id,version,group_code` 主键；`tenant_key,member_id BIGINT`；`decision VARCHAR(16)` 为 APPROVE 或 REJECT；`reason VARCHAR(512)` 可空，产品运营退回时必填；`decided_at` 默认当前时间 | 保存该节点实际决定人的一次操作，按指派查询姓名部门及节点 |
-| `policy_review_reassignment` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code`；`operator_id BIGINT` 为同企业操作人；`reason VARCHAR(512)` 须有内容；`before_members,after_members JSON` 数组保存改派前后指派 ID 及人员 ID；`created_at` 默认当前时间 | 按同轮、同组及记录 ID 回看谁何时增减了哪些人 |
-| `policy_review_delivery` | `id BIGINT` 自增；`tenant_key,policy_id,version`；`event_key VARCHAR(128)`；`action_type VARCHAR(16)` 为 GROUP_MESSAGE、SEND_CARD、UPDATE_CARD、CREATE_TASK 或 CLOSE_TASK；`recipient_key BIGINT` 为 0 或指派 ID，`recipient_member_id` 自动映射个人指派；`payload_json JSON` 对象；`created_at` 默认当前时间 | 轮次内事件、动作和接收键联合唯一。独立业务提醒的 policy_id 与 version 同时为空，库内 action_type 为 GROUP_MESSAGE、recipient_key 为 0，按企业和生成列 notice_key 去重。请求收件人、摘要指纹及人工处理人、依据、时间保存在本条登记的 JSON 中。 |
+| `policy_review_reassignment` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code`；`operator_id BIGINT` 为同企业操作人；`reason VARCHAR(512)` 须有内容；`before_members,after_members JSON` 数组保存改派前后指派 ID 及人员 ID；`created_at` 默认当前时间 | 保留原结构，当前流程不读写 |
+| `policy_review_delivery` | `id BIGINT` 自增；`tenant_key,policy_id,version`；`event_key VARCHAR(128)`；`action_type VARCHAR(16)` 为 GROUP_MESSAGE、SEND_CARD、UPDATE_CARD、CREATE_TASK 或 CLOSE_TASK；`recipient_key BIGINT` 为 0 或指派 ID，`recipient_member_id` 自动映射个人指派；`payload_json JSON` 对象；`created_at` 默认当前时间 | 轮次内事件、动作和接收键联合唯一。独立业务提醒的 policy_id 与 version 同时为空，库内 action_type 为 GROUP_MESSAGE、recipient_key 为 0，按企业和生成列 notice_key 去重。首次发送目标、请求摘要指纹及尝试信息保存在本条登记的 JSON 中。 |
 | 同一投递记录的结果 | `delivery_status VARCHAR(24)` 默认 PENDING，可取 SENDING、SENT、RETRY、UNKNOWN、FAILED、CANCELLED；`attempts INT` 默认 0；`next_attempt_at,lease_until,delivered_at`、`lease_owner VARCHAR(128)`、`receipt_id VARCHAR(128)`、`last_error VARCHAR(512)` 均可空 | 保存派发进度、限时领取者、重试时间、外部回执与脱敏错误。结果未知时优先核对本动作 |
 
 ### 群消息投递编号与飞书回执
 
-一条群通知对应一行 `policy_review_delivery`。管理员在「政策审核设置 → 飞书投递记录」看到的 `deliveryKey` 是后端根据该行生成的 UUID，表中没有单独的 UUID 列。后端依次用 `/` 拼接 `tenant_key/policy_id/version/event_key/action_type/recipient_key`，将结果编码为 UTF-8，调用 `UUID.nameUUIDFromBytes`。独立提醒的 `policy_id`、`version` 在库中均为 NULL，生成编号时两者均取 `0`。同一投递重试时复用该编号作为飞书发消息请求的 `uuid`。[编号生成代码](../../backend/src/main/java/com/company/policy/service/PolicyFeishuSender.java)
+一条群通知对应一行 `policy_review_delivery`。后台使用的 `deliveryKey` 是根据该行生成的 UUID，表中没有单独的 UUID 列。后端依次用 `/` 拼接 `tenant_key/policy_id/version/event_key/action_type/recipient_key`，将结果编码为 UTF-8，调用 `UUID.nameUUIDFromBytes`。独立提醒的 `policy_id`、`version` 在库中均为 NULL，生成编号时两者均取 `0`。同一投递重试时复用该编号作为飞书发消息请求的 `uuid`。[编号生成代码](../../backend/src/main/java/com/company/policy/service/PolicyFeishuSender.java)
+
+单卡验证命令需要原投递编号时，可在本机运行以下 Python 片段。输入上述六个字段用 `/` 拼成的字符串（从 Navicat 已核对的实际登记行取值）。
+
+```python
+import hashlib
+import uuid
+
+key = input("企业/申请ID/轮次/事件/动作/接收键：").strip()
+print(uuid.UUID(bytes=hashlib.md5(key.encode("utf-8")).digest(), version=3))
+```
 
 | Navicat 中的字段 | 用途 |
 | --- | --- |
@@ -465,13 +509,16 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 在 Navicat 中按企业和业务事件定位投递，再对照 `delivery_status`、`delivered_at`、`receipt_id` 与飞书回执。常见的核对方式有三种。
 
 - 平台交接按 `event_key` 前缀查找。例如零售快手以 `PL/RETAIL/KUAISHOU/` 开头，分工的变动保存在 `payload_json`。
-- 终审通过的群公告按 `policy_id`、`version`、`event_key = 'PURCHASE_DECIDED'` 及 `action_type = 'GROUP_MESSAGE'` 查找。表单来自该轮 `policy_audit_log.snapshot_data`，叠加名单来自同轮 `policy_review_round.route_json`。采购办理提醒按采购指派记录为 `SEND_CARD`，收件人可从 `recipient_member_id` 对应的指派核对。
+- 终审通过的群公告按 `policy_id`、`version`、`event_key = 'PURCHASE_DECIDED'` 及 `action_type = 'GROUP_MESSAGE'` 查找。表单来自该轮 `policy_audit_log.snapshot_data`，叠加名单来自同轮 `policy_review_round.route_json`。29 表方案要求终审批准时将该轮平台当时的有效成员与原提交人按本地用户 ID 去重，冻结在公告的 `payload_json`，重试复用同一名单。采购提醒关联采购指派 ID。
 - 原申请人的临期提醒按 `P/{policyId}/EXPIRY_REMINDER/{reminderDate}` 查找，日期为北京时间的提醒日。`policy_id`、`version` 在这类独立提醒的投递行上均为 NULL，按企业和 `notice_key` 去重。`payload_json.kind` 为 `EXPIRY_REMINDER`，管理员页面显示实际私发动作 `SEND_CARD`。[时间与收件规则](../architecture/policy-workflow-phase-f.md#原申请人的临期私聊)
 
 ## 5. 验证范围
 
-建表结果、约束、执行计划及并发行为以用户在目标 MySQL 中的实际核对为准。隔离 H2 测试已覆盖同人同组重复有效指派、同节点第二个决定、跨组签署、跨企业投递、重复登记，以及撤销后再次加入同组取得新指派。
+本次交付为 29 表完整 DDL。目标 MySQL 的执行结果由用户在 Navicat 核对。下列场景供建库和后续应用适配验收使用。
 
-- **提交与审核。** 在联调环境并发提交同一草稿或办理同一待审节点，核对只有一个新增轮次或一个有效决定。对照该轮快照、商品明细、冻结的指派及投递记录。改派后可用决定行的 `member_id` 核对实际签署人。
+- **授权与平台。** 同渠道平台可有多个 MEMBER，仅允许一条 SUBMITTER。跨企业用户角色关联、同一人重复加入同一团队均应被约束拒绝。登记平台后，分别核对成员查看最新正式轮次、共同成员无法提交及指定提交人可提交。
+- **单系列与预设指派。** 为同企业品牌配置一名采购，并预设需要的初审负责人。本轮正式明细写入其他系列商品、同轮同组增加第二名有效审核人时，数据库应拒绝。预设缺人时，提交失败并保留可编辑表单。
+
+- **提交与审核。** 在联调环境并发提交同一草稿或办理同一待审节点，核对只有一个新增轮次或一个有效决定。对照该轮快照、商品明细、冻结的指派及投递记录。可用决定行的 `member_id` 核对实际签署人。
 - **商品引用。** 并发提交政策与编辑规格或删除同一商品。若提交先成功，后续目录操作应保护实际引用。若目录先变更，提交须重新校验选品。
 - **改期与投递。** 对照原单的最新截止、流水及发起轮次，检查对应群消息和原申请人的两次临期私聊。每个已送达事件应有对应回执，并发领取不得让两名执行者同时取得同一条有效租约。查询计划按实际数据量和筛选条件核对。[试点与恢复记录](../architecture/policy-workflow-phase-f.md)

@@ -108,6 +108,80 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.code").value("CATALOG_CLEAN_INVALID_REQUEST"));
     }
 
+    @Test
+    void purchaseImportAndCleaningFollowCurrentBrandAcrossListsJobsAndWrites() throws Exception {
+        var buyer = session("test-tenant", "catalog-purchase", "PURCHASE");
+        String options = "/api/admin/catalog/source-brands";
+        String oppoImport = importForCleaning(List.of(ORIGINAL));
+        String oppoClean = startClean(OPPO, null, false, 1);
+        long oppoSource = sourceId(ORIGINAL.goodsNo());
+
+        mvc.perform(get(options).session(buyer)).andExpect(jsonPath("$.brandNames").isEmpty());
+        mvc.perform(get(SOURCES).session(buyer)).andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(CLEANING + "/jobs").session(buyer)).andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(CLEANING + "/results").session(buyer))
+                .andExpect(jsonPath("$.counts.ALL").value(0));
+        mvc.perform(startRequest(OPPO, UUID.randomUUID().toString()).session(buyer))
+                .andExpect(status().isForbidden());
+
+        jdbc.update("INSERT INTO brand (name) VALUES (?), (?)", OPPO, ONEPLUS);
+        jdbc.update(
+                """
+            INSERT INTO policy_review_brand_owner(tenant_key,brand_id,purchase_user_id,product_mode)
+            SELECT u.tenant_key,b.id,u.id,'BY_SERIES' FROM user_info u CROSS JOIN brand b
+            WHERE u.tenant_key='test-tenant' AND u.open_id='catalog-purchase' AND b.name=?
+            """,
+                ONEPLUS);
+        mvc.perform(get(options).session(buyer))
+                .andExpect(jsonPath("$.brandNames", contains(ONEPLUS)));
+        mvc.perform(get(options).session(admin))
+                .andExpect(jsonPath("$.brandNames", contains(OPPO, ONEPLUS)));
+        mvc.perform(get(JOBS).session(buyer)).andExpect(jsonPath("$.jobs").isEmpty());
+        mvc.perform(get(SOURCES).session(buyer).param("brandName", OPPO))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(CLEANING + "/jobs/" + oppoClean).session(buyer))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(CLEANING + "/jobs/active").session(buyer))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(CLEANING + "/preview").param("brandName", OPPO).session(buyer))
+                .andExpect(status().isForbidden());
+        mvc.perform(cleanRequest(OPPO, null, false, 1, "blocked-clean").session(buyer))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(SOURCES + "/" + oppoSource).session(buyer))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        mutation(SOURCES + "/" + oppoSource + "/review")
+                                .session(buyer)
+                                .content("{\"recordVersion\":0,\"decision\":\"EXCLUDE\"}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        mutation(SOURCES + "/" + oppoSource + "/clean-retry")
+                                .session(buyer)
+                                .content("{\"recordVersion\":0,\"requestKey\":\"cross-brand\"}"))
+                .andExpect(status().isNotFound());
+        for (String action : List.of("resume", "cancel"))
+            mvc.perform(control(oppoImport, action, version(oppoImport)).session(buyer))
+                    .andExpect(status().isNotFound());
+
+        var key = UUID.randomUUID().toString();
+        mvc.perform(startRequest(ONEPLUS, key).session(buyer)).andExpect(status().isAccepted());
+        mvc.perform(get(JOBS).session(buyer))
+                .andExpect(jsonPath("$.jobs[*].brandName", contains(ONEPLUS)));
+        jdbc.update(
+                "UPDATE policy_review_brand_owner SET brand_id=(SELECT id FROM brand WHERE name=?) WHERE tenant_key='test-tenant'",
+                OPPO);
+        mvc.perform(startRequest(ONEPLUS, key).session(buyer)).andExpect(status().isForbidden());
+        mvc.perform(get(SOURCES).session(buyer))
+                .andExpect(jsonPath("$.items[*].brandName", contains(OPPO)));
+        mvc.perform(get(CLEANING + "/results").session(buyer))
+                .andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get(CLEANING + "/jobs").session(buyer))
+                .andExpect(jsonPath("$.items[*].id", contains(oppoClean)));
+        mvc.perform(get(CLEANING + "/jobs/active").session(buyer))
+                .andExpect(jsonPath("$.id").value(oppoClean));
+        mvc.perform(get(SOURCES + "/" + oppoSource).session(buyer)).andExpect(status().isOk());
+    }
+
     @DynamicPropertySource
     static void optionalDisposableMySql(DynamicPropertyRegistry registry) {
         registry.add("policy.storage.root", () -> attachmentDirectory.toString());
@@ -142,16 +216,17 @@ class GoodsSyncIntegrationTest {
         for (String table :
                 List.of(
                         "policy_review_delivery",
-                        "policy_review_reassignment",
                         "policy_review_decision",
                         "policy_review_member",
                         "policy_review_round",
-                        "policy_review_setting_member",
+                        "policy_review_series_owner",
+                        "policy_review_brand_owner",
                         "policy_review_settings")) {
             jdbc.update("DELETE FROM " + table);
         }
         jdbc.update("DELETE FROM policy_goods_detail");
         jdbc.update("DELETE FROM policy_time_change");
+        jdbc.update("DELETE FROM policy_round_platform");
         jdbc.update("DELETE FROM policy_audit_log");
         jdbc.update("DELETE FROM policy_apply");
         jdbc.update("DELETE FROM catalog_operation_log");
@@ -164,17 +239,10 @@ class GoodsSyncIntegrationTest {
         jdbc.update("DELETE FROM spu");
         jdbc.update("DELETE FROM series");
         jdbc.update("DELETE FROM brand");
-        admin = session("test-tenant", "admin", "ADMIN");
-        productReviewer =
-                users.saveVerifiedIdentity("test-tenant", "product-reviewer", null, "产品运营", null);
+        admin = session("test-tenant", "admin", "ADMIN", "PURCHASE");
+        productReviewer = account("test-tenant", "product-reviewer", "PRODUCT_OPS");
         jdbc.update(
                 "INSERT INTO policy_review_settings(tenant_key,version) VALUES('test-tenant',1)");
-        jdbc.update(
-                """
-                INSERT INTO policy_review_setting_member(tenant_key,group_code,user_id)
-                SELECT tenant_key, CASE open_id WHEN 'admin' THEN 'PURCHASE' ELSE 'PRODUCT' END, id
-                FROM user_info WHERE tenant_key='test-tenant' AND open_id IN ('admin','product-reviewer')
-                """);
     }
 
     @Test
@@ -820,7 +888,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void rejectsUnauthenticatedApplicantOtherTenantAndRevokedAdmin() throws Exception {
         mvc.perform(get(SOURCES)).andExpect(status().isUnauthorized());
-        mvc.perform(get(SOURCES).session(session("test-tenant", "applicant", "APPLICANT")))
+        mvc.perform(get(SOURCES).session(session("test-tenant", "applicant", "OPERATIONS")))
                 .andExpect(status().isForbidden());
         mvc.perform(get(JOBS).session(session("other-tenant", "other", "ADMIN")))
                 .andExpect(status().isForbidden())
@@ -1259,7 +1327,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$[0].inUse").value(true))
                 .andExpect(jsonPath("$[2].type").value("series"))
                 .andExpect(jsonPath("$[2].parentId").value(brand));
-        mvc.perform(get(path).session(session("test-tenant", "dictionary-applicant", "APPLICANT")))
+        mvc.perform(get(path).session(session("test-tenant", "dictionary-applicant", "OPERATIONS")))
                 .andExpect(status().isForbidden());
         mvc.perform(
                         delete(path + "/brand/" + brand)
@@ -1346,6 +1414,11 @@ class GoodsSyncIntegrationTest {
                 .isOne();
 
         jdbc.update("DELETE FROM policy_goods_detail WHERE spu_id=?", modelId);
+        jdbc.update(
+                "DELETE FROM policy_round_platform WHERE policy_id IN (SELECT id FROM policy_apply WHERE policy_no='SERIES-QA')");
+        jdbc.update(
+                "DELETE FROM policy_audit_log WHERE policy_id IN (SELECT id FROM policy_apply WHERE policy_no='SERIES-QA')");
+        jdbc.update("DELETE FROM policy_apply WHERE policy_no='SERIES-QA'");
         mvc.perform(deleteGoods(GOODS + "/" + goodsId)).andExpect(status().isNoContent());
         mvc.perform(get(dictionary).session(admin)).andExpect(jsonPath(usage, contains(false)));
         mvc.perform(rename).andExpect(status().isNoContent());
@@ -1363,6 +1436,119 @@ class GoodsSyncIntegrationTest {
                 .isZero();
         mvc.perform(get(GOODS + "/" + imported.path("id").asText()).session(admin))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void purchaseCatalogFollowsCurrentBrandAcrossReadsAndDeniesManagement() throws Exception {
+        var oppo = importedGoodForEditing();
+        jdbc.update("INSERT INTO brand(name) VALUES (?)", ONEPLUS);
+        var oneplusBrand =
+                jdbc.queryForObject("SELECT id FROM brand WHERE name=?", Long.class, ONEPLUS);
+        jdbc.update("INSERT INTO series (brand_id,name) VALUES (?, 'Ace系列')", oneplusBrand);
+        var series =
+                jdbc.queryForObject(
+                        "SELECT id FROM series WHERE brand_id=?", Long.class, oneplusBrand);
+        var buyer = session("test-tenant", "center-purchase", "PURCHASE", "OPERATIONS");
+        String subsidyOptions = "/api/catalog/subsidy-options";
+        var buyerId =
+                jdbc.queryForObject(
+                        "SELECT id FROM user_info WHERE tenant_key='test-tenant' AND open_id='center-purchase'",
+                        Long.class);
+
+        mvc.perform(get(GOODS).session(buyer)).andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(subsidyOptions).session(buyer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.brands").isEmpty())
+                .andExpect(jsonPath("$.models").isEmpty())
+                .andExpect(jsonPath("$.configurations").isEmpty());
+        mvc.perform(get(GOODS + "/summary").session(buyer))
+                .andExpect(jsonPath("$.brandNames").isEmpty())
+                .andExpect(jsonPath("$.configurations").isEmpty());
+        mvc.perform(get(GOODS + "/" + oppo.path("id").asText()).session(buyer))
+                .andExpect(status().isNotFound());
+        jdbc.update(
+                "INSERT INTO policy_review_brand_owner(tenant_key,brand_id,purchase_user_id,product_mode) VALUES ('test-tenant',?,?,'BY_SERIES')",
+                oneplusBrand,
+                buyerId);
+        mvc.perform(get(GOODS + "/summary").session(buyer))
+                .andExpect(jsonPath("$.brandNames", contains(ONEPLUS)))
+                .andExpect(jsonPath("$.total").value(0));
+
+        var body = (ObjectNode) editBody(oppo).path("product");
+        body.put("brandId", oneplusBrand.longValue())
+                .put("seriesId", series.longValue())
+                .put("name", "一加 Ace")
+                .put("modelName", "Ace")
+                .put("ram", "8GB")
+                .put("rom", "256GB");
+        var saved =
+                mvc.perform(mutation(GOODS).content(body.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var oneplus = json.readTree(saved.getResponse().getContentAsByteArray());
+        String own = GOODS + "/" + oneplus.path("id").asText();
+        mvc.perform(get(GOODS).session(buyer))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[*].brandName", contains(ONEPLUS)));
+        mvc.perform(get(GOODS).session(buyer).param("brandName", OPPO).param("keyword", "Find"))
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get(own).session(buyer)).andExpect(status().isOk());
+        mvc.perform(
+                        get(GOODS + "/summary")
+                                .session(buyer)
+                                .param("includeModelConfigurations", "true"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.series[*].brandName", contains(ONEPLUS)))
+                .andExpect(jsonPath("$.models[*].modelName", contains("Ace")))
+                .andExpect(jsonPath("$.configurations[*].rom", contains("256GB")))
+                .andExpect(
+                        jsonPath(
+                                "$.modelConfigurations[*].spuId",
+                                contains(oneplus.path("spuId").asText())));
+        mvc.perform(get(GOODS + "/summary").session(admin)).andExpect(jsonPath("$.total").value(2));
+        mvc.perform(get(subsidyOptions).session(buyer))
+                .andExpect(jsonPath("$.brands[*].name", contains(ONEPLUS)))
+                .andExpect(jsonPath("$.series[*].name", contains("Ace系列")))
+                .andExpect(jsonPath("$.models[*].name", contains("Ace")))
+                .andExpect(
+                        jsonPath(
+                                "$.configurations[*].spuId",
+                                contains(oneplus.path("spuId").asText())));
+        mvc.perform(get(subsidyOptions).session(admin))
+                .andExpect(jsonPath("$.brands.length()").value(2));
+        mvc.perform(
+                        get(subsidyOptions)
+                                .session(session("test-tenant", "center-operation", "OPERATIONS")))
+                .andExpect(jsonPath("$.brands.length()").value(2));
+        mvc.perform(get("/api/catalog/goods").session(buyer))
+                .andExpect(jsonPath("$.total").value(2));
+        mvc.perform(mutation(GOODS).session(buyer).content(body.toString()))
+                .andExpect(status().isForbidden());
+        mvc.perform(putGoods(own, editBody(oneplus)).session(buyer))
+                .andExpect(status().isForbidden());
+        mvc.perform(deleteGoods(own).session(buyer)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/catalog/dictionary").session(buyer))
+                .andExpect(status().isForbidden());
+
+        jdbc.update(
+                "UPDATE policy_review_brand_owner SET brand_id=? WHERE tenant_key='test-tenant' AND purchase_user_id=?",
+                oppo.path("brandId").asLong(),
+                buyerId);
+        mvc.perform(get(own).session(buyer)).andExpect(status().isNotFound());
+        mvc.perform(get(subsidyOptions).session(buyer))
+                .andExpect(jsonPath("$.brands[*].name", contains(OPPO)));
+        mvc.perform(get(GOODS + "/" + oppo.path("id").asText()).session(buyer))
+                .andExpect(status().isOk());
+        jdbc.update(
+                "INSERT INTO policy_review_brand_owner(tenant_key,brand_id,purchase_user_id,product_mode) VALUES ('test-tenant',?,?,'BY_SERIES')",
+                oneplusBrand,
+                buyerId);
+        mvc.perform(get(GOODS).session(buyer))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_BRAND_ASSIGNMENT_CONFLICT"));
+        mvc.perform(get(subsidyOptions).session(buyer))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CATALOG_BRAND_ASSIGNMENT_CONFLICT"));
     }
 
     @Test
@@ -1430,7 +1616,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.catalogStatus").doesNotHaveJsonPath());
         mvc.perform(
                         mutation(GOODS)
-                                .session(session("test-tenant", "goods-applicant", "APPLICANT"))
+                                .session(session("test-tenant", "goods-applicant", "OPERATIONS"))
                                 .content(body.put("seriesId", series).toString()))
                 .andExpect(status().isForbidden());
     }
@@ -1494,7 +1680,7 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isForbidden());
         mvc.perform(
                         putGoods(path, edit)
-                                .session(session("test-tenant", "edit-applicant", "APPLICANT")))
+                                .session(session("test-tenant", "edit-applicant", "OPERATIONS")))
                 .andExpect(status().isForbidden());
         var saved =
                 mvc.perform(putGoods(path, edit))
@@ -1662,7 +1848,7 @@ class GoodsSyncIntegrationTest {
         mvc.perform(delete(path).session(admin)).andExpect(status().isForbidden());
         mvc.perform(
                         delete(path)
-                                .session(session("test-tenant", "remove-applicant", "APPLICANT"))
+                                .session(session("test-tenant", "remove-applicant", "OPERATIONS"))
                                 .header("Origin", "http://localhost:5173")
                                 .header("X-Policy-Request", "1"))
                 .andExpect(status().isForbidden());
@@ -1740,10 +1926,11 @@ class GoodsSyncIntegrationTest {
                                                 .put("status", 2)
                                                 .toString()))
                 .andExpect(status().isCreated());
-        var owner = session("test-tenant", "policy-owner", "APPLICANT");
+        presetReviewers();
+        var owner = session("test-tenant", "policy-owner", "OPERATIONS");
         assignPlatforms("policy-owner", "RETAIL:JD", "RETAIL:PDD");
-        var other = session("test-tenant", "policy-other", "APPLICANT");
-        var external = session("other-tenant", "policy-external", "APPLICANT");
+        var other = session("test-tenant", "policy-other", "OPERATIONS");
+        var external = session("other-tenant", "policy-external", "OPERATIONS");
         String policies = "/api/policies";
 
         mvc.perform(get("/api/catalog/options").session(owner).param("spuId", spu))
@@ -1949,11 +2136,11 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void listsOnlyOwnedPoliciesWithServerSideFiltersAndStablePagination() throws Exception {
-        var owner = session("test-tenant", "mine-owner", "APPLICANT");
+        var owner = session("test-tenant", "mine-owner", "OPERATIONS");
         assignPlatforms("mine-owner", "RETAIL:JD", "RETAIL:PDD", "BILLION:TAOBAO");
-        var other = session("test-tenant", "mine-other", "APPLICANT");
+        var other = session("test-tenant", "mine-other", "OPERATIONS");
         assignPlatforms("mine-other", "RETAIL:KUAISHOU");
-        var external = session("other-tenant", "mine-external", "APPLICANT");
+        var external = session("other-tenant", "mine-external", "OPERATIONS");
         String base = "/api/policies";
         String retail = "{\"perspective\":\"RETAIL\",\"selectedPlatforms\":[\"JD\",\"PDD\"]}";
         String billion = "{\"perspective\":\"BILLION\",\"selectedPlatforms\":[\"TAOBAO\"]}";
@@ -1993,7 +2180,9 @@ class GoodsSyncIntegrationTest {
         mvc.perform(get(base + "/mine").session(owner).param("pageSize", "101"))
                 .andExpect(status().isBadRequest());
         mvc.perform(get(base + "/mine").session(external)).andExpect(status().isForbidden());
-        mvc.perform(get(base + "/mine").session(admin)).andExpect(status().isForbidden());
+        mvc.perform(get(base + "/mine").session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
         mvc.perform(get(base + "/mine")).andExpect(status().isUnauthorized());
         mvc.perform(get(base + "/" + deleted + "/audit-logs").session(owner))
                 .andExpect(status().isNotFound());
@@ -2005,10 +2194,10 @@ class GoodsSyncIntegrationTest {
     @Test
     void rejectedPolicyResubmitsUnderOriginalIdAndPreservesEachAuditSnapshot() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "resubmit-owner", "APPLICANT");
+        var owner = session("test-tenant", "resubmit-owner", "OPERATIONS");
         assignPlatforms("resubmit-owner", "BILLION:PDD");
-        var other = session("test-tenant", "resubmit-other", "APPLICANT");
-        var external = session("other-tenant", "resubmit-external", "APPLICANT");
+        var other = session("test-tenant", "resubmit-other", "OPERATIONS");
+        var external = session("other-tenant", "resubmit-external", "OPERATIONS");
         String full =
                 """
                 {"perspective":"BILLION","selectedPlatforms":["PDD"],"specialRemark":"首轮说明",
@@ -2102,7 +2291,7 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void retailSceneSelectionsRoundTripAndFilterTheSubmittedSnapshot() throws Exception {
-        var owner = session("test-tenant", "multi-scene-owner", "APPLICANT");
+        var owner = session("test-tenant", "multi-scene-owner", "OPERATIONS");
         assignPlatforms("multi-scene-owner", "RETAIL:PDD", "BILLION:PDD");
         var form = attachmentPolicyForm(importedGoodForEditing(), UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -2162,7 +2351,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void adminListAndFiltersKeepLastSubmissionUntilRejectedPolicyIsResubmitted() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "submitted-view-owner", "APPLICANT");
+        var owner = session("test-tenant", "submitted-view-owner", "OPERATIONS");
         assignPlatforms("submitted-view-owner", "RETAIL:PDD", "BILLION:TAOBAO");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -2290,7 +2479,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void storesThePublicShortNumberInTheSnapshotAndKeepsCreationIdempotent() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "short-policy-number-owner", "APPLICANT");
+        var owner = session("test-tenant", "short-policy-number-owner", "OPERATIONS");
         assignPlatforms("short-policy-number-owner", "BILLION:PDD");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -2372,7 +2561,7 @@ class GoodsSyncIntegrationTest {
                 "colorId",
                 jdbc.queryForObject(
                         "SELECT id FROM color_dict WHERE color_name='白色'", String.class));
-        var owner = session("test-tenant", "interval-owner", "APPLICANT");
+        var owner = session("test-tenant", "interval-owner", "OPERATIONS");
         assignPlatforms("interval-owner", "BILLION:PDD");
         var history = attachmentPolicyForm(black, UUID.randomUUID().toString());
         history.remove("attachmentInfo");
@@ -2459,7 +2648,7 @@ class GoodsSyncIntegrationTest {
                         .andExpect(status().isCreated())
                         .andReturn();
         var white = json.readTree(whiteResult.getResponse().getContentAsByteArray());
-        var owner = session("test-tenant", "coverage-color-owner", "APPLICANT");
+        var owner = session("test-tenant", "coverage-color-owner", "OPERATIONS");
         assignPlatforms("coverage-color-owner", "BILLION:PDD");
         var form = attachmentPolicyForm(black, UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -2510,188 +2699,207 @@ class GoodsSyncIntegrationTest {
     }
 
     @Test
-    void assignsPlatformsIndependentlyByChannelAndChecksCurrentScopeAtSubmission()
-            throws Exception {
-        var owner = session("test-tenant", "assigned-owner", "APPLICANT");
-        var colleague = session("test-tenant", "assigned-colleague", "APPLICANT");
-        var outside = session("other-tenant", "assigned-outside", "APPLICANT");
-        String id =
+    void platformTeamSeparatesSubmittingAndReadingTheLastFormalRound() throws Exception {
+        var owner = session("test-tenant", "team-owner", "OPERATIONS");
+        var peer = session("test-tenant", "team-peer", "OPERATIONS");
+        var outside = session("test-tenant", "other-channel", "OPERATIONS");
+        assignPlatforms("other-channel", "RETAIL:PDD");
+        String ownerId = accountId("team-owner"), peerId = accountId("team-peer");
+        String team = "/api/admin/users/platform-assignments/BILLION/PDD";
+        int version =
                 jdbc.queryForObject(
-                        "SELECT id FROM user_info WHERE open_id='assigned-owner'", String.class);
-        String colleagueId =
-                jdbc.queryForObject(
-                        "SELECT id FROM user_info WHERE open_id='assigned-colleague'",
-                        String.class);
-        String outsideId =
-                jdbc.queryForObject(
-                        "SELECT id FROM user_info WHERE open_id='assigned-outside'", String.class);
-        String mine = "/api/policies/platforms";
-        String adminPath = "/api/admin/users/" + id + "/platforms";
-        String otherPath = "/api/admin/users/" + colleagueId + "/platforms";
-        String pdd = "{\"perspective\":\"BILLION\",\"platformCode\":\"PDD\"}";
-        String retailPdd = pdd.replace("BILLION", "RETAIL");
-        String jd = retailPdd.replace("PDD", "JD");
-        String dewu = retailPdd.replace("PDD", "DEWU");
-        String mixed = "[" + pdd + "," + jd + "," + dewu + "]";
-        mvc.perform(get(mine).session(owner))
-                .andExpect(status().isOk())
+                        "SELECT version FROM platform_team WHERE tenant_key='test-tenant' AND perspective='BILLION' AND platform_code='PDD'",
+                        Integer.class);
+        var members = json.createArrayNode();
+        members.addObject().put("userId", ownerId).put("memberKind", "SUBMITTER");
+        members.addObject().put("userId", peerId).put("memberKind", "MEMBER");
+        var body = json.createObjectNode().put("expectedVersion", version);
+        body.set("members", members);
+        mvc.perform(policyRequest(put(team), peer).content(body.toString()))
+                .andExpect(status().isForbidden());
+        mvc.perform(policyRequest(put(team), admin).content(body.toString()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/policies/platforms").session(peer))
                 .andExpect(jsonPath("$").isEmpty());
-        mvc.perform(policyRequest(patch(adminPath), owner).content(scopeUpdate(mixed, "[]")))
-                .andExpect(status().isForbidden());
-        mvc.perform(
-                        policyRequest(patch("/api/admin/users/" + outsideId + "/platforms"), admin)
-                                .content(scopeUpdate(mixed, "[]")))
-                .andExpect(status().isNotFound());
-        mvc.perform(get(mine).session(outside)).andExpect(status().isForbidden());
-        mvc.perform(
-                        policyRequest(patch(adminPath), admin)
-                                .content(scopeUpdate("[" + pdd + "," + pdd + "]", "[]")))
-                .andExpect(status().isBadRequest());
-        mvc.perform(
-                        policyRequest(patch(adminPath), admin)
-                                .content(
-                                        scopeUpdate(
-                                                "[" + jd.replace("RETAIL", "BILLION") + "]", "[]")))
-                .andExpect(status().isBadRequest());
-        String bothChannels = "[" + pdd + "," + retailPdd + "]";
-        mvc.perform(policyRequest(patch(adminPath), admin).content(scopeUpdate(bothChannels, "[]")))
-                .andExpect(status().isNoContent());
-        mvc.perform(get(mine).session(owner))
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[0].perspective").value("BILLION"))
-                .andExpect(jsonPath("$[1].perspective").value("RETAIL"))
-                .andExpect(jsonPath("$[0].platformCode").value("PDD"))
-                .andExpect(jsonPath("$[1].platformCode").value("PDD"));
-        mvc.perform(
-                        policyRequest(patch(otherPath), admin)
-                                .content(scopeUpdate("[" + retailPdd + "]", "[]")))
-                .andExpect(status().isConflict());
-        assertThat(
-                        jdbc.queryForObject(
-                                "SELECT COUNT(*) FROM policy_review_delivery WHERE notice_key LIKE 'PL/%/PDD/%'",
-                                Integer.class))
-                .isEqualTo(2);
-        // 移交零售拼多多时，原负责人仍保留百亿拼多多。
-        mvc.perform(
-                        policyRequest(patch(adminPath), admin)
-                                .content(scopeUpdate(mixed, bothChannels)))
-                .andExpect(status().isNoContent());
-        mvc.perform(
-                        policyRequest(patch(otherPath), admin)
-                                .content(scopeUpdate("[" + retailPdd + "]", "[]")))
-                .andExpect(status().isNoContent());
-        mvc.perform(
-                        policyRequest(patch(otherPath), admin)
-                                .content(scopeUpdate("[" + jd + "]", "[" + retailPdd + "]")))
-                .andExpect(status().isConflict());
-        mvc.perform(get(mine).session(colleague))
-                .andExpect(jsonPath("$[0].perspective").value("RETAIL"))
+        mvc.perform(get("/api/policies/platforms").param("usage", "READ").session(peer))
                 .andExpect(jsonPath("$[0].platformCode").value("PDD"));
-        mvc.perform(get("/api/admin/users/platform-assignments").session(admin))
-                .andExpect(jsonPath("$.length()").value(4))
-                .andExpect(jsonPath("$[0].userId").value(id));
-        mvc.perform(get(mine).session(owner)).andExpect(jsonPath("$.length()").value(3));
-        mvc.perform(policyRequest(patch(adminPath), admin).content(scopeUpdate("[]", "[]")))
-                .andExpect(status().isConflict());
-
-        var form = attachmentPolicyForm(importedGoodForEditing(), UUID.randomUUID().toString());
-        form.remove("attachmentInfo");
-        mvc.perform(policyRequest(post("/api/policies/drafts"), colleague).content(form.toString()))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("POLICY_PLATFORM_FORBIDDEN"));
-        String path = "/api/policies/" + createPolicy(owner, form.toString()).path("id").asText();
-        var confirm = confirmedSubmission(path, owner, 1);
-        mvc.perform(
-                        policyRequest(patch(adminPath), admin)
-                                .content(scopeUpdate("[" + jd + "]", mixed)))
-                .andExpect(status().isNoContent());
-        mvc.perform(confirm)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("POLICY_PLATFORM_FORBIDDEN"));
-        mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "1"))
+        var good = importedGoodForEditing();
+        var file = uploadChangeFile(owner, "政策.pdf");
+        var form = attachmentPolicyForm(good, file);
+        form.put("specialRemark", "本轮的政策");
+        mvc.perform(policyRequest(post("/api/policies/drafts"), peer).content(form.toString()))
                 .andExpect(status().isForbidden());
+        String id = createPolicy(owner, form.toString()).path("id").asText();
+        String path = "/api/policies/" + id, shared = "/api/policies/shared/" + id;
+        mvc.perform(get(shared).session(peer)).andExpect(status().isNotFound());
+        mvc.perform(confirmedSubmission(path, owner, 1)).andExpect(status().isOk());
+        mvc.perform(get("/api/policies/shared").session(peer))
+                .andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get(shared).session(peer))
+                .andExpect(jsonPath("$.reviewProgress.submissionVersion").value(1))
+                .andExpect(jsonPath("$.reviewProgress.status").value("PENDING"))
+                .andExpect(jsonPath("$.reviewProgress.reviewStage").value("PURCHASE_REVIEW"))
+                .andExpect(jsonPath("$.reviewProgress.requiresProductReview").value(false))
+                .andExpect(jsonPath("$.reviewProgress.submittedAt").isString())
+                .andExpect(jsonPath("$.reviewProgress.applicantName").isString())
+                .andExpect(jsonPath("$.reviewProgress.productReviewers").isEmpty())
+                .andExpect(jsonPath("$.form.specialRemark").value("本轮的政策"));
+        mvc.perform(get(path + "/audit-logs").session(peer)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/policy-reviews/" + id).param("submissionVersion", "1").session(peer))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(shared).session(outside)).andExpect(status().isNotFound());
+        var attachment = shared + "/attachments/" + file + "/content";
+        mvc.perform(get(attachment).param("submissionVersion", "1").session(peer))
+                .andExpect(status().isOk());
+        mvc.perform(get(attachment).param("submissionVersion", "2").session(peer))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(attachment).param("submissionVersion", "1").session(outside))
+                .andExpect(status().isNotFound());
+        mvc.perform(reviewRound(id, 2, 1, "REJECT")).andExpect(status().isOk());
         mvc.perform(
                         policyRequest(put(path + "/draft"), owner)
-                                .content(form.put("recordVersion", 1).toString()))
-                .andExpect(status().isForbidden());
-        mvc.perform(get(path).session(owner))
-                .andExpect(jsonPath("$.status").value("DRAFT"))
-                .andExpect(jsonPath("$.recordVersion").value(1));
-        mvc.perform(
-                        policyRequest(patch("/api/admin/users/" + colleagueId + "/status"), admin)
                                 .content(
-                                        "{\"status\":\"DISABLED\",\"expectedStatus\":\"ENABLED\",\"expectedRoleType\":\"APPLICANT\"}"))
+                                        form.put("recordVersion", 3)
+                                                .put("specialRemark", "尚未重提的修改")
+                                                .toString()))
                 .andExpect(status().isOk());
-        mvc.perform(
-                        policyRequest(patch(adminPath), admin)
-                                .content(
-                                        scopeUpdate(
-                                                "[" + jd + "," + retailPdd + "]", "[" + jd + "]")))
+        mvc.perform(get(shared).session(peer))
+                .andExpect(jsonPath("$.reviewProgress.submissionVersion").value(1))
+                .andExpect(jsonPath("$.reviewProgress.rejectedAtStage").value("PURCHASE_REVIEW"))
+                .andExpect(
+                        jsonPath("$.reviewProgress.purchaseReviewers[0].decision").value("REJECT"))
+                .andExpect(jsonPath("$.form.specialRemark").value("本轮的政策"));
+        ((ObjectNode) members.get(0)).put("memberKind", "MEMBER");
+        ((ObjectNode) members.get(1)).put("memberKind", "SUBMITTER");
+        body.put("expectedVersion", version + 1);
+        mvc.perform(policyRequest(put(team), admin).content(body.toString()))
                 .andExpect(status().isNoContent());
+        mvc.perform(get(path + "/submission-preview").session(owner).param("recordVersion", "4"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(shared).session(owner)).andExpect(status().isOk());
+        members.remove(0);
+        body.put("expectedVersion", version + 2);
+        mvc.perform(policyRequest(put(team), admin).content(body.toString()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(shared).session(owner)).andExpect(status().isNotFound());
     }
 
     @Test
-    void onlyOneOfTwoAdminsCanAssignTheSameChannelPlatform() throws Exception {
+    void seriesLimitsApplyToEveryCardAndToAccompanyingTimeChanges() throws Exception {
+        var first = importedGoodForEditing();
+        var owner = session("test-tenant", "scope-operator", "OPERATIONS");
+        assignPlatforms("scope-operator", "BILLION:PDD");
+        var old =
+                coveragePolicy(
+                        owner, first, "2099-03-01", "2099-03-09", "2026-01-01 12:00:00", false);
+        mvc.perform(reviewRound(old, 2, 1, "APPROVE")).andExpect(status().isOk());
+        var addSeries =
+                json.createObjectNode()
+                        .put("name", "第二系列")
+                        .put("parentId", first.path("brandId").asText());
+        mvc.perform(mutation("/api/admin/catalog/dictionary/series").content(addSeries.toString()))
+                .andExpect(status().isNoContent());
+        var secondSeries =
+                jdbc.queryForObject("SELECT id FROM series WHERE name='第二系列'", String.class);
+        var product =
+                ((ObjectNode) editBody(first).path("product"))
+                        .put("seriesId", secondSeries)
+                        .put("modelName", "第二款");
+        var added =
+                mvc.perform(mutation(GOODS).content(product.toString()))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        var second = json.readTree(added.getResponse().getContentAsByteArray());
+        var form = attachmentPolicyForm(second, "unused");
+        form.remove("attachmentInfo");
+        var id = createPolicy(owner, form.toString()).path("id").asText();
+        mvc.perform(
+                        get("/api/policies/" + id + "/submission-preview")
+                                .session(owner)
+                                .param("recordVersion", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.applicability.adjustmentOptions").isEmpty());
+        mvc.perform(get("/api/policies/time-adjustments/options").session(owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].target.policyId").value(old));
+        var foreignCard =
+                ((ObjectNode) attachmentPolicyForm(first, "unused").at("/goodsForm/cards/0"))
+                        .put("key", "other")
+                        .put("cardType", "SPECIFIED");
+        ((com.fasterxml.jackson.databind.node.ArrayNode) form.at("/goodsForm/cards"))
+                .add(foreignCard);
+        mvc.perform(
+                        policyRequest(put("/api/policies/" + id + "/draft"), owner)
+                                .content(form.put("recordVersion", 1).toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("POLICY_VALIDATION_FAILED"));
+        mvc.perform(get("/api/policies/" + id).session(owner))
+                .andExpect(jsonPath("$.recordVersion").value(1));
+    }
+
+    private String accountId(String openId) {
+        return jdbc.queryForObject(
+                "SELECT id FROM user_info WHERE tenant_key='test-tenant' AND open_id=?",
+                String.class,
+                openId);
+    }
+
+    @Test
+    void onlyOneConcurrentPlatformTeamUpdateCommits() throws Exception {
         var secondAdmin = session("test-tenant", "assignment-admin", "ADMIN");
-        session("test-tenant", "assignment-first", "APPLICANT");
-        session("test-tenant", "assignment-second", "APPLICANT");
-        String path = "/api/admin/users/";
-        String first =
+        session("test-tenant", "assignment-first", "OPERATIONS");
+        session("test-tenant", "assignment-second", "OPERATIONS");
+        String team = "/api/admin/users/platform-assignments/RETAIL/JD";
+        int version =
                 jdbc.queryForObject(
-                        "SELECT id FROM user_info WHERE open_id='assignment-first'", String.class);
-        String second =
-                jdbc.queryForObject(
-                        "SELECT id FROM user_info WHERE open_id='assignment-second'", String.class);
-        String body = scopeUpdate("[{\"perspective\":\"RETAIL\",\"platformCode\":\"JD\"}]", "[]");
+                        "SELECT version FROM platform_team WHERE tenant_key='test-tenant' AND perspective='RETAIL' AND platform_code='JD'",
+                        Integer.class);
         var start = new CountDownLatch(1);
         var executor = Executors.newFixedThreadPool(2);
         try {
-            var a =
-                    executor.submit(
-                            () -> {
-                                start.await();
-                                return mvc.perform(
-                                                policyRequest(
-                                                                patch(path + first + "/platforms"),
-                                                                admin)
-                                                        .content(body))
-                                        .andReturn()
-                                        .getResponse()
-                                        .getStatus();
-                            });
-            var b =
-                    executor.submit(
-                            () -> {
-                                start.await();
-                                return mvc.perform(
-                                                policyRequest(
-                                                                patch(path + second + "/platforms"),
-                                                                secondAdmin)
-                                                        .content(body))
-                                        .andReturn()
-                                        .getResponse()
-                                        .getStatus();
-                            });
+            var attempts = new java.util.ArrayList<java.util.concurrent.Future<Integer>>();
+            for (var entry :
+                    java.util.Map.of("assignment-first", admin, "assignment-second", secondAdmin)
+                            .entrySet()) {
+                var body = json.createObjectNode().put("expectedVersion", version);
+                body.putArray("members")
+                        .addObject()
+                        .put("userId", accountId(entry.getKey()))
+                        .put("memberKind", "SUBMITTER");
+                attempts.add(
+                        executor.submit(
+                                () -> {
+                                    start.await();
+                                    return mvc.perform(
+                                                    policyRequest(put(team), entry.getValue())
+                                                            .content(body.toString()))
+                                            .andReturn()
+                                            .getResponse()
+                                            .getStatus();
+                                }));
+            }
             start.countDown();
-            assertThat(java.util.List.of(a.get(10, TimeUnit.SECONDS), b.get(10, TimeUnit.SECONDS)))
+            assertThat(
+                            List.of(
+                                    attempts.get(0).get(10, TimeUnit.SECONDS),
+                                    attempts.get(1).get(10, TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder(204, 409);
-            mvc.perform(get(path + "platform-assignments").session(admin))
-                    .andExpect(jsonPath("$.length()").value(1));
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM user_platform_assignment WHERE tenant_key='test-tenant' AND perspective='RETAIL' AND platform_code='JD' AND member_kind='SUBMITTER'",
+                                    Integer.class))
+                    .isEqualTo(1);
         } finally {
             executor.shutdownNow();
         }
     }
 
-    private static String scopeUpdate(String platforms, String expected) {
-        return "{\"platforms\":" + platforms + ",\"expectedPlatforms\":" + expected + "}";
-    }
-
     @Test
     void applicantConfirmsPlatformHistoryAcrossOwnersWithinTheSameChannel() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "platform-owner", "APPLICANT");
+        var owner = session("test-tenant", "platform-owner", "OPERATIONS");
         assignPlatforms("platform-owner", "RETAIL:JD", "RETAIL:PDD", "BILLION:PDD");
-        var colleague = session("test-tenant", "platform-colleague", "APPLICANT");
+        var colleague = session("test-tenant", "platform-colleague", "OPERATIONS");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.remove("attachmentInfo");
         form.put("startTime", "2020-01-01T00:00:00+08:00");
@@ -2744,6 +2952,7 @@ class GoodsSyncIntegrationTest {
         mvc.perform(reviewRound(colleagueId, 2, 1, "APPROVE")).andExpect(status().isOk());
 
         // 两个平台都包含接手前获批的同渠道记录，京东另含本人的较早申请。
+        presetReviewers();
         var result =
                 mvc.perform(
                                 get(path + "/submission-preview")
@@ -2794,7 +3003,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void appliesApprovedRoundsAtTheirOwnStartAndThroughTheLastSecond() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "coverage-owner", "APPLICANT");
+        var owner = session("test-tenant", "coverage-owner", "OPERATIONS");
         assignPlatforms("coverage-owner", "BILLION:PDD", "BILLION:TAOBAO");
         var outside = session("other-tenant", "coverage-external", "ADMIN");
         String base = "/api/admin/policies";
@@ -2859,7 +3068,8 @@ class GoodsSyncIntegrationTest {
                                 .andReturn()
                                 .getResponse()
                                 .getContentAsByteArray());
-        var owner = session("test-tenant", "decision-race", "APPLICANT");
+        presetReviewers();
+        var owner = session("test-tenant", "decision-race", "OPERATIONS");
         assignPlatforms("decision-race", "BILLION:PDD");
         var ids = new ArrayList<String>();
         for (var good : List.of(black, white)) {
@@ -3000,7 +3210,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void retailSelectionsAreSavedPerPeriodAndRestoredAfterEachOverlap() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "retail-segments", "APPLICANT");
+        var owner = session("test-tenant", "retail-segments", "OPERATIONS");
         assignPlatforms("retail-segments", "RETAIL:PDD");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.remove("attachmentInfo");
@@ -3104,7 +3314,7 @@ class GoodsSyncIntegrationTest {
     void modelSummaryAndTimelineReadApprovedSnapshotsForAdminsIncludingOffSaleGoods()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "timeline-owner", "APPLICANT");
+        var owner = session("test-tenant", "timeline-owner", "OPERATIONS");
         assignPlatforms("timeline-owner", "BILLION:PDD");
         var id =
                 coveragePolicy(
@@ -3202,8 +3412,8 @@ class GoodsSyncIntegrationTest {
                 "colorId",
                 jdbc.queryForObject(
                         "SELECT id FROM color_dict WHERE color_name='白色'", String.class));
-        var author = session("test-tenant", "timeline-author", "APPLICANT");
-        var viewer = session("test-tenant", "timeline-reader", "APPLICANT");
+        var author = session("test-tenant", "timeline-author", "OPERATIONS");
+        var viewer = session("test-tenant", "timeline-reader", "OPERATIONS");
         assignPlatforms("timeline-author", "RETAIL:PDD", "RETAIL:TAOBAO", "BILLION:PDD");
         var billionId =
                 coveragePolicy(
@@ -3307,7 +3517,7 @@ class GoodsSyncIntegrationTest {
     void applicantSubsidyReadsRequireAnActiveApplicantAndIncludeOffSaleConfigurations()
             throws Exception {
         var good = importedGoodForEditing();
-        var viewer = session("test-tenant", "timeline-catalogue", "APPLICANT");
+        var viewer = session("test-tenant", "timeline-catalogue", "OPERATIONS");
         assignPlatforms("timeline-catalogue", "RETAIL:JD");
         jdbc.update("UPDATE goods SET status=4 WHERE id=?", good.path("id").asLong());
         String options = "/api/catalog/subsidy-options";
@@ -3318,10 +3528,12 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.configurations[0].rom").value(good.path("rom").asText()));
         mvc.perform(get("/api/catalog/options").session(viewer))
                 .andExpect(jsonPath("$.configurations").isEmpty());
-        var external = session("other-tenant", "timeline-catalogue-external", "APPLICANT");
+        var external = session("other-tenant", "timeline-catalogue-external", "OPERATIONS");
+        var productOnly = session("test-tenant", "timeline-product-only", "PRODUCT_OPS");
+        mvc.perform(get(options).session(admin)).andExpect(status().isOk());
         for (var request : List.of(get(options), applicantTimelineRequest(good))) {
             mvc.perform(request).andExpect(status().isUnauthorized());
-            mvc.perform(request.session(admin)).andExpect(status().isForbidden());
+            mvc.perform(request.session(productOnly)).andExpect(status().isForbidden());
             mvc.perform(request.session(external)).andExpect(status().isForbidden());
         }
         jdbc.update("UPDATE user_info SET is_deleted=1 WHERE open_id='timeline-catalogue'");
@@ -3334,7 +3546,7 @@ class GoodsSyncIntegrationTest {
     void approvedFuturePolicyAppearsInFutureAndMixedQueriesWithoutAdoptionHistory()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "scheduled-owner", "APPLICANT");
+        var owner = session("test-tenant", "scheduled-owner", "OPERATIONS");
         assignPlatforms("scheduled-owner", "BILLION:PDD");
         var today = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
         var month = today.plusMonths(1).withDayOfMonth(1);
@@ -3411,7 +3623,7 @@ class GoodsSyncIntegrationTest {
                                 .getResponse()
                                 .getContentAsByteArray());
         String applicant = "cutoff-" + channel;
-        var owner = session("test-tenant", applicant, "APPLICANT");
+        var owner = session("test-tenant", applicant, "OPERATIONS");
         assignPlatforms(applicant, channel + ":PDD", channel + ":TAOBAO");
         var form = attachmentPolicyForm(good, "unused");
         form.remove("attachmentInfo");
@@ -3610,7 +3822,7 @@ class GoodsSyncIntegrationTest {
                                 .getContentAsByteArray());
         assertThat(newGood.path("spuId")).isNotEqualTo(oldGood.path("spuId"));
 
-        var formerOwner = session("test-tenant", "previous-policy-owner", "APPLICANT");
+        var formerOwner = session("test-tenant", "previous-policy-owner", "OPERATIONS");
         assignPlatforms("previous-policy-owner", "BILLION:PDD", "BILLION:TAOBAO");
         var prior =
                 coveragePolicy(
@@ -3621,7 +3833,7 @@ class GoodsSyncIntegrationTest {
                         "2026-01-01 12:00:00",
                         true);
         mvc.perform(reviewRound(prior, 2, 1, "APPROVE")).andExpect(status().isOk());
-        var applicant = session("test-tenant", "new-policy-owner", "APPLICANT");
+        var applicant = session("test-tenant", "new-policy-owner", "OPERATIONS");
         assignPlatforms("new-policy-owner", "BILLION:PDD", "RETAIL:JD");
         var form = attachmentPolicyForm(newGood, "unused");
         form.remove("attachmentInfo");
@@ -3712,7 +3924,7 @@ class GoodsSyncIntegrationTest {
     void accompanyingRetailExtensionContinuesOneSelectionThroughTheOriginalDeadline()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "retail-continuation-owner", "APPLICANT");
+        var owner = session("test-tenant", "retail-continuation-owner", "OPERATIONS");
         assignPlatforms("retail-continuation-owner", "RETAIL:PDD");
         var form = attachmentPolicyForm(good, "unused");
         form.remove("attachmentInfo");
@@ -3876,7 +4088,7 @@ class GoodsSyncIntegrationTest {
     void batchExtensionRequiresTheApprovedSourcesRoundProductsPlatformsAndPlanReferences()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "extension-source-snapshot", "APPLICANT");
+        var owner = session("test-tenant", "extension-source-snapshot", "OPERATIONS");
         assignPlatforms("extension-source-snapshot", "BILLION:PDD");
         var source =
                 coveragePolicy(
@@ -3943,8 +4155,8 @@ class GoodsSyncIntegrationTest {
     void batchExtensionsConfirmTheParentSiblingsAndOtherApprovedPoliciesInOneTransaction()
             throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "batch-extension-owner", "APPLICANT");
-        session("test-tenant", "batch-transfer", "APPLICANT");
+        var owner = session("test-tenant", "batch-extension-owner", "OPERATIONS");
+        session("test-tenant", "batch-transfer", "OPERATIONS");
         assignPlatforms("batch-extension-owner", "BILLION:PDD", "BILLION:TAOBAO");
         var first =
                 coveragePolicy(
@@ -4097,8 +4309,8 @@ class GoodsSyncIntegrationTest {
     @Test
     void directlyAdjustsMultiplePoliciesOnceAndKeepsTheSelectedExecutionPeriods() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "direct-adjust-owner", "APPLICANT");
-        var other = session("test-tenant", "direct-adjust-other", "APPLICANT");
+        var owner = session("test-tenant", "direct-adjust-owner", "OPERATIONS");
+        var other = session("test-tenant", "direct-adjust-other", "OPERATIONS");
         assignPlatforms("direct-adjust-owner", "BILLION:PDD");
         var original =
                 coveragePolicy(
@@ -4199,8 +4411,8 @@ class GoodsSyncIntegrationTest {
     @Test
     void twoEarlyEndAdjustmentsAreApprovedTogetherWithTheirOwnTimesAndReasons() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "batch-end-owner", "APPLICANT");
-        var other = session("test-tenant", "batch-end-other", "APPLICANT");
+        var owner = session("test-tenant", "batch-end-owner", "OPERATIONS");
+        var other = session("test-tenant", "batch-end-other", "OPERATIONS");
         assignPlatforms("batch-end-owner", "BILLION:PDD", "BILLION:TAOBAO");
         var form = attachmentPolicyForm(good, "unused");
         form.remove("attachmentInfo");
@@ -4371,8 +4583,8 @@ class GoodsSyncIntegrationTest {
     @Test
     void standaloneAdjustmentsAuthorizeProofsAndKeepTheApprovedSnapshot() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "change-owner", "APPLICANT");
-        var other = session("test-tenant", "other-owner", "APPLICANT");
+        var owner = session("test-tenant", "change-owner", "OPERATIONS");
+        var other = session("test-tenant", "other-owner", "OPERATIONS");
         assignPlatforms("change-owner", "BILLION:PDD");
         var id =
                 coveragePolicy(
@@ -4580,6 +4792,7 @@ class GoodsSyncIntegrationTest {
             int version,
             java.util.function.BiConsumer<JsonNode, ObjectNode> adjustChoice)
             throws Exception {
+        presetReviewers();
         var result =
                 mvc.perform(
                                 get(path + "/submission-preview")
@@ -4628,9 +4841,9 @@ class GoodsSyncIntegrationTest {
     @Test
     void uploadsBindsRestoresAndPreservesPolicyAttachmentsWithScopedDownloads() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "attachment-owner", "APPLICANT");
+        var owner = session("test-tenant", "attachment-owner", "OPERATIONS");
         assignPlatforms("attachment-owner", "BILLION:PDD");
-        var other = session("test-tenant", "attachment-other", "APPLICANT");
+        var other = session("test-tenant", "attachment-other", "OPERATIONS");
         assignPlatforms("attachment-other", "BILLION:TAOBAO");
         var file =
                 new MockMultipartFile(
@@ -4696,7 +4909,7 @@ class GoodsSyncIntegrationTest {
         mvc.perform(get(adminDownload).session(admin))
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(file.getBytes()));
-        mvc.perform(get(adminDownload).session(other)).andExpect(status().isForbidden());
+        mvc.perform(get(adminDownload).session(other)).andExpect(status().isNotFound());
         mvc.perform(
                         get(adminDownload.replace("/audit-logs/" + logId + "/", "/audit-logs/0/"))
                                 .session(admin))
@@ -4732,13 +4945,13 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
         mvc.perform(get(adminDownload).session(admin))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("POLICY_AUDIT_NOT_FOUND"));
     }
 
     @Test
     void attachmentDeletionWaitsForBindingTransactionAndRejectsCommittedReference()
             throws Exception {
-        var owner = session("test-tenant", "attachment-race", "APPLICANT");
+        var owner = session("test-tenant", "attachment-race", "OPERATIONS");
         assignPlatforms("attachment-race", "BILLION:PDD");
         var uploaded =
                 mvc.perform(
@@ -4813,7 +5026,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void keepsSpecialRemarkInTheDraftAndSubmittedRound() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "remark-only-owner", "APPLICANT");
+        var owner = session("test-tenant", "remark-only-owner", "OPERATIONS");
         assignPlatforms("remark-only-owner", "BILLION:PDD");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -4850,15 +5063,15 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void physicallyDeletesOnlyOwnedUnsubmittedDraftAtTheExpectedVersion() throws Exception {
-        var owner = session("test-tenant", "draft-delete-owner", "APPLICANT");
+        var owner = session("test-tenant", "draft-delete-owner", "OPERATIONS");
         assignPlatforms("draft-delete-owner", "BILLION:PDD");
-        var other = session("test-tenant", "draft-delete-other", "APPLICANT");
+        var other = session("test-tenant", "draft-delete-other", "OPERATIONS");
         String id = createPolicy(owner, "{\"perspective\":\"BILLION\"}").path("id").asText();
         String path = "/api/policies/" + id + "/draft";
         mvc.perform(policyRequest(delete(path), other).param("recordVersion", "1"))
                 .andExpect(status().isNotFound());
         mvc.perform(policyRequest(delete(path), admin).param("recordVersion", "1"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
         mvc.perform(
                         delete(path)
                                 .param("recordVersion", "1")
@@ -4898,12 +5111,17 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void rejectsDeletionAfterSubmissionOrWhenSubmissionHistoryExists() throws Exception {
-        var owner = session("test-tenant", "draft-delete-history", "APPLICANT");
+        var owner = session("test-tenant", "draft-delete-history", "OPERATIONS");
         assignPlatforms("draft-delete-history", "BILLION:PDD");
+        var good = importedGoodForEditing();
         for (String state : List.of("PENDING", "APPROVED", "REJECTED")) {
             String id = createPolicy(owner, "{\"perspective\":\"BILLION\"}").path("id").asText();
             jdbc.update(
-                    "UPDATE policy_apply SET status=?, current_version=1 WHERE id=?", state, id);
+                    "UPDATE policy_apply SET status=?, current_version=1,brand_id=?,series_id=? WHERE id=?",
+                    state,
+                    good.path("brandId").asText(),
+                    good.path("seriesId").asText(),
+                    id);
             mvc.perform(
                             policyRequest(delete("/api/policies/" + id + "/draft"), owner)
                                     .param("recordVersion", "1"))
@@ -4918,8 +5136,10 @@ class GoodsSyncIntegrationTest {
         }
         String id = createPolicy(owner, "{\"perspective\":\"BILLION\"}").path("id").asText();
         jdbc.update(
-                "INSERT INTO policy_audit_log (policy_id,tenant_key,version,snapshot_data) VALUES (?,'test-tenant',1,'{}')",
-                id);
+                "INSERT INTO policy_audit_log (policy_id,tenant_key,version,snapshot_data,brand_id,series_id,perspective) VALUES (?,'test-tenant',1,'{}',?,?,'BILLION')",
+                id,
+                good.path("brandId").asText(),
+                good.path("seriesId").asText());
         mvc.perform(
                         policyRequest(delete("/api/policies/" + id + "/draft"), owner)
                                 .param("recordVersion", "1"))
@@ -4934,7 +5154,7 @@ class GoodsSyncIntegrationTest {
 
     @Test
     void deletingDraftReleasesOnlyItsAttachmentReference() throws Exception {
-        var owner = session("test-tenant", "draft-delete-files", "APPLICANT");
+        var owner = session("test-tenant", "draft-delete-files", "OPERATIONS");
         assignPlatforms("draft-delete-files", "BILLION:PDD");
         var uploaded =
                 mvc.perform(
@@ -4978,7 +5198,7 @@ class GoodsSyncIntegrationTest {
     @Test
     void draftDeletionAndSubmissionCannotBothSucceed() throws Exception {
         var good = importedGoodForEditing();
-        var owner = session("test-tenant", "draft-delete-race", "APPLICANT");
+        var owner = session("test-tenant", "draft-delete-race", "OPERATIONS");
         assignPlatforms("draft-delete-race", "BILLION:PDD");
         var form = attachmentPolicyForm(good, UUID.randomUUID().toString());
         form.putArray("attachmentInfo");
@@ -5094,7 +5314,7 @@ class GoodsSyncIntegrationTest {
                         .andReturn();
         var selected = json.readTree(created.getResponse().getContentAsByteArray());
         String goodsId = selected.path("id").asText();
-        var owner = session("test-tenant", "policy-race", "APPLICANT");
+        var owner = session("test-tenant", "policy-race", "OPERATIONS");
         assignPlatforms("policy-race", "BILLION:PDD");
         String full =
                 """
@@ -5180,23 +5400,28 @@ class GoodsSyncIntegrationTest {
     private void referenceGoods(String code, String goodsId) {
         jdbc.update(
                 """
-                INSERT INTO policy_apply (tenant_key, policy_no, applicant_id, applicant_name,
-                    channel_type, status, current_version)
-                SELECT tenant_key, ?, id, name, 'RETAIL', 'PENDING', 1 FROM user_info
-                WHERE tenant_key = 'test-tenant' AND open_id = 'admin'
+                INSERT INTO policy_apply (tenant_key, policy_no, applicant_id, applicant_name, channel_type, status, current_version, brand_id, series_id)
+                SELECT u.tenant_key, ?, u.id, u.name, 'RETAIL', 'PENDING', 1, g.brand_id, g.series_id FROM user_info u CROSS JOIN goods g
+                WHERE u.tenant_key='test-tenant' AND u.open_id='admin' AND g.id=?
+                """,
+                code,
+                goodsId);
+        jdbc.update(
+                """
+                INSERT INTO policy_audit_log (policy_id,tenant_key,version,snapshot_data,brand_id,series_id,perspective)
+                SELECT id,tenant_key,1,'{}',brand_id,series_id,channel_type FROM policy_apply WHERE policy_no=?
                 """,
                 code);
         jdbc.update(
                 """
-                INSERT INTO policy_audit_log (policy_id, tenant_key, version, snapshot_data)
-                SELECT id, tenant_key, 1, '{}' FROM policy_apply WHERE policy_no = ?
+                INSERT INTO policy_round_platform (policy_id,version,tenant_key,perspective,platform_code)
+                SELECT id,1,tenant_key,channel_type,'JD' FROM policy_apply WHERE policy_no=?
                 """,
                 code);
         jdbc.update(
                 """
-                INSERT INTO policy_goods_detail (policy_id, version, platform_code, goods_id, spu_id, ram, rom)
-                SELECT p.id, 1, 'JD', g.id, g.spu_id, g.ram, g.rom
-                FROM policy_apply p CROSS JOIN goods g WHERE p.policy_no = ? AND g.id = ?
+                INSERT INTO policy_goods_detail (policy_id,version,platform_code,goods_id,spu_id,ram,rom,brand_id,series_id)
+                SELECT p.id,1,'JD',g.id,g.spu_id,g.ram,g.rom,g.brand_id,g.series_id FROM policy_apply p CROSS JOIN goods g WHERE p.policy_no=? AND g.id=?
                 """,
                 code,
                 goodsId);
@@ -5338,6 +5563,11 @@ class GoodsSyncIntegrationTest {
                                 "SELECT COUNT(*) FROM catalog_operation_log WHERE entity_type = 'CLEAN_JOB' OR action_type LIKE 'CLEAN_%'",
                                 Integer.class))
                 .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE action_type='GROUP_MESSAGE'",
+                                Integer.class))
+                .isZero();
         mvc.perform(
                         get(SOURCES + "/" + shortPack)
                                 .session(session("other-tenant", "other-cleaning", "ADMIN")))
@@ -5393,6 +5623,11 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.result.modelName").value("K10活力版"))
                 .andExpect(jsonPath("$.result.colorName").value("星耀黑"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM color_dict", Integer.class)).isOne();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE action_type='GROUP_MESSAGE'",
+                                Integer.class))
+                .isZero();
     }
 
     @Test
@@ -5630,16 +5865,45 @@ class GoodsSyncIntegrationTest {
                     pair[0],
                     pair[1]);
             jdbc.update(
-                    "INSERT INTO user_platform_assignment (tenant_key,perspective,platform_code,user_id) SELECT tenant_key,?,?,id FROM user_info WHERE tenant_key='test-tenant' AND open_id=?",
+                    "INSERT INTO user_platform_assignment (tenant_key,perspective,platform_code,user_id,member_kind) SELECT tenant_key,?,?,id,'SUBMITTER' FROM user_info WHERE tenant_key='test-tenant' AND open_id=?",
                     pair[0],
                     pair[1],
                     openId);
         }
     }
 
-    private MockHttpSession session(String tenant, String openId, String role) {
-        var user = users.saveVerifiedIdentity(tenant, openId, null, "测试用户", null);
-        jdbc.update("UPDATE user_info SET role_type=? WHERE id=?", role, user.id());
+    private CurrentUserResponse account(String tenant, String openId, String... roleCodes) {
+        var identity = users.saveVerifiedIdentity(tenant, openId, null, "测试用户", null);
+        jdbc.update(
+                "DELETE FROM sys_user_role WHERE tenant_key=? AND user_id=?",
+                tenant,
+                identity.id());
+        for (String role : roleCodes)
+            com.company.policy.ReviewAccounts.grant(
+                    jdbc, Long.parseLong(identity.id()), tenant, role);
+        return users.saveVerifiedIdentity(tenant, openId, null, "测试用户", null);
+    }
+
+    private void presetReviewers() {
+        jdbc.update(
+                """
+                INSERT INTO policy_review_brand_owner(tenant_key,brand_id,purchase_user_id,product_mode,brand_product_user_id)
+                SELECT u.tenant_key,b.id,u.id,'BY_SERIES',NULL FROM brand b CROSS JOIN user_info u
+                WHERE u.tenant_key='test-tenant' AND u.open_id='admin'
+                AND NOT EXISTS(SELECT 1 FROM policy_review_brand_owner x WHERE x.tenant_key=u.tenant_key AND x.brand_id=b.id)
+                """);
+        jdbc.update(
+                """
+                INSERT INTO policy_review_series_owner(tenant_key,brand_id,series_id,product_user_id)
+                SELECT b.tenant_key,b.brand_id,s.id,u.id FROM policy_review_brand_owner b JOIN series s ON s.brand_id=b.brand_id
+                JOIN user_info u ON u.tenant_key=b.tenant_key AND u.open_id='product-reviewer'
+                WHERE b.tenant_key='test-tenant' AND b.product_mode='BY_SERIES'
+                AND NOT EXISTS(SELECT 1 FROM policy_review_series_owner x WHERE x.tenant_key=b.tenant_key AND x.series_id=s.id)
+                """);
+    }
+
+    private MockHttpSession session(String tenant, String openId, String... roleCodes) {
+        var user = account(tenant, openId, roleCodes);
         var request = new MockHttpServletRequest();
         sessions.establish(request, new AuthSessionResponse(user, Instant.now().plusSeconds(600)));
         return (MockHttpSession) request.getSession();

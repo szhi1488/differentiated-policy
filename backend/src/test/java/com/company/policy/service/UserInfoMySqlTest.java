@@ -45,7 +45,7 @@ class UserInfoMySqlTest {
                         "union_id",
                         "name",
                         "department",
-                        "role_type",
+                        "auth_version",
                         "is_deleted",
                         "created_at",
                         "updated_at");
@@ -53,13 +53,12 @@ class UserInfoMySqlTest {
         var first =
                 users.saveVerifiedIdentity(
                         tenant, "temporary_open", "temporary_union", "临时验证", null);
-        assertThat(first.roleType()).isEqualTo("APPLICANT");
-        jdbc.update(
-                "UPDATE user_info SET role_type='ADMIN', department='临时验证部门' WHERE id=?",
-                first.id());
+        assertThat(first.roleCodes()).containsExactly("OPERATIONS");
+        com.company.policy.RbacFixture.setRole(jdbc, Long.parseLong(first.id()), "ADMIN");
+        jdbc.update("UPDATE user_info SET department='临时验证部门' WHERE id=?", first.id());
         var repeat = users.saveVerifiedIdentity(tenant, "temporary_open", null, "更新验证", null);
         assertThat(repeat.id()).isEqualTo(first.id());
-        assertThat(repeat.roleType()).isEqualTo("ADMIN");
+        assertThat(repeat.roleCodes()).containsExactly("ADMIN");
         assertThat(mapper.findIdentity(tenant, "temporary_open").getUnionId())
                 .isEqualTo("temporary_union");
         assertThat(

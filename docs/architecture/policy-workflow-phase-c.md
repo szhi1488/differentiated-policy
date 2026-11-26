@@ -1,5 +1,8 @@
 # C 阶段站内审核交付（P12–P17）
 
+> 本文保留当时的阶段设计与验收记录。现行流程在首提或退回重提时按品牌、系列预设冻结负责人，投递状态与飞书回执只保存在后台。运行与联调请参阅[现行审核设置及后台投递记录](../api/policy-review-settings.md)。
+
+
 2026-11-23 完成 P12–P17。隔离环境通过 ERP API 跑通提交、初审退回、原单重提、初审同意和采购批准，并核对同一事务内的节点决定、指派和通知登记。C 阶段沿用 B 阶段的二十二表基线。2026-11-25 按整轮商品分流和现行飞书投递规则更新下表，原验收数据保留在文末。[D 阶段工作台](policy-workflow-phase-d.md) · [E 阶段各节点的收件人与回执](policy-workflow-phase-e.md#各节点的收件人与回执)
 
 ## 已交付的业务动作
@@ -46,6 +49,6 @@
 
 2026-11-23 在 `backend/` 执行 `mvn verify`，309 项测试中 307 项通过，0 失败，0 错误，2 项外部环境测试按配置跳过（真实 MySQL 用户验证、吉客云商品实查）。Spring Boot 打包和 Spotless 检查通过。与本站内流程直接相关的四个测试类共 27 项全部通过。该次验收使用当时的延期子单实现。并发批准时，一个请求成功，另一个返回 409。现行处理在每个目标原单写一条调整记录，并分别登记业务通知。发起申请按获批轮次登记一条终审公告。[现行改期与通知](policy-workflow-phase-e.md#终审通过的群公告)
 
-[提交与贯通用例](../../backend/src/test/java/com/company/policy/service/PolicyReviewSubmissionIntegrationTest.java) · [初审与采购竞办](../../backend/src/test/java/com/company/policy/controller/PolicyPurchaseReviewTest.java) · [按轮详情及轮次附件](../../backend/src/test/java/com/company/policy/controller/PolicyReviewRoundTest.java) · [改派及竞办](../../backend/src/test/java/com/company/policy/controller/PolicyReviewReassignmentTest.java)
+[提交与贯通用例](../../backend/src/test/java/com/company/policy/service/PolicyReviewSubmissionIntegrationTest.java) · [初审与采购竞办](../../backend/src/test/java/com/company/policy/controller/PolicyPurchaseReviewTest.java) · [按轮详情及轮次附件](../../backend/src/test/java/com/company/policy/controller/PolicyReviewRoundTest.java)
 
 每个提交轮次按冻结的节点和指派办理。自动投递默认关闭。当前工作台接入方式见[办理链接约定](policy-workflow-phase-d.md#办理链接约定)。此前 E 阶段以模拟飞书服务验证了发卡、回调、群通知及待办回执。目标 MySQL 行锁、真实企业收件及手机工作台办理仍待 P32 联调。[B 阶段切换条件](policy-workflow-phase-b.md#切换与运行边界) · [E 阶段目标库及环境配置](policy-workflow-phase-e.md#环境配置与目标库)

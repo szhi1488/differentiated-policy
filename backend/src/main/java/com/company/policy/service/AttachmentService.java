@@ -24,6 +24,9 @@ public interface AttachmentService {
     /** 校验申请归属后，下载本人申请当前内容中引用的附件。 */
     Download downloadCurrent(long policyId, String attachmentId, CurrentUserResponse user);
 
+    Download downloadShared(
+            long policyId, int version, String attachmentId, CurrentUserResponse user);
+
     /** 下载本人申请在指定提交轮次的快照中引用的附件。 */
     Download downloadApplicantHistory(
             long policyId, long logId, String attachmentId, CurrentUserResponse user);

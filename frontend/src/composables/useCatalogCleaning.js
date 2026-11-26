@@ -97,8 +97,8 @@ export function useCatalogCleaning() {
     applied.value = { ...filters, keyword: filters.keyword.trim() }
   }
 
-  function reset() {
-    Object.assign(filters, emptyFilters)
+  function reset(defaultBrand = '') {
+    Object.assign(filters, emptyFilters, { brandName: defaultBrand })
     tab.value = ''
     search()
   }

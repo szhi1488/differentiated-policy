@@ -53,7 +53,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public CatalogGoodsResponse create(CurrentUserResponse session, CatalogGoodsWrite request) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         if (request.status() == null) {
             throw invalidGoods("请选择商品状态。");
         }
@@ -74,7 +74,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                             target.color(),
                             request.status());
             checkWrite(mapper.insertGoods(entry));
-            return CatalogGoodsResponse.from(mapper.find(entry.getId()));
+            return CatalogGoodsResponse.from(mapper.find(entry.getId(), null));
         } catch (DuplicateKeyException error) {
             throw duplicate();
         }
@@ -84,7 +84,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public CatalogGoodsResponse update(
             CurrentUserResponse session, long id, CatalogGoodsUpdate request) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         if (id < 1) {
             throw invalidGoods("商品 ID 无效。");
         }
@@ -95,7 +95,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
             if (mapper.lockById(id) == null) {
                 throw notFound();
             }
-            var current = mapper.find(id);
+            var current = mapper.find(id, null);
             var response = CatalogGoodsResponse.from(current);
             if (!response.editVersion().equals(request.expectedVersion())) {
                 throw conflict("CATALOG_GOODS_CHANGED", "该商品已被修改，请保留当前输入并重新打开商品核对。");
@@ -128,7 +128,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                             target.rom(),
                             target.color(),
                             product.status()));
-            return CatalogGoodsResponse.from(mapper.find(id));
+            return CatalogGoodsResponse.from(mapper.find(id, null));
         } catch (DuplicateKeyException error) {
             throw duplicate();
         }
@@ -197,7 +197,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void delete(CurrentUserResponse session, long id) {
-        access.requireAdmin(session);
+        access.requirePermission(session, "catalog.manage");
         if (id < 1) {
             throw invalidGoods("商品 ID 无效。");
         }
@@ -256,14 +256,16 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Transactional(readOnly = true)
     public PageResponse<CatalogGoodsResponse> list(
             CurrentUserResponse session, CatalogGoodsQuery query) {
-        access.requireAdmin(session);
+        var brands = access.readableGoodsBrands(session);
         var filters = filters(query);
         var keywords = keywords(filters.keyword());
         return new PageResponse<>(
-                mapper.page(filters, keywords, filters.size(), offset(filters), false).stream()
+                mapper
+                        .page(filters, keywords, filters.size(), offset(filters), false, brands)
+                        .stream()
                         .map(CatalogGoodsResponse::from)
                         .toList(),
-                mapper.count(filters, keywords, false));
+                mapper.count(filters, keywords, false, brands));
     }
 
     @Override
@@ -290,10 +292,10 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                                 query.configurations()));
         var keywords = keywords(filters.keyword());
         return new PageResponse<>(
-                mapper.page(filters, keywords, filters.size(), offset(filters), true).stream()
+                mapper.page(filters, keywords, filters.size(), offset(filters), true, null).stream()
                         .map(ApplicantCatalogResponse::from)
                         .toList(),
-                mapper.count(filters, keywords, true));
+                mapper.count(filters, keywords, true, null));
     }
 
     @Override
@@ -304,14 +306,20 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
         if (invalidId(brandId) || invalidId(seriesId) || invalidId(spuId)) {
             throw invalid();
         }
-        return Options.from(mapper.catalogConfigurations(true), brandId, seriesId, spuId);
+        return Options.from(mapper.catalogConfigurations(true, null), brandId, seriesId, spuId);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Options subsidyOptions(CurrentUserResponse session) {
-        access.requireApplicant(session);
-        return Options.from(mapper.catalogConfigurations(false), null, null, null);
+        var reader = access.requireActive(session);
+        if (!access.hasPermission(reader, "subsidy.read.company"))
+            access.requirePermission(session, "subsidy.read.platform");
+        return Options.from(
+                mapper.catalogConfigurations(false, access.subsidyBrandNames(reader)),
+                null,
+                null,
+                null);
     }
 
     private static boolean invalidId(Long id) {
@@ -371,12 +379,13 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Override
     @Transactional(readOnly = true)
     public Summary summary(CurrentUserResponse session, boolean includeModelConfigurations) {
-        access.requireAdmin(session);
-        var counts = mapper.seriesCounts();
+        var brands = access.readableGoodsBrands(session);
+        var counts = mapper.seriesCounts(brands);
         return new Summary(
                 counts.stream().mapToLong(CatalogGoodsMapper.SeriesCount::total).sum(),
                 counts.stream().mapToLong(CatalogGoodsMapper.SeriesCount::active).sum(),
                 counts.stream().mapToLong(CatalogGoodsMapper.SeriesCount::stopped).sum(),
+                brands,
                 counts.stream()
                         .map(
                                 row ->
@@ -387,10 +396,10 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                                                 row.total(),
                                                 row.active()))
                         .toList(),
-                mapper.configurations().stream()
+                mapper.configurations(brands).stream()
                         .map(row -> new Memory(row.ram(), row.rom()))
                         .toList(),
-                mapper.modelCounts().stream()
+                mapper.modelCounts(brands).stream()
                         .map(
                                 row ->
                                         new ModelCount(
@@ -402,7 +411,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
                                                 row.active()))
                         .toList(),
                 includeModelConfigurations
-                        ? mapper.modelConfigurations().stream()
+                        ? mapper.modelConfigurations(brands).stream()
                                 .map(
                                         c ->
                                                 new CatalogGoodsResponse.ModelConfiguration(
@@ -414,8 +423,7 @@ public class CatalogGoodsServiceImpl implements CatalogGoodsService {
     @Override
     @Transactional(readOnly = true)
     public CatalogGoodsResponse detail(CurrentUserResponse session, long id) {
-        access.requireAdmin(session);
-        var item = mapper.find(id);
+        var item = mapper.find(id, access.readableGoodsBrands(session));
         if (item == null) {
             throw notFound();
         }

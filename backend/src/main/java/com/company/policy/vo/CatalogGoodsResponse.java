@@ -88,6 +88,7 @@ public record CatalogGoodsResponse(
             long total,
             long active,
             long stopped,
+            @JsonInclude(JsonInclude.Include.NON_NULL) List<String> brandNames,
             List<SeriesCount> series,
             List<Memory> configurations,
             List<ModelCount> models,

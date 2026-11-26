@@ -21,6 +21,7 @@ import com.company.policy.vo.CurrentUserResponse;
 import com.company.policy.vo.GoodsSyncResponse;
 import com.company.policy.vo.GoodsSyncResponse.Overview;
 import com.company.policy.vo.GoodsSyncResponse.Source;
+import com.company.policy.vo.GoodsSyncResponse.SourceBrands;
 import com.company.policy.vo.GoodsSyncResponse.SourcePage;
 import com.company.policy.vo.JackyunGoodsPage;
 import com.company.policy.vo.JackyunGoodsPage.Goods;
@@ -76,10 +77,19 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
     }
 
     @Override
+    public SourceBrands sourceBrands(CurrentUserResponse session) {
+        var user = access.requireActive(session);
+        if (!access.hasPermission(user, "catalog.import")
+                && !access.hasPermission(user, "catalog.clean"))
+            throw new ApiException(HttpStatus.FORBIDDEN, "PERMISSION_DENIED", "当前账号没有商品导入或清洗权限。");
+        return new SourceBrands(access.sourceBrandNames(user, null));
+    }
+
+    @Override
     public Overview overview(CurrentUserResponse session) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.import");
         var latest =
-                JackyunGoodsQuery.SUPPORTED_BRANDS.stream()
+                access.sourceBrandNames(user, null).stream()
                         .map(brand -> jobs.latest(config.getSourceKey(), brand))
                         .filter(Objects::nonNull)
                         .map(GoodsSyncResponse::from)
@@ -89,7 +99,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     @Override
     public GoodsSyncResponse start(CurrentUserResponse session, GoodsSyncRequest request) {
-        UserInfo admin = access.requireAdmin(session);
+        UserInfo admin = access.requirePermission(session, "catalog.import");
         if ((request.mode() == Mode.FULL) != (request.date() == null)
                 || (request.date() != null
                         && (request.date().getYear() < 1000 || request.date().getYear() > 9999))) {
@@ -114,6 +124,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         try {
             return tx.execute(
                     ignored -> {
+                        access.sourceBrandNames(admin, request.brandName());
                         var existing = replay(job);
                         if (existing != null) {
                             return existing;
@@ -132,11 +143,12 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                     });
         } catch (DuplicateKeyException conflict) {
             // 唯一键处理并发提交；重新读取已提交结果，避免事务快照漏掉并发任务。
+            access.sourceBrandNames(admin, request.brandName());
             var existing = replay(job);
             if (existing != null) {
                 return existing;
             }
-            throw conflict("CATALOG_JOB_ACTIVE", "已有商品导入任务，请先完成或结束该任务。");
+            throw conflict("CATALOG_JOB_ACTIVE", "当前账套已有商品导入任务，请稍后再试。");
         }
     }
 
@@ -166,17 +178,16 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
 
     private GoodsSyncResponse control(
             CurrentUserResponse session, long id, int version, boolean resume) {
-        UserInfo admin = access.requireAdmin(session);
-        if (resume) {
-            requireReady();
-        }
+        UserInfo admin = access.requirePermission(session, "catalog.import");
         return tx.execute(
                 ignored -> {
                     var job = jobs.find(config.getSourceKey(), id);
-                    if (job == null) {
+                    if (job == null
+                            || !access.sourceBrandNames(admin, null).contains(job.getBrandName())) {
                         throw new ApiException(
                                 HttpStatus.NOT_FOUND, "CATALOG_JOB_NOT_FOUND", "未找到该导入任务。");
                     }
+                    if (resume) requireReady();
                     if (!"PAUSED".equals(job.getStatus()) || job.getRecordVersion() != version) {
                         throw changed();
                     }
@@ -205,7 +216,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
             LocalDate createdDate,
             int page,
             int size) {
-        access.requireAdmin(session);
+        var user = access.requirePermission(session, "catalog.import");
         if ((brand != null && !JackyunGoodsQuery.SUPPORTED_BRANDS.contains(brand))
                 || (keyword != null && keyword.length() > 128)
                 || (createdDate != null
@@ -219,11 +230,12 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
         String search = keyword == null || keyword.isBlank() ? null : keyword.strip();
         return tx.execute(
                 ignored -> {
+                    var brands = access.sourceBrandNames(user, brand);
                     var items =
                             sources
                                     .page(
                                             config.getSourceKey(),
-                                            brand,
+                                            brands,
                                             search,
                                             createdDate,
                                             size,
@@ -233,7 +245,7 @@ public class GoodsSyncServiceImpl implements GoodsSyncService {
                                     .toList();
                     return new SourcePage(
                             items,
-                            sources.count(config.getSourceKey(), brand, search, createdDate));
+                            sources.count(config.getSourceKey(), brands, search, createdDate));
                 });
     }
 

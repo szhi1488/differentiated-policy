@@ -32,7 +32,7 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
             boolean productReview,
             String summary,
             LocalDateTime at) {
-        // 整批登记同事务提交。节点已办结或后来改派时，重放仍对应首次提交的收件人。
+        // 整批登记同事务提交。节点已办结时，重放仍对应首次提交的收件人。
         if (workflow.eventRegistered(tenant, id, version, "SUBMITTED") != 0) return;
         var members = workflow.members(tenant, id, version);
         var product = active(members, "PRODUCT");
@@ -148,79 +148,22 @@ class PolicyReviewNotificationsImpl implements PolicyReviewNotifications {
         payload.put("actorId", actorId);
         payload.put("applicantId", applicant);
         if (!transferred && !rejected) {
-            payload.put("informedUserIds", List.of(applicant));
+            var audience = new java.util.TreeSet<Long>();
+            var platforms = new java.util.LinkedHashSet<com.company.policy.dto.ChannelPlatform>();
+            for (var row : workflow.platformAudience(tenant, id, version)) {
+                platforms.add(
+                        new com.company.policy.dto.ChannelPlatform(
+                                row.perspective(), row.platformCode()));
+                if (row.userId() != null) audience.add(row.userId());
+            }
+            payload.put("approvedPlatforms", platforms);
+            audience.add(applicant);
+            payload.put("informedUserIds", audience);
             workflow.register(tenant, id, version, event, "GROUP_MESSAGE", 0, encode(payload), at);
         }
         for (var assignee : next) {
             payload.put("userId", assignee.userId());
             invite(tenant, id, version, event, assignee.id(), stage, payload, at);
-        }
-    }
-
-    @Override
-    public void reassigned(
-            String tenant,
-            long id,
-            int version,
-            int recordVersion,
-            String currentStage,
-            String targetStage,
-            long actorId,
-            String reason,
-            List<Assignee> added,
-            List<Assignee> removed,
-            LocalDateTime at) {
-        var event = "REASSIGNED_" + recordVersion;
-        if (workflow.eventRegistered(tenant, id, version, event) != 0) return;
-        if (!targetStage.equals(currentStage)) return;
-        for (var member : added)
-            invite(
-                    tenant,
-                    id,
-                    version,
-                    event,
-                    member.memberId(),
-                    targetStage,
-                    Map.of("stage", targetStage, "userId", member.userId(), "reason", reason),
-                    at);
-        for (var member : removed) {
-            if ("PURCHASE_REVIEW".equals(targetStage))
-                workflow.register(
-                        tenant,
-                        id,
-                        version,
-                        event,
-                        "SEND_CARD",
-                        member.memberId(),
-                        encode(
-                                Map.of(
-                                        "stage",
-                                        targetStage,
-                                        "outcome",
-                                        "REMOVED",
-                                        "reason",
-                                        reason)),
-                        at);
-            close(
-                    tenant,
-                    id,
-                    version,
-                    event,
-                    "PRODUCT_REVIEW".equals(targetStage) ? "PRODUCT" : "PURCHASE",
-                    member.memberId(),
-                    encode(
-                            Map.of(
-                                    "stage",
-                                    targetStage,
-                                    "userId",
-                                    member.userId(),
-                                    "actorId",
-                                    actorId,
-                                    "outcome",
-                                    "REMOVED",
-                                    "reason",
-                                    "已改派")),
-                    at);
         }
     }
 

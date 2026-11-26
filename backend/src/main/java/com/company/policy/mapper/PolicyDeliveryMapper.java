@@ -1,6 +1,7 @@
 package com.company.policy.mapper;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -32,6 +33,19 @@ public interface PolicyDeliveryMapper {
             """)
     Long next(String tenant, LocalDateTime now);
 
+    record TrialCard(long id, long policyId, int version, String eventKey, long recipientKey) {}
+
+    @Select(
+            """
+            SELECT d.id,d.policy_id,d.version,d.event_key,d.recipient_key
+            FROM policy_review_delivery d
+            JOIN policy_apply p ON p.id=d.policy_id AND p.tenant_key=d.tenant_key AND p.is_deleted=0
+            JOIN policy_review_member m ON m.id=d.recipient_key AND m.tenant_key=d.tenant_key
+            WHERE d.tenant_key=#{tenant} AND d.policy_id=#{policyId} AND d.version=#{version}
+              AND d.action_type='SEND_CARD' AND m.group_code='PRODUCT'
+            """)
+    List<TrialCard> trialCards(String tenant, long policyId, int version);
+
     @Select(
             """
             SELECT d.id FROM policy_review_delivery d WHERE d.tenant_key=#{tenant} AND d.id=#{target.id}
@@ -41,7 +55,17 @@ public interface PolicyDeliveryMapper {
             """
                     + DUE
                     + " FOR UPDATE SKIP LOCKED")
-    Long nextTrialCard(String tenant, PolicyDeliveryAdminMapper.Row target, LocalDateTime now);
+    Long nextTrialCard(String tenant, TrialCard target, LocalDateTime now);
+
+    record TrialState(String deliveryStatus, String receiptId, String lastError) {}
+
+    @Select(
+            """
+            SELECT d.delivery_status,d.receipt_id,d.last_error FROM policy_review_delivery d
+            JOIN policy_apply p ON p.id=d.policy_id AND p.tenant_key=d.tenant_key AND p.is_deleted=0
+            WHERE d.id=#{id} AND d.tenant_key=#{tenant}
+            """)
+    TrialState trialState(String tenant, long id);
 
     record Item(
             long id,
@@ -57,7 +81,7 @@ public interface PolicyDeliveryMapper {
             LocalDateTime createdAt,
             String groupCode,
             String openId,
-            String roleType,
+            boolean eligible,
             String memberStatus,
             int currentVersion,
             int recordVersion,
@@ -69,7 +93,15 @@ public interface PolicyDeliveryMapper {
     @Select(
             """
             SELECT d.id,d.tenant_key,COALESCE(d.policy_id,0) AS policy_id,COALESCE(d.version,0) AS version,d.event_key,d.action_type,d.recipient_key,
-              d.payload_json,d.delivery_status,d.attempts,d.created_at,m.group_code,u.open_id,u.role_type,
+              d.payload_json,d.delivery_status,d.attempts,d.created_at,m.group_code,u.open_id, CASE WHEN m.group_code='PRODUCT' THEN
+            """
+                    + ReviewPermissions.PRODUCT
+                    + " WHEN m.group_code='PURCHASE' THEN "
+                    + ReviewPermissions.PURCHASE
+                    + " WHEN m.group_code='REVISION' THEN "
+                    + ReviewPermissions.APPLY
+                    + """
+             ELSE FALSE END AS eligible,
               m.member_status,COALESCE(p.current_version,0) AS current_version,COALESCE(p.record_version,0) AS record_version,p.status,r.stage,m.task_guid,COALESCE(p.is_deleted,0) AS deleted
             FROM policy_review_delivery d
             LEFT JOIN policy_apply p ON p.id=d.policy_id AND p.tenant_key=d.tenant_key

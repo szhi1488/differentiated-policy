@@ -64,14 +64,14 @@ export function readPolicy(id, signal) {
   return request(itemPath(id), { signal })
 }
 
-export function listMyPolicies({ page, pageSize, status, perspective, platformCode }, signal) {
+function listPolicies(scope, { page, pageSize, status, perspective, platformCode }, signal) {
   const params = new URLSearchParams({ page, pageSize })
   for (const [key, value] of Object.entries({ status, perspective, platformCode })) {
     if (value) {
       params.set(key, value)
     }
   }
-  return request(`${path}/mine?${params}`, { signal })
+  return request(`${path}/${scope}?${params}`, { signal })
 }
 
 export function listPolicyAuditLogs(id, { page, pageSize }, signal) {
@@ -82,3 +82,17 @@ export function listPolicyAuditLogs(id, { page, pageSize }, signal) {
 export function readAssignedPlatforms(signal) {
   return request(path + '/platforms', { signal })
 }
+
+export const listMyPolicies = (filters, signal) => listPolicies('mine', filters, signal)
+export const listSharedPolicies = (filters, signal) => listPolicies('shared', filters, signal)
+export const readSharedPolicy = (id, signal) =>
+  request(path + '/shared/' + encodeURIComponent(id), { signal })
+export const readMemberPlatforms = (signal) => request(path + '/platforms?usage=READ', { signal })
+export const sharedPolicyAttachmentUrl = (id, version, fileId) =>
+  path +
+  '/shared/' +
+  encodeURIComponent(id) +
+  '/attachments/' +
+  encodeURIComponent(fileId) +
+  '/content?' +
+  new URLSearchParams({ submissionVersion: version })

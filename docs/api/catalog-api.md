@@ -1,10 +1,10 @@
 # 商品管理接口契约
 
-更新日期 2026-11-25。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护均使用当前二十三表基线中的商品目录。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期 2026-11-26。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护均使用 29 表空库基线中的商品目录。商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
-沿用项目 Session、Origin、X-Policy-Request、DTO/VO 规范。每次管理操作重新检查有效 ADMIN 和公司飞书租户。账套来自服务端配置，所有有效管理员访问同一套数据。新基线的商品相关表不保存租户字段。ID 按字符串，recordVersion 为整数。客户端不指定操作者、账套、租户、游标或分页请求频率。
+沿用项目 Session、Origin、X-Policy-Request、DTO/VO 规范。商品操作核验本企业的有效账号和所需权限。内置采购拥有源商品与导入（`catalog.import`）、商品清洗及审核（`catalog.clean`）权限。采购商品中心复用 `catalog.import`，按管理员在「政策审核设置」选择的品牌采购读取标准商品。`catalog.manage` 用于公司标准目录维护。采购的商品中心、源商品库、导入和清洗按服务端当前分工查询，未分工时数据集为空。新基线的商品相关表不保存租户字段。ID 按字符串，recordVersion 为整数。客户端不指定操作者、账套、租户、游标或分页请求频率。
 
 列表默认每页 20 条，上限 100 条，排序和枚举使用白名单。常见业务错误返回 400、401、403、404、409 或 503。上游错误以脱敏类别和本地 jobId 表示。
 
@@ -14,8 +14,9 @@
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
+| GET | /api/admin/catalog/source-brands | 返回 `brandNames`，为本人负责品牌与吉客云支持品牌的交集。需有 `catalog.import` 或 `catalog.clean` |
 | POST | /api/admin/goods-sync/jobs | `brandName` 为 `OPPO手机` 或 `一加手机`，`idempotencyKey` 为小写 UUID；`mode` 为 `FULL`（默认）、`CREATED` 或 `MODIFIED`；按日须传 `date`（北京时间 `YYYY-MM-DD`）；包含停用 SKU，202 返回任务 |
-| GET | /api/admin/goods-sync/jobs | 返回 `configured` 和两个品牌各自最新的 `jobs`（尚未导入的品牌没有任务） |
+| GET | /api/admin/goods-sync/jobs | 返回 `configured` 和可见品牌各自最新的 `jobs`（尚未导入的品牌没有任务） |
 | POST | /api/admin/goods-sync/jobs/{id}/resume | 带 `recordVersion`；暂停且冷却结束后，从同一任务的断点继续 |
 | POST | /api/admin/goods-sync/jobs/{id}/cancel | 带 `recordVersion`；只结束暂停任务，保留已提交商品原文和剩余冷却时间 |
 | GET | /api/admin/source-goods | `brandName` 可省略，`keyword` 最长 128，按名称、货号、SKU 名称或完整分类路径查子串，或按 SKU ID 精确查询；`createdDate` 可按北京时间建档日 `YYYY-MM-DD` 筛选已导入的 SKU；`page` 从 1 开始，`size` 默认 20、最大 100；返回 `items` 和 `total` |
@@ -44,7 +45,7 @@
 | POST | /api/admin/source-goods/{id}/review | 带 `recordVersion` 和 `decision` 审核，支持通过 `APPROVE` 和不通过 `EXCLUDE` |
 | POST | /api/admin/source-goods/{id}/clean-retry | 带 `recordVersion` 和 `requestKey` 重试一条 `ERROR`，返回 202 |
 
-品牌可选 OPPO手机、一加手机。查询结果省略品牌汇总两品牌，省略状态显示全部。日期为北京时间 `YYYY-MM-DD`，`unknownDate=true` 与具体日期互斥。状态查询支持 `PENDING`（包括旧处理中状态）、`PASSED`（自动和人工通过）、`REVIEW_REQUIRED`、`ERROR`、`EXCLUDED`（当前已自动排除或人工审核不通过的来源）。关键词最多 128 字符，查商品名或货号。页码从 1 开始，每页 1 至 100 条。计数按品牌、建档日和关键词计算，和当前页签无关。
+采购从本人负责的吉客云品牌中选择。查询结果省略品牌时仍按本人品牌汇总，省略状态显示全部。日期为北京时间 `YYYY-MM-DD`，`unknownDate=true` 与具体日期互斥。状态查询支持 `PENDING`（包括旧处理中状态）、`PASSED`（自动和人工通过）、`REVIEW_REQUIRED`、`ERROR`、`EXCLUDED`（当前已自动排除或人工审核不通过的来源）。关键词最多 128 字符，查商品名或货号。页码从 1 开始，每页 1 至 100 条。计数按品牌、建档日和关键词计算，和当前页签无关。
 
 开始清洗指定一个品牌，日期为空时涵盖该品牌全部已入库 SKU。实际纳入已完成导入或已结束导入中已落库的待清洗 SKU，可选未映射的待审 SKU。进行中或暂停的最近导入需先完成或结束。确认数量必须大于 0；实际数量变化返回 `409 CATALOG_CLEAN_SCOPE_CHANGED`。幂等请求键同账套唯一，重复请求返回已有任务，活动任务范围相同可直接返回该任务。其他范围在同账套有运行任务时返回 `409 CATALOG_CLEAN_ACTIVE`。
 
@@ -53,6 +54,8 @@
 结果每行返回来源 `id`、品牌、商品名、货号、SKU 名称、建档日、状态、系列、型号、配置、颜色、颜色候选、识别说明、原因码、建议操作及 `recordVersion`。审核 `APPROVE` 须提交完整 `target`，包含 `seriesName`、`modelName`、`spec`、`colorName`。审核不通过用 `EXCLUDE`，商品进入已排除。来源文本命中三个直接排除词时，任务成员结果为 `EXCLUDED`，`resultCounts.EXCLUDED` 为本轮自动排除数。详情原因码为 `DIRECT_EXCLUSION`，`candidate.evidence` 列出各命中字段和词，自动排除的审核人、审核时间及审核意见为空。需要人工确认排除的候选只允许审核不通过；该候选试图通过时返回 `409 CATALOG_CLEAN_RULE_EXCLUSION`。源商品名称缺失或全为空白时，人工通过返回 `409 CATALOG_SOURCE_NAME_MISSING`，须补全来源名称后重新导入。服务端按决定记录「审核通过」或「审核不通过」。审核需要该来源已保存的本次清洗候选。候选缺失返回 409 `CATALOG_SOURCE_CHANGED`，须重新清洗后再审核。过期记录版本或不允许的状态也返回 409。
 
 ## 已实现的标准商品目录
+
+采购读取列表、单品和汇总时，服务端核对当前品牌分工。汇总中的 `brandNames` 返回分配的品牌名，尚未分配时返回空数组，具备公司目录维护权限时省略该字段。即使该品牌尚无标准商品，也可从中心发起已获准的吉客云源商品导入。未分配的品牌或商品 ID 不能借搜索、分类筛选、任务 ID 或重复提交请求取得数据。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -69,7 +72,7 @@
 
 列表和统计基于当前标准商品记录。销售 `status` 取 1 在售、2 待上架、3 已下架、4 已停产，响应可为 null（未知）。分页从 1 开始，默认 20 条，最多 100 条。按更新时间和 ID 降序，`ascending=true` 时升序。更新时间按北京时间精确到秒。
 
-商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。管理员商品列表和详情的 `goodsName` 是已保存的商品名称，`policyName` 是已保存的政策名。自动清洗和人工审核通过时分别复制来源 `goodsName`、`goodsField1` 原文。字段 1 的空串及 null 分别保留，手工新增的商品政策名为 null。其他商品字段包括原始 SKU、货品编号、RAM、ROM 和销售状态。响应中的 `skuId` 读取标准商品保存的原始 SKU。商品中心的来源信息 `sourceSkuId` 和 `sourceName` 分别来自其已映射来源的 SKU 和原始商品名。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时，商品仍有自身的 ID，`skuId`、`sourceSkuId` 和 `sourceName` 为空。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，服务端返回公司共用目录。
+商品中心以 `goods.id` 标识商品，关联品牌、系列、机型版本和独立颜色表返回名称。管理员商品列表和详情的 `goodsName` 是已保存的商品名称，`policyName` 是已保存的政策名。自动清洗和人工审核通过时分别复制来源 `goodsName`、`goodsField1` 原文。字段 1 的空串及 null 分别保留，手工新增的商品政策名为 null。其他商品字段包括原始 SKU、货品编号、RAM、ROM 和销售状态。响应中的 `skuId` 读取标准商品保存的原始 SKU。商品中心的来源信息 `sourceSkuId` 和 `sourceName` 分别来自其已映射来源的 SKU 和原始商品名。一条通过的来源对应一条商品，不同 SKU 即使规格颜色相同也分别返回。`skuId`、`sourceSkuId` 及商品 ID 均按字符串返回，19 位原始 SKU 不转为 JavaScript 数字。手工新增无来源时，商品仍有自身的 ID，`skuId`、`sourceSkuId` 和 `sourceName` 为空。来源货号及其他原文可通过已授权的来源详情查询。商品列表按品牌、系列、机型版本、关键词和状态分页，采购查询和详情按品牌分工授权，具有 `catalog.manage` 的维护人员可读公司标准目录。
 
 删除在事务内检查引用。关联来源 SKU 时返回 `CATALOG_GOODS_SOURCE_BOUND`，政策明细引用该商品的 `goods_id` 时返回 `CATALOG_GOODS_POLICY_BOUND`，数据库拒绝删除其他已关联记录时返回 `CATALOG_GOODS_REFERENCED`。删除成功后原商品 ID 查询详情返回 404。
 

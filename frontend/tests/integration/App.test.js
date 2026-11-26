@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { roleSession } from '../fixtures/role-session'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import App from '../../src/App.vue'
@@ -19,7 +20,7 @@ vi.mock('../../src/utils/feishu-sdk', () => ({ isFeishuClient: vi.fn() }))
 vi.mock('../../src/utils/feishu-auth', () => ({ loginWithFeishu: vi.fn() }))
 // 本组验证会话与路由的联动，工作台和路由页内容各自在组件测试中覆盖。
 vi.mock('../../src/views/apply/PolicyApplicationPage.vue', () => ({ default: {} }))
-vi.mock('../../src/views/admin/catalog/CatalogSourcesPage.vue', () => ({ default: {} }))
+vi.mock('../../src/views/admin/catalog/CatalogCenterPage.vue', () => ({ default: {} }))
 vi.mock('../../src/utils/feishu-browser-auth', async (importOriginal) => ({
   ...(await importOriginal()),
   completeBrowserLogin: vi.fn(),
@@ -51,7 +52,7 @@ it.each(['端内免登', '网页回调'])(
   async (method) => {
     const router = createWorkspaceRouter(createMemoryHistory())
     const target = '/reviews/57?round=1'
-    const firstUser = { user: { id: '21', roleType: 'APPLICANT' } }
+    const firstUser = { user: { id: '21', ...roleSession('OPERATIONS') } }
     if (method === '端内免登') {
       await router.push(target)
       isFeishuClient.mockReturnValue(true)
@@ -70,7 +71,7 @@ it.each(['端内免登', '网页回调'])(
       authSession.invalidate()
       await flushPromises()
       expect(wrapper.text()).not.toContain('申请人工作台')
-      getLoginSession.mockResolvedValue({ user: { id: '22', roleType: 'ADMIN' } })
+      getLoginSession.mockResolvedValue({ user: { id: '22', ...roleSession('ADMIN') } })
       await authSession.connect()
       await vi.waitFor(() => expect(wrapper.text()).toContain('管理员工作台'))
       expect(router.currentRoute.value.fullPath).toBe(target)
@@ -148,23 +149,23 @@ it('lets the user retry when the QR SDK fails to load', async () => {
   }
 })
 
-it('服务端 ADMIN 进入管理员工作台，其他角色保持申请人入口', async () => {
-  getLoginSession.mockResolvedValue({ user: { id: 'admin-demo', roleType: 'ADMIN' } })
+it('管理员恢复会话后从商品中心进入工作台', async () => {
+  getLoginSession.mockResolvedValue({ user: { id: 'admin-demo', ...roleSession('ADMIN') } })
   const wrapper = render()
   await flushPromises()
   await vi.waitFor(() => expect(wrapper.text()).toContain('管理员工作台'))
   expect(wrapper.text()).not.toContain('申请人工作台')
   await vi.waitFor(() =>
-    expect(wrapper.vm.$router.currentRoute.value.path).toBe('/admin/catalog/sources'),
+    expect(wrapper.vm.$router.currentRoute.value.path).toBe('/admin/catalog/center'),
   )
   wrapper.unmount()
 })
 
 it.each(['callback', 'session'])('opens the workspace after browser %s login', async (source) => {
   if (source === 'callback') {
-    completeBrowserLogin.mockResolvedValue({ user: { id: '1' } })
+    completeBrowserLogin.mockResolvedValue({ user: { id: '1', ...roleSession('OPERATIONS') } })
   } else {
-    getLoginSession.mockResolvedValue({ user: { id: '1' } })
+    getLoginSession.mockResolvedValue({ user: { id: '1', ...roleSession('OPERATIONS') } })
   }
   const wrapper = render()
   await flushPromises()
@@ -175,8 +176,8 @@ it.each(['callback', 'session'])('opens the workspace after browser %s login', a
 })
 
 it('从页面缓存或后台返回时按最新角色切换工作台与地址', async () => {
-  const applicant = { user: { id: '2', roleType: 'APPLICANT' } }
-  const admin = { user: { id: '2', roleType: 'ADMIN' } }
+  const applicant = { user: { id: '2', ...roleSession('OPERATIONS') } }
+  const admin = { user: { id: '2', ...roleSession('ADMIN') } }
   getLoginSession.mockResolvedValue(applicant)
   const wrapper = render()
   try {
@@ -186,7 +187,7 @@ it('从页面缓存或后台返回时按最新角色切换工作台与地址', a
     getLoginSession.mockResolvedValue(admin)
     window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
     await vi.waitFor(() => expect(wrapper.text()).toContain('管理员工作台'))
-    expect(router.currentRoute.value.fullPath).toBe('/admin/catalog/sources')
+    expect(router.currentRoute.value.fullPath).toBe('/admin/policies')
 
     await router.push('/admin/users')
     getLoginSession.mockResolvedValue(applicant)
@@ -201,7 +202,7 @@ it('从页面缓存或后台返回时按最新角色切换工作台与地址', a
 })
 
 it('返回时合并重复读取，同一角色保留输入，停用后关闭工作台', async () => {
-  const applicant = { user: { id: '2', roleType: 'APPLICANT' } }
+  const applicant = { user: { id: '2', ...roleSession('OPERATIONS') } }
   getLoginSession.mockResolvedValue(applicant)
   const wrapper = render()
   try {
@@ -238,7 +239,7 @@ it('返回时合并重复读取，同一角色保留输入，停用后关闭工�
 it('retains client login and allows explicit retry after a callback failure', async () => {
   isFeishuClient.mockReturnValue(true)
   completeBrowserLogin.mockRejectedValueOnce(new Error('登录请求已失效'))
-  loginWithFeishu.mockResolvedValue({ user: { id: '1' } })
+  loginWithFeishu.mockResolvedValue({ user: { id: '1', ...roleSession('OPERATIONS') } })
   const wrapper = render()
   await flushPromises()
   expect(wrapper.text()).toContain('登录请求已失效')

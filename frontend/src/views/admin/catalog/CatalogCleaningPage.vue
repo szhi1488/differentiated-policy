@@ -1,19 +1,23 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
-import {
-  GOODS_BRANDS,
-  GOODS_CLEAN_JOB_LABELS,
-  GOODS_CLEAN_RESULTS,
-} from '../../../constants/catalog'
+import { GOODS_CLEAN_JOB_LABELS, GOODS_CLEAN_RESULTS } from '../../../constants/catalog'
 import { useCatalogCleaning } from '../../../composables/useCatalogCleaning'
+import { useCatalogSourceBrands } from '../../../composables/useCatalogSourceBrands'
+import CatalogBrandScopeNotice from './CatalogBrandScopeNotice.vue'
 import CatalogCleaningDetailDialog from './CatalogCleaningDetailDialog.vue'
 import CatalogCleaningJobProgress from './CatalogCleaningJobProgress.vue'
 import './catalog-cleaning.css'
 
+const {
+  names: brands,
+  unassigned,
+  error: brandError,
+  reload: loadBrands,
+} = useCatalogSourceBrands()
 const {
   filters,
   tab,
@@ -60,6 +64,27 @@ const {
   reviewConflict,
 } = useCatalogCleaning()
 
+const defaultBrand = computed(() => (brands.value.length === 1 ? brands.value[0] : ''))
+watch(brands, (names, previous) => {
+  if (names.length === 1 || !names.includes(filters.brandName)) {
+    filters.brandName = defaultBrand.value
+  }
+  if (!names.includes(scope.brandName)) {
+    scope.brandName = defaultBrand.value
+  }
+  if (names.join() !== previous.join()) {
+    if (previous.length) {
+      detailId.value = ''
+      startOpen.value = false
+      historyOpen.value = false
+      active.value = null
+      submittedJob.value = null
+      reset(defaultBrand.value)
+      return
+    }
+    search()
+  }
+})
 const { data: resultPage, loading: tableLoading, error: tableError } = table
 const { data: previewData, loading: previewLoading, error: previewError } = preview
 const { data: historyData, loading: historyLoading, error: historyError } = history
@@ -142,10 +167,18 @@ async function submitReview(body) {
       <WorkspacePageHeading title="商品清洗与识别" icon="sync" heading-id="cleaning-title" />
       <div class="cleaning-page-actions">
         <el-button @click="openHistory">{{ active ? '清洗记录（进行中）' : '清洗记录' }}</el-button>
-        <el-button type="primary" :disabled="busy" @click="openStart">开始清洗</el-button>
+        <el-button type="primary" :disabled="busy || !brands.length" @click="openStart">
+          开始清洗
+        </el-button>
       </div>
     </header>
 
+    <CatalogBrandScopeNotice
+      :error="brandError"
+      :unassigned="unassigned"
+      empty-message="当前没有可清洗的品牌，请联系管理员核对品牌分工。"
+      @retry="loadBrands"
+    />
     <el-alert
       v-if="actionError && !startOpen"
       :title="actionError"
@@ -161,10 +194,11 @@ async function submitReview(body) {
             v-model="filters.brandName"
             aria-label="筛选品牌"
             class="cleaning-brand-select"
+            :disabled="brands.length < 2"
             :empty-values="[null, undefined]"
           >
-            <el-option label="全部品牌" value="" />
-            <el-option v-for="brand in GOODS_BRANDS" :key="brand" :label="brand" :value="brand" />
+            <el-option v-if="brands.length !== 1" label="全部品牌" value="" />
+            <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
           </el-select>
         </el-form-item>
         <el-form-item label="建档日期">
@@ -197,7 +231,7 @@ async function submitReview(body) {
           />
         </el-form-item>
         <div class="cleaning-filter-actions">
-          <el-button @click="reset">重置</el-button>
+          <el-button @click="reset(defaultBrand)">重置</el-button>
           <el-button
             native-type="submit"
             type="primary"
@@ -233,7 +267,7 @@ async function submitReview(body) {
       <el-table
         v-else
         v-loading="tableLoading"
-        :data="resultPage?.items ?? []"
+        :data="brands.length ? (resultPage?.items ?? []) : []"
         row-key="id"
         empty-text="暂无符合条件的商品"
         aria-label="清洗识别结果"
@@ -327,13 +361,13 @@ async function submitReview(body) {
         >
           <div class="cleaning-scope-fields">
             <el-form-item label="品牌" required>
-              <el-select v-model="scope.brandName" aria-label="清洗品牌" placeholder="请选择品牌">
-                <el-option
-                  v-for="brand in GOODS_BRANDS"
-                  :key="brand"
-                  :label="brand"
-                  :value="brand"
-                />
+              <el-select
+                v-model="scope.brandName"
+                aria-label="清洗品牌"
+                placeholder="请选择品牌"
+                :disabled="brands.length < 2"
+              >
+                <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
               </el-select>
             </el-form-item>
             <el-form-item label="清洗范围" required>

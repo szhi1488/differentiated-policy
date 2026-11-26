@@ -116,7 +116,7 @@ public class PolicyReviewController {
     @Operation(
             summary = "查询机型配置的零售及百亿补贴时间轴",
             description =
-                    "日期按北京时间含首尾。RAM、ROM 使用目录原值，如 16GB、1024GB。省略平台时返回全部平台。segments 为截至 asOf 的实际名单，plannedSegments 为按已通过决定计算的后续各段采用和未采用名单。")
+                    "采购只可查询当前负责品牌的机型，管理员可查询全部品牌。日期按北京时间含首尾。RAM、ROM 使用目录原值，如 16GB、1024GB。省略平台时返回全部平台。segments 为截至 asOf 的实际名单，plannedSegments 为按已通过决定计算的后续各段采用和未采用名单。")
     public PolicySubsidyTimeline subsidyTimeline(
             @RequestParam long spuId,
             @RequestParam String ram,
@@ -133,7 +133,7 @@ public class PolicyReviewController {
     @GetMapping("/effective")
     @Operation(
             summary = "查询渠道、平台及商品在指定时点适用的政策",
-            description = "按北京时间和本轮确认决定，在 policies 中返回所有适用的获批政策、快照及补贴。")
+            description = "按北京时间和本轮确认决定，返回商品所属品牌内适用的获批政策、快照及补贴。采购限当前负责品牌，管理员可查全部品牌。")
     public Effective effective(
             @RequestParam String perspective,
             @RequestParam String platformCode,

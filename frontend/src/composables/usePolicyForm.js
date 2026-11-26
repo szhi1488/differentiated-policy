@@ -134,6 +134,21 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     platforms.value.forEach(([code]) => addPlatform(code))
   }
 
+  function matchesSeries(goods, editingKey) {
+    const series = new Set(
+      [
+        ...form.value.cards.filter((card) => card.key !== editingKey).flatMap((card) => card.goods),
+        ...goods,
+      ].map((item) => [item.brandId, item.seriesId].join('/')),
+    )
+    if (series.size > 1) {
+      notice.value = '每张政策只能申报同一品牌、同一系列的商品。'
+      noticeType.value = 'warning'
+      return false
+    }
+    return true
+  }
+
   function addGoods(goodsList, cardKey, removedKeys = []) {
     if (blocked() || !form.value.platforms.length) {
       return false
@@ -161,6 +176,9 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
     }
     if (!next.length) {
       return cardKey === undefined ? false : removeModel(cardKey)
+    }
+    if (!matchesSeries(next, cardKey)) {
+      return false
     }
     model.goods = next
     if (cardKey === undefined) {
@@ -198,6 +216,7 @@ export function usePolicyForm(assigned, confirm = confirmPolicyAction, refreshPl
       !form.value.platforms.length ||
       goods?.status !== 'active' ||
       !goods.color ||
+      !matchesSeries([goods]) ||
       form.value.cards.some(({ id }) => id === goods.id)
     ) {
       return false

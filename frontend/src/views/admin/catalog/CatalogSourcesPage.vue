@@ -1,12 +1,13 @@
 <script setup>
 import { ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message-box/style/css'
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import { useSourceGoods } from '../../../composables/useSourceGoods'
+import { useCatalogSourceBrands } from '../../../composables/useCatalogSourceBrands'
+import CatalogBrandScopeNotice from './CatalogBrandScopeNotice.vue'
 import {
-  GOODS_BRANDS,
   GOODS_SYNC_ERRORS,
   GOODS_SYNC_MODES,
   GOODS_SYNC_PHASES,
@@ -15,6 +16,13 @@ import {
   SOURCE_GOODS_FIELDS,
 } from '../../../constants/catalog'
 
+const props = defineProps({ showImport: Boolean })
+const {
+  names: brands,
+  unassigned,
+  error: brandError,
+  reload: loadBrands,
+} = useCatalogSourceBrands()
 const {
   brand,
   input,
@@ -24,7 +32,7 @@ const {
   size,
   goods,
   latest,
-  activeJob,
+  activeJob: runningJob,
   importOpen,
   jobsReady,
   configured,
@@ -50,6 +58,9 @@ const fields = [
 ]
 const importForm = reactive({ brandName: '', mode: 'FULL', date: null })
 const importModes = ['FULL', 'CREATED']
+const activeJob = computed(() =>
+  brands.value.includes(runningJob.value?.brandName) ? runningJob.value : null,
+)
 const displayedJob = computed(() => activeJob.value ?? latest.value[importForm.brandName])
 const canStart = computed(
   () =>
@@ -57,7 +68,7 @@ const canStart = computed(
     !activeJob.value &&
     !action.value &&
     jobsReady.value &&
-    Boolean(importForm.brandName) &&
+    brands.value.includes(importForm.brandName) &&
     (importForm.mode === 'FULL' || Boolean(importForm.date)),
 )
 const businessTime = new Intl.DateTimeFormat('zh-CN', {
@@ -85,11 +96,35 @@ function formatSourceCell(_row, { property }, value) {
   return value
 }
 
+watch(brands, (names, previous) => {
+  if (names.length === 1) {
+    selectBrand(names[0])
+  } else if (!names.includes(brand.value)) {
+    selectBrand('all')
+  }
+  if (!names.includes(importForm.brandName)) {
+    importForm.brandName = names.length === 1 ? names[0] : ''
+  }
+  if (previous.length && names.join() !== previous.join()) {
+    refresh()
+  }
+})
+
 function openImport() {
   importForm.brandName =
     activeJob.value?.brandName ?? (brand.value === 'all' ? importForm.brandName : brand.value)
   importOpen.value = true
 }
+
+watch(
+  () => props.showImport,
+  (open) => {
+    if (open) {
+      openImport()
+    }
+  },
+  { immediate: true },
+)
 
 function startImport() {
   if (canStart.value) {
@@ -138,18 +173,24 @@ async function confirmCancel(job) {
         <el-tag v-if="activeJob" :type="GOODS_SYNC_STATUS[activeJob.status]?.[1]" size="small">
           {{ GOODS_SYNC_STATUS[activeJob.status]?.[0] }}
         </el-tag>
-        <el-button type="primary" @click="openImport">
+        <el-button type="primary" :disabled="!brands.length" @click="openImport">
           <AppIcon name="upload" :size="15" />
           <span>导入商品</span>
         </el-button>
       </div>
     </header>
 
+    <CatalogBrandScopeNotice
+      :error="brandError"
+      :unassigned="unassigned"
+      empty-message="当前没有可导入的品牌，请联系管理员核对品牌分工。"
+      @retry="loadBrands"
+    />
     <div class="source-panel">
       <div class="source-panel-top">
         <el-tabs :model-value="brand" aria-label="商品品牌" @update:model-value="selectBrand">
-          <el-tab-pane name="all" label="全部" />
-          <el-tab-pane v-for="name in GOODS_BRANDS" :key="name" :name="name" :label="name" />
+          <el-tab-pane v-if="brands.length !== 1" name="all" label="全部" />
+          <el-tab-pane v-for="name in brands" :key="name" :name="name" :label="name" />
         </el-tabs>
         <el-button text type="primary" :disabled="Boolean(action)" @click="refresh">刷新</el-button>
       </div>
@@ -178,7 +219,7 @@ async function confirmCancel(job) {
           </el-input>
         </el-form-item>
         <div class="source-filter-actions">
-          <el-button @click="reset">重置</el-button>
+          <el-button @click="reset(brands.length === 1 ? brands[0] : 'all')">重置</el-button>
           <el-button native-type="submit" type="primary">查询</el-button>
         </div>
       </el-form>
@@ -186,7 +227,7 @@ async function confirmCancel(job) {
       <el-alert v-if="error" :title="error.message" type="error" :closable="false" show-icon />
       <el-table
         v-else
-        :data="data?.items ?? []"
+        :data="brands.length ? (data?.items ?? []) : []"
         :empty-text="
           loading
             ? '正在读取商品…'
@@ -241,6 +282,12 @@ async function confirmCancel(job) {
       width="min(460px, calc(100vw - 24px))"
       destroy-on-close
     >
+      <CatalogBrandScopeNotice
+        :error="brandError"
+        :unassigned="unassigned"
+        empty-message="当前没有可导入的品牌，请联系管理员核对品牌分工。"
+        @retry="loadBrands"
+      />
       <el-alert v-if="jobsError" :title="jobsError" type="error" :closable="false" show-icon>
         <el-button link type="primary" @click="refreshJobs()">重新获取任务状态</el-button>
       </el-alert>
@@ -261,8 +308,13 @@ async function confirmCancel(job) {
         @submit.prevent
       >
         <el-form-item label="品牌" required>
-          <el-select v-model="importForm.brandName" placeholder="选择商品品牌">
-            <el-option v-for="name in GOODS_BRANDS" :key="name" :label="name" :value="name" />
+          <el-select
+            v-model="importForm.brandName"
+            aria-label="导入品牌"
+            placeholder="选择商品品牌"
+            :disabled="brands.length < 2"
+          >
+            <el-option v-for="name in brands" :key="name" :label="name" :value="name" />
           </el-select>
         </el-form-item>
         <el-form-item label="导入范围" required>

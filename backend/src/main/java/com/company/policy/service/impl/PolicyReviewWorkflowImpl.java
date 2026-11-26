@@ -12,7 +12,6 @@ import com.company.policy.vo.PolicyResponse.Snapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,7 +30,12 @@ class PolicyReviewWorkflowImpl implements PolicyReviewWorkflow {
 
     @Override
     public void lockForSubmission(PolicyApply entry) {
-        if (settings.lockForSubmission(entry.getTenantKey(), entry.getApplicantId()) == 0) {
+        if (settings.lockForSubmission(
+                        entry.getTenantKey(),
+                        entry.getApplicantId(),
+                        entry.getBrandId(),
+                        entry.getSeriesId())
+                == 0) {
             throw new ApiException(
                     HttpStatus.CONFLICT,
                     "POLICY_REVIEW_SETTINGS_REQUIRED",
@@ -45,25 +49,39 @@ class PolicyReviewWorkflowImpl implements PolicyReviewWorkflow {
         var route = coverage.workflowRoute(entry, confirmed, at);
         var tenant = entry.getTenantKey();
         var assigned =
-                settings.assign(tenant, entry.getApplicantId(), route.requiresProductReview());
+                settings.assign(
+                        tenant,
+                        entry.getApplicantId(),
+                        entry.getBrandId(),
+                        entry.getSeriesId(),
+                        route.requiresProductReview());
         var stage = route.requiresProductReview() ? "PRODUCT_REVIEW" : "PURCHASE_REVIEW";
         long id = entry.getId();
         int version = confirmed.submissionVersion();
         try {
+            com.fasterxml.jackson.databind.node.ObjectNode evidence = json.valueToTree(route);
+            var preset = evidence.putObject("presetOwners");
+            preset.put("brandId", entry.getBrandId().toString());
+            preset.put("seriesId", entry.getSeriesId().toString());
+            preset.put("productMode", assigned.productMode());
+            preset.put("purchaseUserId", assigned.purchaseReviewer().getId().toString());
+            if (assigned.productReviewer() != null)
+                preset.put("productUserId", assigned.productReviewer().getId().toString());
             if (workflow.insertRound(
                             tenant,
                             id,
                             version,
                             assigned.version(),
                             stage,
-                            json.writeValueAsString(route),
+                            json.writeValueAsString(evidence),
                             at)
                     != 1) throw new IllegalStateException("无法冻结本轮审核阶段。");
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法冻结本轮分流依据。", error);
         }
-        insertMembers(tenant, id, version, "PRODUCT", assigned.productReviewers());
-        insertMembers(tenant, id, version, "PURCHASE", assigned.purchaseReviewers());
+        if (assigned.productReviewer() != null)
+            insertMember(tenant, id, version, "PRODUCT", assigned.productReviewer());
+        insertMember(tenant, id, version, "PURCHASE", assigned.purchaseReviewer());
         notifications.submitted(
                 tenant, id, version, route.requiresProductReview(), route.summary(), at);
         return stage;
@@ -81,12 +99,9 @@ class PolicyReviewWorkflowImpl implements PolicyReviewWorkflow {
         notifications.revisionSubmitted(tenant, id, version, memberId, owner, at);
     }
 
-    private void insertMembers(
-            String tenant, long id, int version, String group, List<UserInfo> members) {
-        for (int i = 0; i < members.size(); i += 500) {
-            var page = members.subList(i, Math.min(i + 500, members.size()));
-            if (workflow.insertMembers(tenant, id, version, group, page) != page.size())
-                throw new IllegalStateException("无法冻结本轮审核成员。");
-        }
+    private void insertMember(
+            String tenant, long id, int version, String group, UserInfo reviewer) {
+        if (workflow.insertMember(tenant, id, version, group, reviewer) != 1)
+            throw new IllegalStateException("无法保存本轮预设审核人。");
     }
 }

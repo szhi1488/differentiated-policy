@@ -129,7 +129,15 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
             LocalDateTime submittedAt,
             long auditId,
             PolicyRouteSummary.Evaluation evaluation) {
-        var options = adjustmentOptions(entry, asOf);
+        var goods = snapshot.goods();
+        if (goods == null || goods.isEmpty()) throw reconfirmWorkflow();
+        var category = goods.get(0);
+        var options =
+                adjustmentOptions(
+                        entry,
+                        asOf,
+                        PolicyFormValidation.id(category.brandId()),
+                        PolicyFormValidation.id(category.seriesId()));
         var changes =
                 snapshot.consent() == null
                         ? List.<EndAdjustment>of()
@@ -221,10 +229,11 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
 
     @Override
     public List<AdjustmentOption> adjustableFor(PolicyApply applicant, LocalDateTime asOf) {
-        return List.copyOf(adjustmentOptions(applicant, asOf).values());
+        return List.copyOf(adjustmentOptions(applicant, asOf, null, null).values());
     }
 
-    private Map<Target, AdjustmentOption> adjustmentOptions(PolicyApply entry, LocalDateTime asOf) {
+    private Map<Target, AdjustmentOption> adjustmentOptions(
+            PolicyApply entry, LocalDateTime asOf, Long brandId, Long seriesId) {
         var options = new LinkedHashMap<Target, AdjustmentOption>();
         var assigned = platforms.assigned(entry.getTenantKey(), entry.getApplicantId());
         for (var old :
@@ -232,7 +241,9 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
                         entry.getTenantKey(),
                         entry.getApplicantId(),
                         asOf,
-                        asOf.toLocalDate().toString())) {
+                        asOf.toLocalDate().toString(),
+                        brandId,
+                        seriesId)) {
             var start = approvedTime(old.startTime());
             if (start.isBefore(old.auditTime())) start = old.auditTime();
             var id = Long.toString(old.policyId());
@@ -362,15 +373,17 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
             String channel,
             String platform,
             long goodsId,
-            LocalDateTime requestedAt) {
+            LocalDateTime requestedAt,
+            List<String> brandNames) {
         var clock = now();
         var at = requestedAt == null ? clock : requestedAt;
+        var config = reviews.configuration(goodsId);
+        requireReadableBrand(brandNames, config == null ? null : config.brandName());
+        if (config == null) return new Effective(formatTime(at), List.of());
         PolicyApplicability.Scope scope;
         if ("RETAIL".equals(channel))
             scope = new PolicyApplicability.Scope(platform, goodsId, null, null, null);
         else {
-            var config = reviews.configuration(goodsId);
-            if (config == null) return new Effective(formatTime(at), List.of());
             scope =
                     new PolicyApplicability.Scope(
                             platform, null, config.spuId(), config.ram(), config.rom());
@@ -396,6 +409,12 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
         return new Effective(formatTime(at), applied);
     }
 
+    private static void requireReadableBrand(List<String> brandNames, String brandName) {
+        if (brandNames != null && (brandName == null || !brandNames.contains(brandName)))
+            throw new ApiException(
+                    HttpStatus.FORBIDDEN, "POLICY_SUBSIDY_BRAND_FORBIDDEN", "当前机型不在本人负责的采购品牌内。");
+    }
+
     @Override
     public List<PolicyApplicability.Scope> adoptedScopes(
             String tenant,
@@ -417,7 +436,12 @@ class PolicyCoverageServiceImpl implements PolicyCoverageService {
 
     @Override
     public PolicySubsidyTimeline subsidyTimeline(
-            String tenant, PolicyTimelineQuery query, List<ChannelPlatform> scopes) {
+            String tenant,
+            PolicyTimelineQuery query,
+            List<ChannelPlatform> scopes,
+            List<String> brandNames) {
+        if (brandNames != null)
+            requireReadableBrand(brandNames, reviews.modelBrandName(query.spuId()));
         var asOf = now();
         if (scopes.isEmpty()) return new PolicySubsidyTimeline(formatTime(asOf), 0, List.of());
         var goods = reviews.configurationGoods(query.spuId(), query.ram(), query.rom());

@@ -3,13 +3,13 @@ import { request } from './request'
 const usersPath = '/api/admin/users'
 const userPath = (id) => `${usersPath}/${encodeURIComponent(id)}`
 
-export function listUsers({ page, pageSize, keyword, roleType, status }, signal) {
+export function listUsers({ page, pageSize, keyword, roleCode, status }, signal) {
   const params = new URLSearchParams({ page, pageSize })
   if (keyword) {
     params.set('keyword', keyword)
   }
-  if (roleType) {
-    params.set('roleType', roleType)
+  if (roleCode) {
+    params.set('roleCode', roleCode)
   }
   if (status) {
     params.set('status', status)
@@ -25,43 +25,59 @@ export function readUser(id, signal) {
   return request(userPath(id), { signal })
 }
 
-function patchUser(path, body, signal) {
+function write(path, method, body, signal) {
   return request(path, {
-    method: 'PATCH',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   })
 }
-
-export function updateUserRole(user, roleType, signal) {
-  return patchUser(
-    `${userPath(user.id)}/role`,
-    {
-      roleType,
-      expectedRoleType: user.roleType,
-      expectedStatus: user.status,
-    },
+export function updateUserRoles(user, roleCodes, signal) {
+  return write(
+    userPath(user.id) + '/roles',
+    'PATCH',
+    { roleCodes, expectedVersion: user.authVersion },
     signal,
   )
 }
-
 export function updateUserStatus(user, status, signal) {
-  return patchUser(
-    `${userPath(user.id)}/status`,
-    {
-      status,
-      expectedRoleType: user.roleType,
-      expectedStatus: user.status,
-    },
+  return write(
+    userPath(user.id) + '/status',
+    'PATCH',
+    { status, expectedVersion: user.authVersion },
     signal,
   )
 }
-
+export function readRoles(signal) {
+  return request('/api/admin/roles', { signal })
+}
+export function saveRole(id, body, signal) {
+  return write(
+    '/api/admin/roles' + (id ? '/' + encodeURIComponent(id) : ''),
+    id ? 'PUT' : 'POST',
+    body,
+    signal,
+  )
+}
 export function readPlatformOwners(signal) {
   return request(usersPath + '/platform-assignments', { signal })
 }
-
-export function updateUserPlatforms(id, platforms, expectedPlatforms, signal) {
-  return patchUser(userPath(id) + '/platforms', { platforms, expectedPlatforms }, signal)
+export function updatePlatformTeam(team, members, signal) {
+  return write(
+    usersPath +
+      '/platform-assignments/' +
+      encodeURIComponent(team.perspective) +
+      '/' +
+      encodeURIComponent(team.platformCode),
+    'PUT',
+    { expectedVersion: team.version, members },
+    signal,
+  )
+}
+export function findPlatformCandidates(keyword, page, signal) {
+  return request(
+    usersPath + '/platform-candidates?' + new URLSearchParams({ keyword, page, pageSize: 20 }),
+    { signal },
+  )
 }

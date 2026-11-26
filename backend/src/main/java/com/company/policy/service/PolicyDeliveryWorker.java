@@ -7,6 +7,6 @@ public interface PolicyDeliveryWorker {
 
     record TrialResult(String status, String receiptId, String lastError) {}
 
-    /** 按设置页的单号、轮次和投递编号处理一条初审卡，返回原登记的最新回执。 */
+    /** 按单号、轮次和投递编号处理一条初审卡，返回原登记的最新回执。 */
     TrialResult processTrialCard(long policyId, int version, String deliveryKey);
 }

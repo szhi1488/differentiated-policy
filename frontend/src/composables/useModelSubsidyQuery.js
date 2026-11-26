@@ -1,37 +1,28 @@
 import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
-import { readApplicantSubsidyOptions, readCatalogGoodsSummary } from '../api/catalog'
-import { readAssignedPlatforms } from '../api/policies'
+import { readApplicantSubsidyOptions } from '../api/catalog'
+import { readMemberPlatforms } from '../api/policies'
 import { readSubsidyTimeline, SUBSIDY_UPDATE_KEY } from '../api/subsidy-timeline'
 import { CHANNEL_LABELS, PLATFORM_LABELS } from '../constants/policy'
 import { catalogGoodsNameLabel } from '../utils/catalog-dictionary'
 import { readTimelineHistory } from '../utils/policy-timeline'
 import { timelineMonthDates, timelineTimeFromValue } from '../utils/subsidy-timeline'
+import { authSession } from './useAuthSession'
 import { useLatestQuery } from './useLatestQuery'
 
-async function readDirectory(applicant, signal) {
-  if (applicant) {
-    const { brands, series, models, configurations } = await readApplicantSubsidyOptions(signal)
-    const names = new Map(brands.map(({ id, name }) => [id, name]))
-    const seriesBrands = new Map(series.map(({ id, brandId }) => [id, names.get(brandId)]))
-    return directoryModels(
-      models.map(({ id, seriesId, name, edition }) => ({
-        spuId: id,
-        brand: seriesBrands.get(seriesId),
-        modelName: name,
-        edition,
-      })),
-      configurations,
-    )
-  }
-  const summary = await readCatalogGoodsSummary(signal, { includeModelConfigurations: true })
-  const seriesBrands = new Map(
-    summary.series.map(({ seriesId, brandName }) => [seriesId, brandName]),
-  )
+async function readDirectory(signal) {
+  const { brands, series, models, configurations } = await readApplicantSubsidyOptions(signal)
+  const names = new Map(brands.map(({ id, name }) => [id, name]))
+  const seriesBrands = new Map(series.map(({ id, brandId }) => [id, names.get(brandId)]))
   return directoryModels(
-    summary.models.map((model) => ({ ...model, brand: seriesBrands.get(model.seriesId) })),
-    summary.modelConfigurations,
+    models.map(({ id, seriesId, name, edition }) => ({
+      spuId: id,
+      brand: seriesBrands.get(seriesId),
+      modelName: name,
+      edition,
+    })),
+    configurations,
   )
 }
 
@@ -62,6 +53,14 @@ export function useModelSubsidyQuery(applicant) {
   const catalog = useLatestQuery()
   const timeline = useLatestQuery()
   const permissions = useLatestQuery()
+  const purchaseScoped = computed(() => {
+    const user = authSession.user.value
+    return (
+      !user?.roleCodes?.includes('ADMIN') &&
+      (user?.roleCodes?.includes('PURCHASE') ||
+        user?.permissions?.includes('policy.purchase.decide_assigned'))
+    )
+  })
   const brand = ref(''),
     modelId = ref(''),
     configId = ref(''),
@@ -91,16 +90,20 @@ export function useModelSubsidyQuery(applicant) {
   const configOptions = computed(() => model.value?.configs ?? [])
   const config = computed(() => configOptions.value.find((c) => c.id === configId.value))
   watch(
-    modelOptions,
-    (options) => {
-      modelId.value = options[0]?.spuId ?? ''
+    [brand, modelOptions],
+    ([currentBrand, options], [previousBrand]) => {
+      if (currentBrand !== previousBrand || !options.some((item) => item.spuId === modelId.value)) {
+        modelId.value = options[0]?.spuId ?? ''
+      }
     },
     { flush: 'sync' },
   )
   watch(
-    configOptions,
-    (options) => {
-      configId.value = options[0]?.id ?? ''
+    [modelId, configOptions],
+    ([currentModel, options], [previousModel]) => {
+      if (currentModel !== previousModel || !options.some((item) => item.id === configId.value)) {
+        configId.value = options[0]?.id ?? ''
+      }
     },
     { flush: 'sync' },
   )
@@ -183,12 +186,32 @@ export function useModelSubsidyQuery(applicant) {
           option.platformCode === params?.platformCode,
       )?.value ?? ''
   }
-  async function loadCatalog() {
-    await catalog.run((signal) => readDirectory(applicant, signal))
-    if (catalog.data.value?.length && hasPlatforms.value) {
-      applyFilters(lastQuery.value?.params)
-      await search()
+  async function loadCatalog(refresh = false) {
+    if (catalog.loading.value) {
+      return
     }
+    await catalog.run(readDirectory, { keepData: refresh })
+    const models = catalog.data.value
+    if (catalog.loading.value || !models || !hasPlatforms.value) {
+      return
+    }
+    if (!models.length) {
+      brand.value = ''
+      lastQuery.value = null
+      timeline.clear()
+      return
+    }
+    const saved = lastQuery.value?.params
+    const savedModel = models.find((item) => item.spuId === saved?.spuId)
+    if (
+      refresh &&
+      brands.value.includes(brand.value) &&
+      savedModel?.configs.some((item) => item.ram === saved.ram && item.rom === saved.rom)
+    ) {
+      return loadHistory(lastQuery.value, true)
+    }
+    applyFilters(saved)
+    return search()
   }
   function locateCurrentTime() {
     const today = timelineTimeFromValue(Date.now()).slice(0, 10)
@@ -200,7 +223,7 @@ export function useModelSubsidyQuery(applicant) {
       return
     }
     const previous = platformOptions.value
-    await permissions.run(readAssignedPlatforms, { keepData: true })
+    await permissions.run(readMemberPlatforms, { keepData: true })
     const current = platformOptions.value
     if (!current.length) {
       platform.value = ''
@@ -217,21 +240,21 @@ export function useModelSubsidyQuery(applicant) {
       await refreshHistory()
     }
   }
-  function refreshHistory() {
+  function refreshHistory(keepData = true) {
     // 只刷新已应用的查询；表单里尚未提交的筛选继续留给用户编辑。
-    if (
-      document.hidden ||
-      !lastQuery.value ||
-      !hasPlatforms.value ||
-      !catalog.data.value?.length ||
-      catalog.loading.value
-    ) {
+    if (document.hidden || !hasPlatforms.value || catalog.loading.value) {
       return
     }
     if (applicant && timeline.error.value?.code === 'POLICY_PLATFORM_FORBIDDEN') {
       return refreshPlatforms(true)
     }
-    return loadHistory(lastQuery.value, true)
+    if (purchaseScoped.value || timeline.error.value?.code === 'POLICY_SUBSIDY_BRAND_FORBIDDEN') {
+      return loadCatalog(true)
+    }
+    if (!lastQuery.value || !catalog.data.value?.length) {
+      return
+    }
+    return loadHistory(lastQuery.value, keepData)
   }
   function onVisible() {
     if (!document.hidden) {
@@ -273,6 +296,7 @@ export function useModelSubsidyQuery(applicant) {
     refreshPlatforms,
     dates,
     brands,
+    purchaseScoped,
     modelOptions,
     configOptions,
     catalogStatus: catalog.status,
@@ -284,9 +308,6 @@ export function useModelSubsidyQuery(applicant) {
     search,
     resetFilters: () => applyFilters(),
     locateCurrentTime,
-    retryHistory: () =>
-      applicant && timeline.error.value?.code === 'POLICY_PLATFORM_FORBIDDEN'
-        ? refreshPlatforms(true)
-        : loadHistory(lastQuery.value),
+    retryHistory: () => refreshHistory(false),
   }
 }

@@ -3,7 +3,9 @@ package com.company.policy.service.impl;
 import com.company.policy.common.config.FeishuProperties;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.entity.UserInfo;
+import com.company.policy.mapper.RoleAccessMapper;
 import com.company.policy.mapper.UserInfoMapper;
+import com.company.policy.service.AuthorizationService;
 import com.company.policy.service.UserInfoService;
 import com.company.policy.vo.CurrentUserResponse;
 import java.net.URI;
@@ -17,12 +19,21 @@ public class UserInfoServiceImpl implements UserInfoService {
     private final UserInfoMapper mapper;
     private final FeishuProperties config;
 
-    public UserInfoServiceImpl(UserInfoMapper mapper, FeishuProperties config) {
+    private final AuthorizationService authorization;
+    private final RoleAccessMapper roles;
+
+    public UserInfoServiceImpl(
+            UserInfoMapper mapper,
+            FeishuProperties config,
+            AuthorizationService authorization,
+            RoleAccessMapper roles) {
+        this.authorization = authorization;
+        this.roles = roles;
         this.mapper = mapper;
         this.config = config;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     @Override
     public CurrentUserResponse saveVerifiedIdentity(
             String tenantKey, String openId, String unionId, String name, String avatarUrl) {
@@ -39,24 +50,23 @@ public class UserInfoServiceImpl implements UserInfoService {
         identity.setName(name);
         identity.setAvatarUrl(normalizeAvatarUrl(avatarUrl));
         try {
+            authorization.ensureDefaults(tenantKey);
+            var existing = mapper.findIdentity(tenantKey, openId);
             mapper.upsertVerifiedIdentity(identity);
             var saved = mapper.findIdentity(tenantKey, openId);
             if (saved == null) {
                 throw databaseUnavailable();
             }
             requireEnabled(saved);
-            return new CurrentUserResponse(
-                    saved.getId().toString(),
-                    saved.getOpenId(),
-                    saved.getTenantKey(),
-                    saved.getName(),
-                    saved.getRoleType(),
-                    saved.getAvatarUrl());
+            if (existing == null)
+                roles.grantRole(tenantKey, saved.getId(), roles.roleId(tenantKey, "OPERATIONS"));
+            return authorization.current(saved);
         } catch (DataAccessException ignored) {
             throw databaseUnavailable();
         }
     }
 
+    @Transactional(readOnly = true)
     @Override
     public CurrentUserResponse restoreSessionUser(CurrentUserResponse identity) {
         if (!config.hasCompanyTenant()) {
@@ -79,13 +89,7 @@ public class UserInfoServiceImpl implements UserInfoService {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "LOGIN_REQUIRED", "登录身份已变化，请重新通过飞书授权。");
         }
         requireEnabled(saved);
-        return new CurrentUserResponse(
-                identity.id(),
-                identity.openId(),
-                identity.tenantKey(),
-                identity.name(),
-                saved.getRoleType(),
-                identity.avatarUrl());
+        return authorization.current(saved);
     }
 
     private static void requireEnabled(UserInfo saved) {

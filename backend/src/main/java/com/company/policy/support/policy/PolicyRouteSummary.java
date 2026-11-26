@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** 同一申请整轮共用的路由结果。保留全部核对依据，短摘要只列前几项。 */
+@com.fasterxml.jackson.annotation.JsonIgnoreProperties("presetOwners")
 public record PolicyRouteSummary(
         boolean requiresProductReview,
         int triggerSegments,

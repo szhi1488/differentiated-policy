@@ -19,7 +19,10 @@ export function createAuthSession() {
     if (
       login.value?.user?.id !== value?.user?.id ||
       login.value?.user?.tenantKey !== value?.user?.tenantKey ||
-      login.value?.user?.roleType !== value?.user?.roleType
+      JSON.stringify([...(login.value?.user?.permissions ?? [])].sort()) !==
+        JSON.stringify([...(value?.user?.permissions ?? [])].sort()) ||
+      JSON.stringify([...(login.value?.user?.roleCodes ?? [])].sort()) !==
+        JSON.stringify([...(value?.user?.roleCodes ?? [])].sort())
     ) {
       revision.value++
     }

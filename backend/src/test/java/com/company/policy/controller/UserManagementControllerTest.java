@@ -53,6 +53,7 @@ class UserManagementControllerTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.company.policy.service.AuthorizationService authorization;
     @Autowired LoginSessionService sessions;
     @Autowired FeishuProperties config;
     @Autowired UserManagementMapper userMapper;
@@ -61,10 +62,12 @@ class UserManagementControllerTest {
 
     @BeforeEach
     void setup() {
+        authorization.ensureDefaults(COMPANY);
+        authorization.ensureDefaults("other-company");
         addUser(1, COMPANY, "列表管理员", "采购部", "ADMIN", 0, "2026-11-16 08:00:00");
-        addUser(2, COMPANY, "张三", "零售业务部", "APPLICANT", 0, "2026-11-17 09:00:00");
+        addUser(2, COMPANY, "张三", "零售业务部", "OPERATIONS", 0, "2026-11-17 09:00:00");
         addUser(3, COMPANY, "Alice采购", "采购部", "ADMIN", 0, "2026-11-17 09:00:00");
-        addUser(4, COMPANY, "李四", null, "APPLICANT", 1, "2026-11-17 10:00:00");
+        addUser(4, COMPANY, "李四", null, "OPERATIONS", 1, "2026-11-17 10:00:00");
         addUser(5, COMPANY, "王五", "采购部", "ADMIN", 1, "2026-11-17 11:00:00");
         addUser(6, "other-company", "Alice采购", "采购部", "ADMIN", 0, "2026-11-17 12:00:00");
         admin = session(1, COMPANY, "ADMIN");
@@ -73,13 +76,13 @@ class UserManagementControllerTest {
     @Test
     void detailReturnsSavedProfileAndApplicationOpenIdWithoutExtraIdentityData() throws Exception {
         var result = read(get(PATH + "/3").session(admin));
-        assertThat(result.size()).isEqualTo(8);
+        assertThat(result.size()).isEqualTo(9);
         assertThat(result.path("id").asText()).isEqualTo("3");
         assertThat(result.path("name").asText()).isEqualTo("Alice采购");
         assertThat(result.path("avatarUrl").asText()).isEqualTo("https://example.test/avatar.png");
         assertThat(result.path("department").asText()).isEqualTo("采购部");
         assertThat(result.path("openId").asText()).isEqualTo("open-3");
-        assertThat(result.path("roleType").asText()).isEqualTo("ADMIN");
+        assertThat(result.at("/roleCodes/0").asText()).isEqualTo("ADMIN");
         assertThat(result.path("status").asText()).isEqualTo("ENABLED");
         assertThat(result.path("createdAt").asText()).isEqualTo("2026-11-17 09:00:00");
         assertThat(result.has("tenantKey")).isFalse();
@@ -94,7 +97,7 @@ class UserManagementControllerTest {
         var result = read(get(PATH + "/4").session(admin));
         assertThat(result.path("name").asText()).isEqualTo("李四");
         assertThat(result.path("status").asText()).isEqualTo("DISABLED");
-        assertThat(result.path("roleType").asText()).isEqualTo("APPLICANT");
+        assertThat(result.at("/roleCodes/0").asText()).isEqualTo("OPERATIONS");
         assertThat(result.path("department").isNull()).isTrue();
         assertThat(result.path("avatarUrl").isNull()).isTrue();
         assertThat(result.path("openId").asText()).isEqualTo("open-4");
@@ -139,7 +142,7 @@ class UserManagementControllerTest {
     @Test
     void detailKeepsBigintIdAsString() throws Exception {
         long id = 9007199254740993L;
-        addUser(id, COMPANY, "长 ID 用户", null, "APPLICANT", 0, "2026-11-17 13:00:00");
+        addUser(id, COMPANY, "长 ID 用户", null, "OPERATIONS", 0, "2026-11-17 13:00:00");
         var result = read(get(PATH + "/" + id).session(admin));
         assertThat(result.path("id").isTextual()).isTrue();
         assertThat(result.path("id").asText()).isEqualTo("9007199254740993");
@@ -160,13 +163,12 @@ class UserManagementControllerTest {
         var result = read(get(PATH + "/stats").session(admin));
         assertThat(result.size()).isEqualTo(4);
         assertThat(result.path("total").asLong()).isEqualTo(5);
-        assertThat(result.path("enabledApplicants").asLong()).isEqualTo(1);
+        assertThat(result.path("enabledUsers").asLong()).isEqualTo(3);
         assertThat(result.path("enabledAdmins").asLong()).isEqualTo(2);
         assertThat(result.path("disabledUsers").asLong()).isEqualTo(2);
         assertThat(result.path("total").asLong())
                 .isEqualTo(
-                        result.path("enabledApplicants").asLong()
-                                + result.path("enabledAdmins").asLong()
+                        result.path("enabledUsers").asLong()
                                 + result.path("disabledUsers").asLong());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM user_info", Long.class)).isEqualTo(6);
     }
@@ -179,16 +181,17 @@ class UserManagementControllerTest {
                         get(PATH + "/stats")
                                 .session(admin)
                                 .param("keyword", "不存在")
-                                .param("roleType", "ROOT")
+                                .param("roleCode", "ROOT")
                                 .param("status", "DISABLED")
                                 .param("page", "-1")
                                 .param("pageSize", "1")
                                 .param("tenantKey", "other-company"));
         assertThat(result.path("total").asLong()).isEqualTo(5);
-        assertThat(result.path("enabledApplicants").asLong()).isEqualTo(1);
+        assertThat(result.path("enabledUsers").asLong()).isEqualTo(3);
         assertThat(result.path("enabledAdmins").asLong()).isEqualTo(2);
         assertThat(result.path("disabledUsers").asLong()).isEqualTo(2);
-        jdbc.update("UPDATE user_info SET role_type='ADMIN', is_deleted=0 WHERE id=4");
+        com.company.policy.RbacFixture.setRole(jdbc, 4, "ADMIN");
+        jdbc.update("UPDATE user_info SET is_deleted=0 WHERE id=4");
         // 测试事务跨请求复用 SqlSession；JDBC 变更后清理一级缓存，模拟独立 HTTP 请求。
         sqlSession.clearCache();
         var updated = read(get(PATH + "/stats").session(admin));
@@ -201,7 +204,7 @@ class UserManagementControllerTest {
     void statsReturnZeroForEmptyAggregationRatherThanNull() {
         var result = userMapper.stats("empty-company");
         assertThat(result.total()).isZero();
-        assertThat(result.enabledApplicants()).isZero();
+        assertThat(result.enabledUsers()).isZero();
         assertThat(result.enabledAdmins()).isZero();
         assertThat(result.disabledUsers()).isZero();
     }
@@ -211,7 +214,7 @@ class UserManagementControllerTest {
         jdbc.update("UPDATE user_info SET is_deleted=1 WHERE tenant_key=? AND id<>1", COMPANY);
         var result = read(get(PATH + "/stats").session(admin));
         assertThat(result.path("total").asLong()).isEqualTo(5);
-        assertThat(result.path("enabledApplicants").asLong()).isZero();
+        assertThat(result.path("enabledUsers").asLong()).isEqualTo(1);
         assertThat(result.path("enabledAdmins").asLong()).isEqualTo(1);
         assertThat(result.path("disabledUsers").asLong()).isEqualTo(4);
     }
@@ -229,7 +232,7 @@ class UserManagementControllerTest {
                 .isEqualTo("https://example.test/avatar.png");
         for (var user : result.path("items")) {
             assertThat(user.path("id").isTextual()).isTrue();
-            assertThat(user.size()).isEqualTo(7);
+            assertThat(user.size()).isEqualTo(8);
             assertThat(user.has("tenantKey")).isFalse();
             assertThat(user.has("openId")).isFalse();
             assertThat(user.has("unionId")).isFalse();
@@ -245,20 +248,20 @@ class UserManagementControllerTest {
         var applicant =
                 read(
                         list().param("keyword", " 张 ")
-                                .param("roleType", "APPLICANT")
+                                .param("roleCode", "OPERATIONS")
                                 .param("status", "ENABLED"));
         assertThat(ids(applicant)).containsExactly("2");
         var disabled =
                 read(
                         list().param("keyword", "采购")
-                                .param("roleType", " ADMIN ")
+                                .param("roleCode", " ADMIN ")
                                 .param("status", "DISABLED"));
         assertThat(disabled.path("total").asLong()).isEqualTo(1);
         assertThat(ids(disabled)).containsExactly("5");
         assertThat(ids(read(list().param("keyword", "ALICE")))).containsExactly("3");
         assertThat(
                         read(list().param("keyword", "  ")
-                                        .param("roleType", "")
+                                        .param("roleCode", "")
                                         .param("status", " "))
                                 .path("total")
                                 .asLong())
@@ -285,7 +288,7 @@ class UserManagementControllerTest {
     @Test
     void keywordTreatsWildcardsAndSqlTextAsLiteralAndIdsStayPrecise() throws Exception {
         long largeId = 9007199254740993L;
-        addUser(largeId, COMPANY, "特殊字符用户", "质检%_!\\部", "APPLICANT", 0, "2026-11-17 13:00:00");
+        addUser(largeId, COMPANY, "特殊字符用户", "质检%_!\\部", "OPERATIONS", 0, "2026-11-17 13:00:00");
         for (String keyword : List.of("%", "_", "!", "\\")) {
             var result = read(list().param("keyword", keyword));
             assertThat(result.path("total").asLong()).isEqualTo(1);
@@ -305,7 +308,7 @@ class UserManagementControllerTest {
         "pageSize,-1",
         "pageSize,101",
         "pageSize,1.5",
-        "roleType,ROOT",
+        "roleCode,ROOT",
         "status,ACTIVE"
     })
     void rejectsInvalidFiltersAndPagination(String key, String value) throws Exception {
@@ -327,7 +330,7 @@ class UserManagementControllerTest {
     @Test
     void defaultPageSizeIsTenAndFiltersCannotSelectAnotherCompany() throws Exception {
         for (long id = 10; id < 21; id++) {
-            addUser(id, COMPANY, "分页用户" + id, "运营部", "APPLICANT", 0, "2026-11-17 14:00:00");
+            addUser(id, COMPANY, "分页用户" + id, "运营部", "OPERATIONS", 0, "2026-11-17 14:00:00");
         }
         var result = read(list().param("tenantKey", "other-company"));
         assertThat(result.path("total").asLong()).isEqualTo(16);
@@ -350,8 +353,14 @@ class UserManagementControllerTest {
                         session(999, COMPANY, "ADMIN"),
                         established(
                                 new CurrentUserResponse(
-                                        "999", "open-1", COMPANY, "伪造本地主键", "ADMIN", null)))) {
-            mvc.perform(get(PATH).session(invalid).param("roleType", "ADMIN"))
+                                        "999",
+                                        "open-1",
+                                        COMPANY,
+                                        "伪造本地主键",
+                                        java.util.List.of("ADMIN"),
+                                        java.util.List.of(),
+                                        null)))) {
+            mvc.perform(get(PATH).session(invalid).param("roleCode", "ADMIN"))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.code").value("USER_ADMIN_REQUIRED"));
             mvc.perform(get(PATH + "/stats").session(invalid))
@@ -374,7 +383,8 @@ class UserManagementControllerTest {
 
     @Test
     void rechecksDatabaseRoleAndDisabledFlagInsteadOfTrustingOldSession() throws Exception {
-        jdbc.update("UPDATE user_info SET role_type = 'APPLICANT' WHERE id = 1");
+        com.company.policy.RbacFixture.setRole(jdbc, 1L, "OPERATIONS");
+        sqlSession.clearCache();
         mvc.perform(list())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("USER_ADMIN_REQUIRED"));
@@ -384,7 +394,7 @@ class UserManagementControllerTest {
         mvc.perform(get(PATH + "/2").session(admin))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("USER_ADMIN_REQUIRED"));
-        jdbc.update("UPDATE user_info SET role_type = 'ADMIN', is_deleted = 1 WHERE id = 1");
+        jdbc.update("UPDATE user_info SET is_deleted = 1 WHERE id = 1");
         mvc.perform(list())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("USER_ADMIN_REQUIRED"));
@@ -423,7 +433,13 @@ class UserManagementControllerTest {
                 .thenReturn(
                         new AuthSessionResponse(
                                 new CurrentUserResponse(
-                                        "1", "open-1", COMPANY, "管理员", "ADMIN", null),
+                                        "1",
+                                        "open-1",
+                                        COMPANY,
+                                        "管理员",
+                                        java.util.List.of("ADMIN"),
+                                        java.util.List.of(),
+                                        null),
                                 Instant.now().plusSeconds(3600)));
         var isolated =
                 MockMvcBuilders.standaloneSetup(new UserManagementController(service, login))
@@ -484,7 +500,13 @@ class UserManagementControllerTest {
     private MockHttpSession session(long id, String tenant, String role) {
         return established(
                 new CurrentUserResponse(
-                        String.valueOf(id), "open-" + id, tenant, "会话姓名", role, null));
+                        String.valueOf(id),
+                        "open-" + id,
+                        tenant,
+                        "会话姓名",
+                        java.util.List.of(role),
+                        java.util.List.of(),
+                        null));
     }
 
     private MockHttpSession established(CurrentUserResponse user) {
@@ -503,8 +525,8 @@ class UserManagementControllerTest {
             String createdAt) {
         jdbc.update(
                 """
-            INSERT INTO user_info (id, tenant_key, open_id, name, avatar_url, department, role_type, is_deleted, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO user_info (id, tenant_key, open_id, name, avatar_url, department, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 id,
                 tenant,
@@ -512,8 +534,8 @@ class UserManagementControllerTest {
                 name,
                 "https://example.test/avatar.png",
                 department,
-                role,
                 disabled,
                 createdAt);
+        com.company.policy.RbacFixture.setRole(jdbc, id, role);
     }
 }

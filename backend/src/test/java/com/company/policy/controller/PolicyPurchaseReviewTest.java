@@ -9,7 +9,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.company.policy.common.exception.ApiException;
-import com.company.policy.dto.PolicyReviewReassignmentRequest;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.service.PolicyReviewNotifications;
@@ -28,6 +27,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -50,6 +51,7 @@ import org.springframework.transaction.support.TransactionTemplate;
         })
 @AutoConfigureMockMvc
 class PolicyPurchaseReviewTest {
+    @Autowired com.company.policy.service.AuthorizationService roles;
     private static final String TENANT = "workflow-tenant";
     private static final AtomicLong IDS = new AtomicLong(500);
     private static final String PATH = "/api/admin/policies";
@@ -68,9 +70,11 @@ class PolicyPurchaseReviewTest {
 
     @BeforeEach
     void createActors() {
-        owner = actor("APPLICANT");
-        buyer = actor("ADMIN");
-        peer = actor("ADMIN");
+        jdbc.update("MERGE INTO brand(id,name) KEY(id) VALUES(80000,'审核品牌')");
+        jdbc.update("MERGE INTO series(id,brand_id,name) KEY(id) VALUES(80000,80000,'测试系列')");
+        owner = actor("OPERATIONS");
+        buyer = actor("ADMIN", "PURCHASE");
+        peer = actor("ADMIN", "PURCHASE");
     }
 
     @Test
@@ -99,6 +103,58 @@ class PolicyPurchaseReviewTest {
     }
 
     @Test
+    void buyersOnlySeeAndDecideTheirOwnBrandRounds() throws Exception {
+        var oppoBuyer = actor("PURCHASE");
+        var onePlusBuyer = actor("PURCHASE");
+        long oppo = policy(1, "PURCHASE_REVIEW");
+        long onePlus = policy(1, "PURCHASE_REVIEW");
+        seedScopedSnapshot(oppo, catalogGoods("OPPO手机", "Reno系列", "星河银"), null);
+        seedScopedSnapshot(onePlus, catalogGoods("一加手机", "Ace系列", "曜石黑"), null);
+        member(oppo, oppoBuyer, "PURCHASE", "ACTIVE");
+        member(onePlus, onePlusBuyer, "PURCHASE", "ACTIVE");
+
+        record Assignment(Actor buyer, long own, long other) {}
+        var assignments =
+                List.of(
+                        new Assignment(oppoBuyer, oppo, onePlus),
+                        new Assignment(onePlusBuyer, onePlus, oppo));
+        for (var assignment : assignments) {
+            var purchaser = assignment.buyer();
+            long other = assignment.other();
+            assertReadable(purchaser, assignment.own(), true);
+            mvc.perform(get(PATH).session(purchaser.session()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(1))
+                    .andExpect(jsonPath("$.counts.PENDING").value(1))
+                    .andExpect(jsonPath("$.items[0].id").value(Long.toString(assignment.own())));
+            mvc.perform(get(PATH + "/" + other).session(purchaser.session()))
+                    .andExpect(status().isNotFound());
+            mvc.perform(get(PATH + "/" + other + "/audit-logs").session(purchaser.session()))
+                    .andExpect(status().isNotFound());
+            mvc.perform(
+                            get("/api/policy-reviews/" + other)
+                                    .session(purchaser.session())
+                                    .param("submissionVersion", "1"))
+                    .andExpect(status().isNotFound());
+            review(purchaser, other, "APPROVE").andExpect(status().isNotFound());
+            review(purchaser, other, "REJECT").andExpect(status().isNotFound());
+            assertThat(decisions(other)).isZero();
+        }
+        for (var assignment : assignments) {
+            review(assignment.buyer(), assignment.own(), "APPROVE")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("APPROVED"));
+        }
+        for (var assignment : assignments) {
+            mvc.perform(get(PATH).session(assignment.buyer().session()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(1))
+                    .andExpect(jsonPath("$.counts.APPROVED").value(1))
+                    .andExpect(jsonPath("$.items[0].id").value(Long.toString(assignment.own())));
+        }
+    }
+
+    @Test
     void readAndWriteUseTheCurrentAssignmentAndDistinctActualSigners() throws Exception {
         long id = policy(1, "PURCHASE_REVIEW");
         member(id, buyer, "PURCHASE", "ACTIVE");
@@ -118,6 +174,134 @@ class PolicyPurchaseReviewTest {
         review(buyer, id, "REJECT").andExpect(status().isForbidden());
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(decisions(id)).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void resubmissionIsVisibleOnlyAfterItsOwnProductApproval(boolean sameBuyer) throws Exception {
+        var previous = actor("PURCHASE");
+        var successor = sameBuyer ? previous : actor("PURCHASE");
+        var product = actor("PRODUCT_OPS");
+        long id = policy(1, "PURCHASE_REVIEW");
+        member(id, previous, "PURCHASE", "ACTIVE");
+        review(previous, id, "REJECT").andExpect(status().isOk());
+        jdbc.update(
+                "UPDATE policy_apply SET current_version=2,record_version=4,status='PENDING' WHERE id=?",
+                id);
+        var snapshot =
+                (ObjectNode)
+                        json.readTree(
+                                jdbc.queryForObject(
+                                        "SELECT snapshot_data FROM policy_audit_log WHERE policy_id=? AND version=1",
+                                        String.class,
+                                        id));
+        snapshot.put("submissionVersion", 2);
+        jdbc.update(
+                "INSERT INTO policy_audit_log(policy_id,tenant_key,version,brand_id,series_id,perspective,snapshot_data) VALUES(?,?,2,80000,80000,'RETAIL',?)",
+                id,
+                TENANT,
+                snapshot.toString());
+        jdbc.update(
+                "INSERT INTO policy_review_round(policy_id,tenant_key,version,settings_version,stage,route_json) VALUES(?,?,2,1,'PRODUCT_REVIEW','{\"requiresProductReview\":true}')",
+                id,
+                TENANT);
+        jdbc.update(
+                "INSERT INTO policy_review_member(policy_id,tenant_key,version,group_code,user_id,display_name) VALUES(?,?,2,'PRODUCT',?,'当前初审')",
+                id,
+                TENANT,
+                product.id());
+        jdbc.update(
+                "INSERT INTO policy_review_member(policy_id,tenant_key,version,group_code,user_id,display_name) VALUES(?,?,2,'PURCHASE',?,'当前采购')",
+                id,
+                TENANT,
+                successor.id());
+        mvc.perform(get(PATH).session(previous.session()).param("keyword", "NUM" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(1))
+                .andExpect(jsonPath("$.items[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$.counts.REJECTED").value(1))
+                .andExpect(jsonPath("$.counts.PENDING").doesNotExist())
+                .andExpect(jsonPath("$.items[0].recordVersion").doesNotExist())
+                .andExpect(jsonPath("$.items[0].reviewable").value(false));
+        mvc.perform(get(PATH + "/" + id).session(previous.session()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policy.submissionVersion").value(1))
+                .andExpect(jsonPath("$.policy.recordVersion").doesNotExist());
+        mvc.perform(
+                        get("/api/policy-reviews/" + id)
+                                .session(previous.session())
+                                .param("submissionVersion", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentSubmissionVersion").value(1))
+                .andExpect(jsonPath("$.recordVersion").doesNotExist());
+        mvc.perform(get(PATH + "/" + id + "/audit-logs").session(previous.session()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].submissionVersion").value(1));
+        long hiddenLog =
+                jdbc.queryForObject(
+                        "SELECT id FROM policy_audit_log WHERE policy_id=? AND version=2",
+                        Long.class,
+                        id);
+        mvc.perform(get(PATH + "/" + id + "/audit-logs/" + hiddenLog).session(previous.session()))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        get("/api/policy-reviews/" + id)
+                                .session(previous.session())
+                                .param("submissionVersion", "2"))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        get(PATH + "/" + id + "/override-preview")
+                                .session(successor.session())
+                                .param("recordVersion", "4")
+                                .param("submissionVersion", "2"))
+                .andExpect(status().isNotFound());
+        review(successor, id, "REJECT", 4, 2).andExpect(status().isNotFound());
+        mvc.perform(get(PATH + "/" + id).session(buyer.session()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policy.reviewStage").value("PRODUCT_REVIEW"));
+        reviews.productReview(
+                product.account(), id, new PolicyReviewRequest(4, 2, "APPROVE", null));
+        mvc.perform(get(PATH + "/" + id).session(successor.session()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policy.submissionVersion").value(2))
+                .andExpect(jsonPath("$.policy.reviewStage").value("PURCHASE_REVIEW"))
+                .andExpect(jsonPath("$.policy.reviewable").value(true));
+        mvc.perform(
+                        get("/api/policy-reviews/" + id)
+                                .session(previous.session())
+                                .param("submissionVersion", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentSubmissionVersion").value(sameBuyer ? 2 : 1));
+    }
+
+    @Test
+    void initialReviewAndItsReturnStayInvisibleToTheAssignedBuyer() throws Exception {
+        var purchaser = actor("PURCHASE");
+        var initialReviewer = actor("PRODUCT_OPS");
+        long id = policy(1, "PRODUCT_REVIEW");
+        member(id, initialReviewer, "PRODUCT", "ACTIVE");
+        member(id, purchaser, "PURCHASE", "ACTIVE");
+        for (String expectedStatus : List.of("PENDING", "REJECTED")) {
+            if ("REJECTED".equals(expectedStatus)) product(initialReviewer, id, "REJECT", "请修改");
+            mvc.perform(get(PATH).session(purchaser.session()).param("keyword", "NUM" + id))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(0))
+                    .andExpect(jsonPath("$.items").isEmpty())
+                    .andExpect(jsonPath("$.counts").isEmpty());
+            mvc.perform(get(PATH + "/" + id).session(purchaser.session()))
+                    .andExpect(status().isNotFound());
+            mvc.perform(get(PATH + "/" + id + "/audit-logs").session(purchaser.session()))
+                    .andExpect(status().isNotFound());
+            mvc.perform(
+                            get("/api/policy-reviews/" + id)
+                                    .session(purchaser.session())
+                                    .param("submissionVersion", "1"))
+                    .andExpect(status().isNotFound());
+            mvc.perform(get(PATH + "/" + id).session(buyer.session()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.policy.status").value(expectedStatus));
+        }
     }
 
     @Test
@@ -153,9 +337,10 @@ class PolicyPurchaseReviewTest {
         member(id, buyer, "PURCHASE", "ACTIVE");
         review(buyer, id, "REJECT", 3, 1).andExpect(status().isConflict());
         review(buyer, id, "REJECT", 2, 2).andExpect(status().isConflict());
-        jdbc.update("UPDATE user_info SET role_type='APPLICANT' WHERE id=?", buyer.id());
+        com.company.policy.RbacFixture.setRole(jdbc, buyer.id(), "ADMIN");
+        assertReadable(buyer, id, false);
         review(buyer, id, "REJECT").andExpect(status().isForbidden());
-        jdbc.update("UPDATE user_info SET role_type='ADMIN', is_deleted=1 WHERE id=?", buyer.id());
+        jdbc.update("UPDATE user_info SET is_deleted=1 WHERE id=?", buyer.id());
         review(buyer, id, "APPROVE").andExpect(status().isForbidden());
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(decisions(id)).isZero();
@@ -165,12 +350,11 @@ class PolicyPurchaseReviewTest {
     void purchaseCompetitionRecordsOneSignerAndClosesTheGroupInOneTransaction() throws Exception {
         long id = policy(1, "PURCHASE_REVIEW");
         member(id, buyer, "PURCHASE", "ACTIVE");
-        member(id, peer, "PURCHASE", "ACTIVE");
         var start = new CountDownLatch(1);
         var pool = Executors.newFixedThreadPool(2);
         try {
             var results =
-                    List.of(buyer, peer).stream()
+                    List.of(buyer, buyer).stream()
                             .map(
                                     actor ->
                                             pool.submit(
@@ -218,7 +402,7 @@ class PolicyPurchaseReviewTest {
                                 "SELECT member_status FROM policy_review_member WHERE policy_id=? AND group_code='PURCHASE'",
                                 String.class,
                                 id))
-                .containsExactlyInAnyOrder("HANDLED", "PEER_HANDLED");
+                .containsExactly("HANDLED");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT stage FROM policy_review_round WHERE policy_id=?",
@@ -269,25 +453,10 @@ class PolicyPurchaseReviewTest {
         long source = policy(1, "PURCHASE_REVIEW");
         member(source, buyer, "PURCHASE", "ACTIVE");
         long extension = policy(1, "PURCHASE_REVIEW");
-        long goods = IDS.incrementAndGet();
-        jdbc.update("INSERT INTO brand (id,name) VALUES (?,'测试品牌')", goods);
-        jdbc.update("INSERT INTO series (id,brand_id,name) VALUES (?,?,'测试系列')", goods, goods);
-        jdbc.update(
-                "INSERT INTO spu (id,brand_id,series_id,name) VALUES (?,?,?,'测试机型')",
-                goods,
-                goods,
-                goods);
-        jdbc.update("INSERT INTO color_dict (id,color_name) VALUES (?,'银色')", goods);
-        jdbc.update(
-                "INSERT INTO goods (id,brand_id,series_id,spu_id,color_id,goods_name,ram,rom,status) VALUES (?,?,?,?,?,'银色测试机','12GB','256GB',1)",
-                goods,
-                goods,
-                goods,
-                goods,
-                goods);
+        long goods = catalogGoods("测试品牌", "测试系列", "银色");
         seedScopedSnapshot(source, goods, null);
         jdbc.update(
-                "INSERT INTO user_platform_assignment (tenant_key,user_id,perspective,platform_code) VALUES (?,?,'RETAIL','JD')",
+                "INSERT INTO user_platform_assignment (tenant_key,user_id,perspective,platform_code,member_kind) VALUES (?,?,'RETAIL','JD','SUBMITTER')",
                 TENANT,
                 owner.id());
         review(buyer, source, "APPROVE").andExpect(status().isOk());
@@ -300,7 +469,7 @@ class PolicyPurchaseReviewTest {
                                 .session(buyer.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requiresResubmission").value(false));
-        var replacement = actor("APPLICANT");
+        var replacement = actor("OPERATIONS");
         jdbc.update(
                 "UPDATE user_platform_assignment SET user_id=? WHERE tenant_key=? AND perspective='RETAIL' AND platform_code='JD'",
                 replacement.id(),
@@ -327,18 +496,10 @@ class PolicyPurchaseReviewTest {
     void concurrentProductApprovalsTransferOnceAndCreateOnlyQualifiedBuyersTasks()
             throws Exception {
         long id = policy(1, "PRODUCT_REVIEW");
-        var operator = actor("APPLICANT");
-        var otherBuyer = actor("ADMIN");
-        var demoted = actor("ADMIN");
-        member(id, buyer, "PRODUCT", "ACTIVE");
+        var operator = actor("PRODUCT_OPS");
         member(id, operator, "PRODUCT", "ACTIVE");
-        member(id, buyer, "PURCHASE", "ACTIVE");
         member(id, peer, "PURCHASE", "ACTIVE");
-        member(id, otherBuyer, "PURCHASE", "ACTIVE");
-        member(id, demoted, "PURCHASE", "ACTIVE");
-        jdbc.update("UPDATE user_info SET role_type='APPLICANT' WHERE id=?", demoted.id());
-
-        raceProduct(id, buyer, operator, "APPROVE");
+        raceProduct(id, operator, operator, "APPROVE");
         assertThat(state(id)).isEqualTo("PENDING");
         assertThat(auditStatus(id)).isEqualTo("SUBMITTED");
         assertThat(count(id, "policy_review_decision")).isOne();
@@ -348,13 +509,9 @@ class PolicyPurchaseReviewTest {
                         Long.class,
                         id);
         var notified = taskOwners(id, "PRODUCT_DECIDED");
-        assertThat(notified)
-                .contains(peer.id(), otherBuyer.id())
-                .doesNotContain(demoted.id(), signer);
-        if (signer == buyer.id()) assertThat(notified).hasSize(2);
-        else assertThat(notified).contains(buyer.id()).hasSize(3);
+        assertThat(notified).containsExactly(peer.id());
         assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
-        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactly("本人已处理");
         expectProductFailure(operator, id, "REJECT", "晚到", HttpStatus.CONFLICT);
         review(peer, id, "APPROVE", 3, 1).andExpect(status().isOk());
         assertThat(state(id)).isEqualTo("APPROVED");
@@ -374,46 +531,6 @@ class PolicyPurchaseReviewTest {
                                 LocalDateTime.now()));
         assertThat(count(id, "policy_review_delivery")).isEqualTo(registered);
         assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactlyInAnyOrderElementsOf(notified);
-    }
-
-    @Test
-    void replayOfProductTransferKeepsOriginalRecipientsAfterPurchaseReassignment()
-            throws Exception {
-        long id = policy(1, "PRODUCT_REVIEW");
-        var operator = actor("APPLICANT");
-        member(id, operator, "PRODUCT", "ACTIVE");
-        member(id, buyer, "PURCHASE", "ACTIVE");
-        assertThat(product(operator, id, "APPROVE", null).reviewStage())
-                .isEqualTo("PURCHASE_REVIEW");
-        var update =
-                new PolicyReviewReassignmentRequest(
-                        "PURCHASE_REVIEW",
-                        "PURCHASE_REVIEW",
-                        3,
-                        1,
-                        List.of(Long.toString(peer.id())),
-                        "调整采购");
-        mvc.perform(
-                        post("/api/admin/policy-reviews/" + id + "/reassign")
-                                .session(buyer.session())
-                                .header("Origin", "http://localhost:5173")
-                                .header("X-Policy-Request", "1")
-                                .contentType("application/json")
-                                .content(json.writeValueAsBytes(update)))
-                .andExpect(status().isOk());
-        transactions.executeWithoutResult(
-                tx ->
-                        notifications.decided(
-                                TENANT,
-                                id,
-                                1,
-                                "PRODUCT",
-                                operator.id(),
-                                "APPROVE",
-                                null,
-                                LocalDateTime.now()));
-        assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(buyer.id());
-        assertThat(taskOwners(id, "REASSIGNED_4")).containsExactly(peer.id());
     }
 
     @Test
@@ -449,28 +566,29 @@ class PolicyPurchaseReviewTest {
     @Test
     void invalidReturnOrUnstaffedPurchaseDoesNotConsumeProductDecision() throws Exception {
         long id = policy(1, "PRODUCT_REVIEW");
-        var productPeer = actor("APPLICANT");
-        member(id, buyer, "PRODUCT", "ACTIVE");
-        member(id, productPeer, "PRODUCT", "ACTIVE");
-        member(id, buyer, "PURCHASE", "ACTIVE");
+        var dualReviewer = actor("PRODUCT_OPS", "PURCHASE");
+        member(id, dualReviewer, "PRODUCT", "ACTIVE");
+        member(id, dualReviewer, "PURCHASE", "ACTIVE");
         expectProductFailure(owner, id, "REJECT", "本人", HttpStatus.FORBIDDEN);
         expectProductFailure(peer, id, "REJECT", "未指派", HttpStatus.FORBIDDEN);
-        expectProductFailure(buyer, id, "REJECT", " \u3000\u00a0 ", HttpStatus.BAD_REQUEST);
-        expectProductFailure(buyer, id, "REJECT", "长".repeat(513), HttpStatus.BAD_REQUEST);
-        assertThat(expectProductFailure(buyer, id, "APPROVE", null, HttpStatus.CONFLICT).getCode())
+        expectProductFailure(dualReviewer, id, "REJECT", " \u3000\u00a0 ", HttpStatus.BAD_REQUEST);
+        expectProductFailure(dualReviewer, id, "REJECT", "长".repeat(513), HttpStatus.BAD_REQUEST);
+        assertThat(
+                        expectProductFailure(dualReviewer, id, "APPROVE", null, HttpStatus.CONFLICT)
+                                .getCode())
                 .isEqualTo("POLICY_REVIEW_ASSIGNEES_MISSING");
         assertThat(count(id, "policy_review_decision")).isZero();
         assertThat(count(id, "policy_review_delivery")).isZero();
 
         var reason = "退".repeat(512);
-        var rejected = product(productPeer, id, "REJECT", "  " + reason + "  ");
+        var rejected = product(dualReviewer, id, "REJECT", "  " + reason + "  ");
         assertThat(rejected.status()).isEqualTo("REJECTED");
         assertThat(rejected.recordVersion()).isEqualTo(3);
-        expectProductFailure(buyer, id, "APPROVE", null, HttpStatus.CONFLICT);
+        expectProductFailure(dualReviewer, id, "APPROVE", null, HttpStatus.CONFLICT);
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
         assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
         assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(owner.id());
-        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        assertThat(closedReasons(id, "UPDATE_CARD")).containsExactly("本人已处理");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT payload_json FROM policy_review_delivery WHERE policy_id=? AND action_type='CREATE_TASK'",
@@ -488,18 +606,15 @@ class PolicyPurchaseReviewTest {
     @Test
     void concurrentProductApprovalAndReturnCommitOnlyTheWinningNotifications() throws Exception {
         long id = policy(1, "PRODUCT_REVIEW");
-        var first = actor("APPLICANT");
-        var second = actor("APPLICANT");
+        var first = actor("PRODUCT_OPS");
+        var second = actor("OPERATIONS");
         member(id, first, "PRODUCT", "ACTIVE");
-        member(id, second, "PRODUCT", "ACTIVE");
         member(id, buyer, "PURCHASE", "ACTIVE");
-        member(id, peer, "PURCHASE", "ACTIVE");
-        raceProduct(id, first, second, "REJECT");
+        raceProduct(id, first, first, "REJECT");
         assertThat(count(id, "policy_review_decision")).isOne();
         assertThat(groupMessages(id, "PRODUCT_DECIDED")).isZero();
         if ("PENDING".equals(state(id)))
-            assertThat(taskOwners(id, "PRODUCT_DECIDED"))
-                    .containsExactlyInAnyOrder(buyer.id(), peer.id());
+            assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(buyer.id());
         else {
             assertThat(state(id)).isEqualTo("REJECTED");
             assertThat(taskOwners(id, "PRODUCT_DECIDED")).containsExactly(owner.id());
@@ -511,13 +626,12 @@ class PolicyPurchaseReviewTest {
             throws Exception {
         long id = policy(1, "PURCHASE_REVIEW");
         member(id, buyer, "PURCHASE", "ACTIVE");
-        member(id, peer, "PURCHASE", "ACTIVE");
         review(buyer, id, "REJECT").andExpect(status().isOk());
         review(peer, id, "APPROVE").andExpect(status().isConflict());
         assertThat(auditStatus(id)).isEqualTo("REJECTED");
         assertThat(taskOwners(id, "PURCHASE_DECIDED")).containsExactly(owner.id());
         assertThat(groupMessages(id, "PURCHASE_DECIDED")).isZero();
-        assertThat(closedReasons(id, "CLOSE_TASK")).containsExactlyInAnyOrder("本人已处理", "同组他人已处理");
+        assertThat(closedReasons(id, "CLOSE_TASK")).containsExactly("本人已处理");
     }
 
     private void raceProduct(long id, Actor first, Actor second, String secondChoice)
@@ -608,6 +722,26 @@ class PolicyPurchaseReviewTest {
                 action);
     }
 
+    private long catalogGoods(String brand, String series, String color) {
+        long goods = IDS.incrementAndGet();
+        jdbc.update("INSERT INTO brand (id,name) VALUES (?,?)", goods, brand);
+        jdbc.update("INSERT INTO series (id,brand_id,name) VALUES (?,?,?)", goods, goods, series);
+        jdbc.update(
+                "INSERT INTO spu (id,brand_id,series_id,name) VALUES (?,?,?,'测试机型')",
+                goods,
+                goods,
+                goods);
+        jdbc.update("INSERT INTO color_dict (id,color_name) VALUES (?,?)", goods, color);
+        jdbc.update(
+                "INSERT INTO goods (id,brand_id,series_id,spu_id,color_id,goods_name,ram,rom,status) VALUES (?,?,?,?,?,'测试机','12GB','256GB',1)",
+                goods,
+                goods,
+                goods,
+                goods,
+                goods);
+        return goods;
+    }
+
     private void seedScopedSnapshot(long id, long goods, Long source) throws Exception {
         var snapshot =
                 (ObjectNode)
@@ -616,6 +750,21 @@ class PolicyPurchaseReviewTest {
                                         "SELECT snapshot_data FROM policy_audit_log WHERE policy_id=?",
                                         String.class,
                                         id));
+        snapshot.putArray("goods")
+                .addObject()
+                .put("brandId", Long.toString(goods))
+                .put("seriesId", Long.toString(goods))
+                .put("goodsId", Long.toString(goods));
+        jdbc.update("UPDATE policy_apply SET brand_id=?,series_id=? WHERE id=?", goods, goods, id);
+        jdbc.update(
+                "UPDATE policy_audit_log SET brand_id=?,series_id=? WHERE policy_id=?",
+                goods,
+                goods,
+                id);
+        jdbc.update(
+                "INSERT INTO policy_round_platform(policy_id,version,tenant_key,perspective,platform_code) VALUES (?,1,?,'RETAIL','JD')",
+                id,
+                TENANT);
         snapshot.put("policyCode", "ZC-%06d".formatted(id));
         var form = (ObjectNode) snapshot.path("form");
         var goodsForm = (ObjectNode) form.path("goodsForm");
@@ -674,7 +823,9 @@ class PolicyPurchaseReviewTest {
                 snapshot.toString(),
                 id);
         jdbc.update(
-                "INSERT INTO policy_goods_detail (policy_id,version,platform_code,spu_id,ram,rom,goods_id) VALUES (?,1,'JD',?,'12GB','256GB',?)",
+                "INSERT INTO policy_goods_detail (brand_id,series_id,policy_id,version,platform_code,spu_id,ram,rom,goods_id) VALUES (?,?,?,1,'JD',?,'12GB','256GB',?)",
+                goods,
+                goods,
                 id,
                 goods,
                 goods);
@@ -709,17 +860,20 @@ class PolicyPurchaseReviewTest {
                                         .formatted(choice, record, round)));
     }
 
-    private Actor actor(String role) {
+    private Actor actor(String... roleCodes) {
         long id = IDS.incrementAndGet();
         var openId = "purchase-" + id;
-        jdbc.update(
-                "INSERT INTO user_info (id,tenant_key,open_id,name,role_type) VALUES (?,?,?,?,?)",
-                id,
-                TENANT,
-                openId,
-                openId,
-                role);
-        var user = new CurrentUserResponse(Long.toString(id), openId, TENANT, openId, role, null);
+        com.company.policy.ReviewAccounts.create(
+                jdbc, roles, id, TENANT, openId, openId, roleCodes);
+        var user =
+                new CurrentUserResponse(
+                        Long.toString(id),
+                        openId,
+                        TENANT,
+                        openId,
+                        java.util.List.of(roleCodes),
+                        java.util.List.of(),
+                        null);
         var request = new MockHttpServletRequest();
         sessions.establish(request, new AuthSessionResponse(user, Instant.now().plusSeconds(600)));
         return new Actor(id, (MockHttpSession) request.getSession(), user);
@@ -729,8 +883,8 @@ class PolicyPurchaseReviewTest {
         long id = IDS.incrementAndGet();
         jdbc.update(
                 """
-            INSERT INTO policy_apply (id, tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
-            VALUES (?,?,?,?,'申请人','RETAIL','PENDING',1,2)
+            INSERT INTO policy_apply (brand_id,series_id,id, tenant_key,policy_no,applicant_id,applicant_name,channel_type,status,current_version,record_version)
+            VALUES (80000,80000,?,?,?,?,'申请人','RETAIL','PENDING',1,2)
             """,
                 id,
                 TENANT,
@@ -741,15 +895,14 @@ class PolicyPurchaseReviewTest {
             {"id":"%d","applicantId":"%d","applicantName":"申请人","submissionVersion":1,
              "form":{"perspective":"RETAIL","selectedPlatforms":["JD"],"verifyType":"SALES","sceneTypes":["LOCAL_SUB"],
                 "startTime":"2099-04-01T00:00:00+08:00","endTime":"2099-04-05T23:59:59+08:00","goodsForm":{"cards":[]}},
-             "goods":[],"consent":{"ruleVersion":2,"comparedRounds":[],"decisions":[]}}
+             "goods":[{"brandId":"80000","seriesId":"80000"}],"consent":{"ruleVersion":2,"comparedRounds":[],"decisions":[]}}
             """
                         .formatted(id, owner.id());
         jdbc.update(
-                "INSERT INTO policy_audit_log (tenant_key,policy_id,version,snapshot_data,workflow_version) VALUES (?,?,1,?,?)",
+                "INSERT INTO policy_audit_log (brand_id,series_id,perspective,tenant_key,policy_id,version,snapshot_data) VALUES (80000,80000,'RETAIL',?,?,1,?)",
                 TENANT,
                 id,
-                snapshot,
-                marker);
+                snapshot);
         if (stage != null)
             jdbc.update(
                     "INSERT INTO policy_review_round (tenant_key,policy_id,version,settings_version,stage,route_json) VALUES (?,?,1,1,?,?)",

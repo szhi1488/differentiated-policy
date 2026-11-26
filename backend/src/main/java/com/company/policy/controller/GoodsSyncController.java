@@ -5,6 +5,7 @@ import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.LoginSessionService;
 import com.company.policy.vo.GoodsSyncResponse;
 import com.company.policy.vo.GoodsSyncResponse.Overview;
+import com.company.policy.vo.GoodsSyncResponse.SourceBrands;
 import com.company.policy.vo.GoodsSyncResponse.SourcePage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -26,9 +27,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin")
-@Tag(name = "源商品库", description = "管理员按品牌导入和查询吉客云商品原文")
+@Tag(name = "源商品库", description = "按账号负责的品牌导入和查询吉客云商品原文")
 @ApiResponse(responseCode = "401", description = "会话无效")
-@ApiResponse(responseCode = "403", description = "非有效管理员、未授权租户或写请求来源校验失败")
+@ApiResponse(responseCode = "403", description = "无相应功能或品牌权限，或写请求来源校验失败")
 @ApiResponse(responseCode = "503", description = "账套未配置或数据库不可用")
 public class GoodsSyncController {
     private final GoodsSyncService service;
@@ -39,8 +40,14 @@ public class GoodsSyncController {
         this.sessions = sessions;
     }
 
+    @GetMapping("/catalog/source-brands")
+    @Operation(summary = "读取可导入或清洗的吉客云品牌", description = "未分配品牌时返回空列表。")
+    public SourceBrands sourceBrands(HttpServletRequest request) {
+        return service.sourceBrands(sessions.requireLogin(request).user());
+    }
+
     @GetMapping("/goods-sync/jobs")
-    @Operation(summary = "查看两个品牌各自的最新任务")
+    @Operation(summary = "查看本人品牌各自的最新任务")
     public Overview overview(HttpServletRequest request) {
         return service.overview(sessions.requireLogin(request).user());
     }

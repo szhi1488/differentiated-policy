@@ -89,9 +89,7 @@ class PolicyFeishuSenderImpl implements PolicyFeishuSender {
 
     private JsonNode personalNotice(Delivery item) {
         boolean revision = "REVISION".equals(item.group());
-        boolean removed = "REMOVED".equals(item.payload().path("outcome").asText());
         boolean productDecided = "PRODUCT_DECIDED".equals(item.event());
-        boolean reassigned = item.event().startsWith("REASSIGNED_");
         String policyCode = policyNumber(item.policyId());
         String title;
         String text;
@@ -102,20 +100,13 @@ class PolicyFeishuSenderImpl implements PolicyFeishuSender {
                             + signer(item)
                             + "\n退回原因："
                             + item.payload().path("reason").asText("审核人未填写驳回原因");
-        } else if (removed) {
-            title = "采购终审已改派";
-            text = "你原先的这次采购指派已撤销。";
         } else {
             title = "待你采购终审";
             text = "请打开飞书工作台里的「差异化政策管理系统」，进入「政策管理」→「差异化政策」，找到 " + policyCode + "，点击「审核」，及时完成终审。";
             if (productDecided) {
                 text += "\n" + signer(item) + " 已完成产品运营初审。";
-            } else if (reassigned) {
-                text += "\n本轮采购终审已改派给你。";
             }
         }
-        if (reassigned && item.payload().hasNonNull("reason"))
-            text += "\n改派原因：" + item.payload().get("reason").asText();
         return readOnlyCard(
                 item,
                 item.openId(),
@@ -167,19 +158,21 @@ class PolicyFeishuSenderImpl implements PolicyFeishuSender {
     }
 
     private String sendGroup(Delivery item) {
+        if (item.policyId() == 0 && "CLEAN".equals(item.payload().path("kind").asText()))
+            throw new Failure(Kind.OBSOLETE, "商品清洗结果仅在清洗记录中查看。");
         if (!StringUtils.hasText(feishu.getPolicyChatId()))
-            throw failed("请配置 FEISHU_POLICY_CHAT_ID 后补发本条群消息。");
+            throw failed("未配置 FEISHU_POLICY_CHAT_ID，无法发送业务群消息。");
         if (item.policyId() == 0) return sendNotice(item);
         if (!"PURCHASE_DECIDED".equals(item.event())
                 || !"APPROVE".equals(item.payload().path("decision").asText()))
             throw new Failure(Kind.OBSOLETE, "此审核节点仅通过机器人私聊通知。");
         var execution = notices.atApproval(item.tenant(), item.policyId());
-        var userIds = new LinkedHashSet<Long>(execution.users());
+        var userIds = new LinkedHashSet<Long>();
         addIds(userIds, item.payload().path("informedUserIds"));
         var recipients =
                 userIds.isEmpty()
                         ? List.<PolicyDeliveryAudienceMapper.Recipient>of()
-                        : audience.recipients(item.tenant(), List.copyOf(userIds));
+                        : audience.recipients(item.tenant(), List.copyOf(userIds), null);
         if (recipients.size() != userIds.size()
                 || recipients.stream().anyMatch(u -> !StringUtils.hasText(u.openId())))
             throw failed("终审群提醒收件人的飞书身份发生变化，请核对。");
@@ -241,23 +234,18 @@ class PolicyFeishuSenderImpl implements PolicyFeishuSender {
 
     private NoticeContent noticeContent(Delivery item) {
         var notice = notices.message(item.tenant(), item.payload(), PolicyApplyServiceImpl.now());
+        String permission =
+                "IMPORT".equals(item.payload().path("kind").asText()) ? "catalog.import" : null;
         var people =
                 notice.users().isEmpty()
                         ? List.<PolicyDeliveryAudienceMapper.Recipient>of()
-                        : audience.recipients(item.tenant(), notice.users());
-        boolean catalog = item.payload().has("requester");
-        var valid =
-                people.stream()
-                        .filter(
-                                u ->
-                                        StringUtils.hasText(u.openId())
-                                                && (!catalog || "ADMIN".equals(u.roleType())))
-                        .toList();
+                        : audience.recipients(item.tenant(), notice.users(), permission);
+        var valid = people.stream().filter(u -> StringUtils.hasText(u.openId())).toList();
         if (ExecutionNotices.EXPIRY_REMINDER.equals(item.payload().path("kind").asText())
                 && (notice.users().size() != 1 || valid.size() != 1))
             throw failed("原申请人缺少有效飞书身份，无法私发临期提醒。");
         if (valid.isEmpty())
-            throw failed("本项缺少有效的" + (catalog ? "批次商品管理员" : "执行负责人或申请人") + "，请核对身份和分工。");
+            throw failed("本项缺少有效的" + (permission != null ? "商品批次负责人" : "执行负责人或申请人") + "，请核对身份和分工。");
         var missing = new LinkedHashSet<>(notice.users());
         valid.forEach(u -> missing.remove(u.id()));
         String summary = notice.text() + (missing.isEmpty() ? "" : " 未能点名的账号：" + missing + "。");
