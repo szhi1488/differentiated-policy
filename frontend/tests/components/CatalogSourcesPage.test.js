@@ -80,6 +80,9 @@ it('从建档日任务查看该日商品，重置后恢复全部来源', async (
     await wrapper.get('[id="tab-一加手机"]').trigger('click')
     await button('导入商品').trigger('click')
     await flushPromises()
+    expect(fetch.mock.calls.filter(([path]) => path === '/api/admin/goods-sync/jobs')).toHaveLength(
+      2,
+    )
     expect(wrapper.get('.source-import-form').text()).toContain('一加手机')
     expect(wrapper.get('.source-job').text()).toContain('2026-09-16')
     await button('查看该日商品').trigger('click')

@@ -8,6 +8,7 @@ import {
 } from '../api/catalog'
 import { createRequestId } from '../utils/request-id'
 import { useLatestQuery } from './useLatestQuery'
+import { useVisibleTaskPolling } from './useVisibleTaskPolling'
 
 const isActive = (job) => ['QUEUED', 'RUNNING', 'PAUSED'].includes(job.status)
 const hasSettled = (job) => ['PAUSED', 'CANCELLED', 'SUCCEEDED'].includes(job.status)
@@ -21,16 +22,18 @@ export function useSourceGoods() {
   const page = ref(1)
   const size = ref(20)
   const goods = useLatestQuery()
-  const jobs = ref([])
+  const jobs = ref(null)
+  const importOpen = ref(false)
+  const jobsReady = ref(false)
   const configured = ref(false)
   const jobsError = ref('')
   const actionError = ref('')
   const action = ref('')
-  const activeJob = computed(() => jobs.value.find(isActive))
-  const latest = computed(() => Object.fromEntries(jobs.value.map((job) => [job.brandName, job])))
+  const activeJob = computed(() => jobs.value?.find(isActive))
+  const latest = computed(() =>
+    Object.fromEntries((jobs.value ?? []).map((job) => [job.brandName, job])),
+  )
   const requestKeys = new Map()
-  let timer
-  let jobRead
   let jobWrite
   let disposed = false
 
@@ -86,42 +89,56 @@ export function useSourceGoods() {
     size.value = value
   }
 
-  function stopPolling() {
-    clearTimeout(timer)
-    jobRead?.abort()
-  }
+  const { refresh: refreshJobs, stop: stopPolling } = useVisibleTaskPolling(readJobs, () => {
+    const job = activeJob.value
+    if (!job || action.value) {
+      return 0
+    }
+    if (job.status === 'PAUSED' && (!importOpen.value || job.canResume)) {
+      return 0
+    }
+    return 4000
+  })
 
-  async function refreshJobs() {
-    if (disposed || action.value) {
+  watch(
+    importOpen,
+    (open) => {
+      if (open) {
+        void refreshJobs()
+      }
+    },
+    { flush: 'sync' },
+  )
+
+  async function readJobs(signal, reason) {
+    if (action.value) {
       return
     }
-    stopPolling()
-    const read = new AbortController()
-    jobRead = read
+    if (reason !== 'poll') {
+      jobsReady.value = false
+    }
     try {
-      const result = await readGoodsJobs(read.signal)
-      if (disposed || read.signal.aborted) {
+      const result = await readGoodsJobs(signal)
+      if (signal.aborted) {
         return
       }
-      const refreshTable = result.jobs.some((job) => {
-        const previous = latest.value[job.brandName]
-        return (
-          previous && hasSettled(job) && (previous.id !== job.id || previous.status !== job.status)
-        )
-      })
+      const refreshTable =
+        jobs.value !== null &&
+        result.jobs.some((job) => {
+          const previous = latest.value[job.brandName]
+          return hasSettled(job) && (previous?.id !== job.id || previous?.status !== job.status)
+        })
       configured.value = result.configured
       jobs.value = result.jobs
       jobsError.value = ''
+      jobsReady.value = true
       if (refreshTable) {
         void loadGoods()
       }
     } catch (error) {
-      if (!disposed && !read.signal.aborted) {
+      if (!signal.aborted) {
         jobsError.value = error.message
-      }
-    } finally {
-      if (!disposed && !read.signal.aborted) {
-        timer = setTimeout(refreshJobs, activeJob.value ? 4000 : 12000)
+        jobsReady.value = false
       }
     }
   }
@@ -157,7 +174,7 @@ export function useSourceGoods() {
   }
 
   function start(brandName, { mode, date }) {
-    if (!configured.value || activeJob.value || jobsError.value || (mode !== 'FULL' && !date)) {
+    if (!jobsReady.value || !configured.value || activeJob.value || (mode !== 'FULL' && !date)) {
       return
     }
     const scopeKey = JSON.stringify([brandName, mode, date])
@@ -171,14 +188,14 @@ export function useSourceGoods() {
   }
 
   function resume(job) {
-    if (!configured.value || !job.canResume || jobsError.value) {
+    if (!jobsReady.value || !configured.value || !job.canResume) {
       return
     }
     return mutate(job.brandName, (signal) => resumeGoodsJob(job, signal))
   }
 
   function cancel(job) {
-    if (job.status !== 'PAUSED' || jobsError.value) {
+    if (!jobsReady.value || job.status !== 'PAUSED') {
       return
     }
     return mutate(job.brandName, (signal) => cancelGoodsJob(job, signal))
@@ -187,7 +204,6 @@ export function useSourceGoods() {
   void refreshJobs()
   onScopeDispose(() => {
     disposed = true
-    stopPolling()
     jobWrite?.abort()
   })
 
@@ -201,6 +217,8 @@ export function useSourceGoods() {
     goods,
     latest,
     activeJob,
+    importOpen,
+    jobsReady,
     configured,
     jobsError,
     actionError,

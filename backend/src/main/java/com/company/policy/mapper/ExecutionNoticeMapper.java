@@ -2,7 +2,6 @@ package com.company.policy.mapper;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
@@ -100,23 +99,6 @@ public interface ExecutionNoticeMapper {
             "SELECT COUNT(*) FROM policy_review_delivery WHERE tenant_key=#{tenant} AND notice_key LIKE CONCAT(#{prefix},'%')")
     int hasSchedule(String tenant, String prefix);
 
-    // 普通单曾按当日日末执行。仅检查本轮、本群同日稍晚的旧截止，保留原编号和回执。
-    @Select(
-            """
-        SELECT notice_key FROM policy_review_delivery WHERE tenant_key=#{tenant}
-          AND notice_key>#{exactKey} AND notice_key<=#{lastKey} AND delivery_status<>'CANCELLED'
-        ORDER BY CASE WHEN delivery_status IN ('PENDING','RETRY') THEN 1 ELSE 0 END, id DESC LIMIT 1
-        """)
-    String laterDeadlinePlan(String tenant, String exactKey, String lastKey);
-
-    @Update(
-            """
-        UPDATE policy_review_delivery SET next_attempt_at=#{due}
-        WHERE tenant_key=#{tenant} AND notice_key=#{key} AND delivery_status='PENDING'
-          AND attempts=0 AND next_attempt_at>#{due}
-        """)
-    void advanceUnsentDeadline(String tenant, String key, LocalDateTime due);
-
     @Update(
             """
         UPDATE policy_review_delivery SET delivery_status='CANCELLED',next_attempt_at=NULL,last_error='政策实际截止已变更'
@@ -134,22 +116,6 @@ public interface ExecutionNoticeMapper {
           AND lease_owner IS NULL AND lease_until IS NULL AND JSON_EXTRACT(payload_json,'$.lateReceipt') IS NULL
         """)
     void resumeDeadlinePlan(String tenant, String key, LocalDateTime due);
-
-    // 已知未送达的旧计划才能删除。保留外发、租约及人工核对证据供迟到回执追溯。
-    String UNSENT_LEGACY_NEAR =
-            """
-        notice_key LIKE 'P/%/NEAR/%' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.kind'))='NEAR'
-        AND delivery_status IN ('PENDING','RETRY','CANCELLED')
-        AND receipt_id IS NULL AND delivered_at IS NULL AND lease_owner IS NULL AND lease_until IS NULL
-        AND JSON_EXTRACT(payload_json,'$.lateReceipt') IS NULL AND JSON_EXTRACT(payload_json,'$.manualHistory') IS NULL
-        AND JSON_EXTRACT(payload_json,'$.requestFingerprint') IS NULL AND JSON_EXTRACT(payload_json,'$.requestRecipient') IS NULL
-        AND (attempts=0 OR delivery_status='RETRY' OR JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.requiresWriteGuard'))='true')
-        """;
-
-    @Delete(
-            "DELETE FROM policy_review_delivery WHERE tenant_key=#{tenant} AND "
-                    + UNSENT_LEGACY_NEAR)
-    void deleteUnsentLegacyNear(String tenant);
 
     @Update(
             """

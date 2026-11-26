@@ -1359,8 +1359,8 @@ class PolicyReviewSubmissionIntegrationTest {
 
     @ParameterizedTest
     @CsvSource({"2099-05-09T12:34:56+08:00, 政策截止已提前", "2099-05-20T12:34:56+08:00, 政策已延期"})
-    void directlyAdjustedPolicyAnnouncesOriginalPolicyReasonAndReadOnlyDetailsLink(
-            String end, String title) throws Exception {
+    void directAdjustmentAnnouncesReasonAndKeepsRoundAccess(String end, String title)
+            throws Exception {
         configure();
         var source = draft();
         long sourceId = Long.parseLong(source.id());
@@ -1379,23 +1379,20 @@ class PolicyReviewSubmissionIntegrationTest {
         directAdjustments.apply(OWNER, changes, preview.confirmationToken(), List.of(), key);
 
         feishu.setPolicyChatId("oc_testing");
-        feishu.setPolicyErpUrl("https://policy.example.test/");
-        when(remote.sendGroupWithDetail(
-                        anyString(), anyString(), anyList(), anyString(), anyString(), any()))
+        when(remote.sendGroup(anyString(), anyString(), anyList(), anyString(), any()))
                 .thenAnswer(
                         call -> {
-                            call.getArgument(5, Runnable.class).run();
+                            call.getArgument(4, Runnable.class).run();
                             return "om_time_adjustment";
                         });
         try {
             drainDeliveries();
             var text = ArgumentCaptor.forClass(String.class);
             verify(remote)
-                    .sendGroupWithDetail(
+                    .sendGroup(
                             eq("oc_testing"),
                             text.capture(),
                             eq(List.of("open-1")),
-                            eq("https://policy.example.test/#/reviews/" + sourceId + "?round=1"),
                             anyString(),
                             any());
             verifyNoMoreInteractions(remote);
@@ -1411,7 +1408,7 @@ class PolicyReviewSubmissionIntegrationTest {
                             "【商品及补贴信息】",
                             "拼多多",
                             "固定补贴")
-                    .doesNotContain("采购终审通过", "终审人：");
+                    .doesNotContain("采购终审通过", "终审人：", "查看本轮政策", "#/reviews/");
             mvc.perform(
                             get("/api/policy-reviews/{id}", adjustment.id())
                                     .param("submissionVersion", "1")
@@ -1427,7 +1424,6 @@ class PolicyReviewSubmissionIntegrationTest {
                     .andExpect(status().isNotFound());
         } finally {
             feishu.setPolicyChatId("");
-            feishu.setPolicyErpUrl("");
         }
     }
 
@@ -1560,7 +1556,7 @@ class PolicyReviewSubmissionIntegrationTest {
             var finish = noticeBody("END");
             execution.initialize(start.minusDays(1));
             execution.initialize(start.minusDays(1));
-            assertThat(noticeBodies()).noneMatch(raw -> raw.contains("\"NEAR\""));
+            assertThat(noticeBodies()).hasSize(4);
             var begin = noticeBody("START");
             assertThatThrownBy(() -> execution.message("company", begin, start.minusSeconds(1)))
                     .isInstanceOf(PolicyFeishuSender.Failure.class);
@@ -1642,13 +1638,11 @@ class PolicyReviewSubmissionIntegrationTest {
         }
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {"PENDING", "SENT", "UNKNOWN"})
-    void preciseDeadlineRetainsPriorGroupDeliveryAndItsOutcome(String status) throws Exception {
+    @Test
+    void ordinaryPolicyRegistersOneDeadlineAndChecksItsExactSecondBeforeSending() throws Exception {
         configure();
         var start = LocalDateTime.parse("2099-05-10T08:40:05");
         var end = LocalDateTime.parse("2099-05-10T12:15:37");
-        var dayEnd = end.toLocalDate().atTime(23, 59, 59);
         var form = json.valueToTree(form());
         ((com.fasterxml.jackson.databind.node.ObjectNode) form)
                 .put("startTime", start + "+08:00")
@@ -1674,52 +1668,23 @@ class PolicyReviewSubmissionIntegrationTest {
             assertThat(jdbc.queryForObject(dueSql, LocalDateTime.class, endRow))
                     .isEqualTo(end.plusSeconds(1));
 
-            var old =
-                    ((com.fasterxml.jackson.databind.node.ObjectNode) noticeBody("END"))
-                            .put("end", dayEnd.toString());
-            var previousKey =
-                    jdbc.queryForObject(
-                                    "SELECT event_key FROM policy_review_delivery WHERE id=?",
-                                    String.class,
-                                    endRow)
-                            .replace(end.toString(), dayEnd.toString());
-            var receipt = status.equals("SENT") ? "om_existing" : null;
-            jdbc.update(
-                    "UPDATE policy_review_delivery SET event_key=?,payload_json=?,delivery_status=?,receipt_id=?,next_attempt_at=? WHERE id=?",
-                    previousKey,
-                    old.toString(),
-                    status,
-                    receipt,
-                    dayEnd.plusSeconds(1),
-                    endRow);
-            // 同日恢复时准确截止已经过去，只能恢复原待发事件；重复恢复不得给已送达/待核对项另建投递。
-            execution.initialize(end.plusHours(1));
-            execution.initialize(start.minusSeconds(1));
+            execution.initialize(start);
             assertThat(
                             jdbc.queryForList(
-                                    "SELECT event_key FROM policy_review_delivery WHERE notice_key LIKE 'P/%/END/%'",
-                                    String.class))
-                    .containsExactly(previousKey);
-            assertThat(
-                            jdbc.queryForObject(
-                                    "SELECT delivery_status FROM policy_review_delivery WHERE id=?",
-                                    String.class,
-                                    endRow))
-                    .isEqualTo(status);
-            assertThat(
-                            jdbc.queryForObject(
-                                    "SELECT receipt_id FROM policy_review_delivery WHERE id=?",
-                                    String.class,
-                                    endRow))
-                    .isEqualTo(receipt);
-            assertThat(jdbc.queryForObject(dueSql, LocalDateTime.class, endRow))
-                    .isEqualTo(
-                            status.equals("PENDING") ? end.plusSeconds(1) : dayEnd.plusSeconds(1));
-            assertThatThrownBy(() -> execution.message("company", old, end))
+                                    "SELECT id FROM policy_review_delivery WHERE notice_key LIKE 'P/%/END/%'",
+                                    Long.class))
+                    .containsExactly(endRow);
+            var finish = noticeBody("END");
+            assertThatThrownBy(() -> execution.message("company", finish, end))
                     .isInstanceOf(PolicyFeishuSender.Failure.class);
-            assertThat(execution.message("company", old, end.plusSeconds(1)).text())
-                    .contains("12:15:37")
-                    .doesNotContain("23:59:59");
+            assertThat(execution.message("company", finish, end.plusSeconds(1)).text())
+                    .contains("12:15:37");
+            var wrongEnd = finish.deepCopy();
+            ((com.fasterxml.jackson.databind.node.ObjectNode) wrongEnd)
+                    .put("end", end.plusSeconds(1).toString());
+            assertThatThrownBy(() -> execution.message("company", wrongEnd, end.plusSeconds(2)))
+                    .isInstanceOf(PolicyFeishuSender.Failure.class)
+                    .hasMessageContaining("实际截止已变更");
         } finally {
             feishu.setPolicyChatId("");
         }
@@ -1882,103 +1847,36 @@ class PolicyReviewSubmissionIntegrationTest {
     }
 
     @Test
-    void initializingRemovesUnsentLegacyGroupWarningsAndKeepsExternalReceipts() {
-        for (String status : List.of("PENDING", "RETRY", "CANCELLED", "UNKNOWN", "SENT"))
-            registerLegacyNear(status);
-        var heldKey = registerLegacyNear("PENDING", "late");
-        jdbc.update(
-                """
-                UPDATE policy_review_delivery SET payload_json=?,next_attempt_at=? WHERE notice_key=?
-                """,
-                json.createObjectNode()
-                        .put("kind", "NEAR")
-                        .put("lateReceipt", "om_late")
-                        .toString(),
-                LocalDateTime.parse("2099-05-09T17:00:00"),
-                heldKey);
-        execution.initialize(LocalDateTime.parse("2099-05-09T17:00:00"));
-        assertThat(
-                        jdbc.queryForList(
-                                "SELECT delivery_status FROM policy_review_delivery ORDER BY id",
-                                String.class))
-                .containsExactly("UNKNOWN", "SENT", "PENDING");
-        assertThat(
-                        jdbc.queryForObject(
-                                "SELECT payload_json FROM policy_review_delivery WHERE notice_key=?",
-                                String.class,
-                                heldKey))
-                .contains("om_late");
-        drainDeliveries();
-        assertThat(
-                        jdbc.queryForObject(
-                                """
-                    SELECT COUNT(*) FROM policy_review_delivery WHERE delivery_status='UNKNOWN'
-                      AND next_attempt_at IS NULL AND payload_json LIKE '%oc_prior%'
-                    """,
-                                Integer.class))
-                .isOne();
-        assertThat(
-                        jdbc.queryForObject(
-                                "SELECT receipt_id FROM policy_review_delivery WHERE delivery_status='SENT'",
-                                String.class))
-                .isEqualTo("om_prior");
-        verifyNoInteractions(remote);
-    }
-
-    @Test
-    void concurrentWorkerCannotSendALegacyWarningBeingRemovedByInitialization() throws Exception {
-        registerLegacyNear("PENDING");
-        var executor = Executors.newSingleThreadExecutor();
+    void unrecognizedBusinessNoticeIsNeverDelivered() throws Exception {
+        configure();
+        var draft = draft();
+        long policy = Long.parseLong(draft.id());
+        submit(policy, direct(draft)).andExpect(status().isOk());
+        procurement.review(BUYER, policy, new PolicyReviewRequest(2, 1, "APPROVE", null));
+        jdbc.update("DELETE FROM policy_review_delivery");
+        feishu.setPolicyChatId("trial-chat");
         try {
-            transactions.executeWithoutResult(
-                    transaction -> {
-                        execution.initialize(LocalDateTime.parse("2099-05-09T17:00:00"));
-                        assertThat(noticeBodies()).isEmpty();
-                        // 初始化事务持有删除行的锁，另一连接同时按正常队列入口领取。
-                        var attempt = executor.submit(deliveries::processOne);
-                        try {
-                            assertThat(attempt.get(5, TimeUnit.SECONDS)).isFalse();
-                        } catch (Exception failure) {
-                            throw new AssertionError("清理旧提醒时，投递线程未能跳过已锁定的记录", failure);
-                        }
-                    });
-            assertThat(deliveries.processOne()).isFalse();
-            assertThat(noticeBodies()).isEmpty();
+            var payload =
+                    json.createObjectNode()
+                            .put("kind", "UNKNOWN_KIND")
+                            .put("policy", policy)
+                            .put("version", 1);
+            jdbc.update(
+                    """
+                    INSERT INTO policy_review_delivery (tenant_key,event_key,action_type,recipient_key,payload_json)
+                    VALUES ('company','unrecognized-notice','GROUP_MESSAGE',0,?)
+                    """,
+                    payload.toString());
+            drainDeliveries();
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT delivery_status FROM policy_review_delivery",
+                                    String.class))
+                    .isEqualTo("FAILED");
             verifyNoInteractions(remote);
         } finally {
-            executor.shutdownNow();
+            feishu.setPolicyChatId("");
         }
-    }
-
-    private void registerLegacyNear(String status) {
-        registerLegacyNear(status, status);
-    }
-
-    private String registerLegacyNear(String status, String scope) {
-        var body =
-                json.createObjectNode()
-                        .put("kind", "NEAR")
-                        .put("policy", 13)
-                        .put("version", 1)
-                        .put("end", "2099-05-10T23:59:59")
-                        .put("chat", "oc_prior");
-        if ("UNKNOWN".equals(status) || "SENT".equals(status))
-            body.put("requestRecipient", "oc_prior").put("requestFingerprint", "d".repeat(64));
-        var key = "P/13/1/" + scope + "/NEAR/2099-05-10T23:59:59";
-        jdbc.update(
-                """
-                    INSERT INTO policy_review_delivery
-                    (tenant_key,event_key,action_type,recipient_key,payload_json,delivery_status,
-                        next_attempt_at,receipt_id,attempts)
-                    VALUES ('company',?,'GROUP_MESSAGE',0,?,?,?,?,?)
-                    """,
-                key,
-                body.toString(),
-                status,
-                LocalDateTime.parse("2020-01-01T00:00:00"),
-                "SENT".equals(status) ? "om_prior" : null,
-                List.of("PENDING", "CANCELLED").contains(status) ? 0 : 1);
-        return key;
     }
 
     private static String reminderKey(long policyId, LocalDateTime at) {

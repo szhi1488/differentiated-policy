@@ -15,6 +15,7 @@ import com.company.policy.service.PolicyFeishuSender.Delivery;
 import com.company.policy.service.PolicyFeishuSender.Failure;
 import com.company.policy.service.PolicyFeishuSender.Kind;
 import com.company.policy.support.policy.PolicySnapshotCodec;
+import com.company.policy.support.policy.ProductReviewCardFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -37,7 +38,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 /** 仅在回环地址模拟平台的成功、限频、丢回执和错误响应。 */
 class FeishuWorkflowClientTest {
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
     private final FeishuProperties config = new FeishuProperties();
     private final FeishuTenantTokenService tokens = mock(FeishuTenantTokenService.class);
     private final Queue<Answer> answers = new ConcurrentLinkedQueue<>();
@@ -256,15 +257,14 @@ class FeishuWorkflowClientTest {
     }
 
     @Test
-    void adjustmentLinkIsClickableAndIncludedInReceiptMatching() throws Exception {
+    void historicalAdjustmentReceiptMatchesOnlyItsOriginalDetailLink() throws Exception {
         String url = "https://policy.example.test/#/reviews/24?round=1";
         String summary = "政策已延期 · ZC-000024";
-        reply(200, "{\"code\":0,\"data\":{\"message_id\":\"om_group\"}}");
-        client.sendGroupWithDetail("oc_group", summary, List.of(), url, KEY, VALID_LEASE);
-        String content = requests.remove().body.path("content").asText();
-        var link = json.readTree(content).at("/zh_cn/content/1/0");
-        assertThat(link.path("tag").asText()).isEqualTo("a");
-        assertThat(link.path("href").asText()).isEqualTo(url);
+        var post = json.createObjectNode();
+        var rows = post.putObject("zh_cn").putArray("content");
+        rows.addArray().addObject().put("tag", "text").put("text", summary);
+        rows.addArray().addObject().put("tag", "a").put("text", "查看本轮政策").put("href", url);
+        String content = post.toString();
         var fingerprint =
                 PolicyDeliveryFingerprint.compute(
                         json,
@@ -276,6 +276,10 @@ class FeishuWorkflowClientTest {
         var at = LocalDateTime.of(2026, 1, 1, 8, 0);
         assertThat(client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, at))
                 .isEqualTo(at);
+        reply(200, platformMessage("post", "om_group", content.replace("?round=1", "?round=2")));
+        assertFailure(
+                Kind.PERMANENT,
+                () -> client.verifyGroupReceipt("om_group", "oc_group", KEY, fingerprint, at));
     }
 
     @Test
@@ -476,7 +480,7 @@ class FeishuWorkflowClientTest {
                 LocalDateTime.of(2026, 1, 1, 0, 0));
     }
 
-    private PolicyFeishuSender productCardSender() {
+    private PolicyFeishuSender productCardSender() throws Exception {
         config.setTenantKey(TEST_TENANT);
         var mapper = mock(PolicyProductCardMapper.class);
         when(mapper.content(TEST_TENANT, 7, 2, 51))
@@ -489,14 +493,10 @@ class FeishuWorkflowClientTest {
                                 1,
                                 1,
                                 true,
-                                """
-                                {"requiresProductReview":true,"changes":[],"adjustments":[{"policyCode":"ZC-000041",
-                                 "target":{"policyId":"41","auditLogId":"11","previousEnd":"2026-12-22T00:00:00+08:00"},
-                                 "endTime":"2026-12-20T00:00:00+08:00","extension":false,"accompanying":true}]}
-                                """,
+                                json.writeValueAsString(ProductReviewCardFixture.route(7, 2)),
                                 """
                                 {"submissionVersion":2,"consent":{"endAdjustments":[{"target":{"policyId":"41","auditLogId":"11",
-                                 "previousEnd":"2026-12-22T00:00:00+08:00"},"endTime":"2026-12-20T00:00:00+08:00","reason":"渠道提前结束"}]}}
+                                 "previousEnd":"2026-12-22T00:00:00+08:00","recordVersion":3},"endTime":"2026-12-20T00:00:00+08:00","reason":"渠道提前结束"}]}}
                                 """));
         return new PolicyFeishuSenderImpl(
                 client,

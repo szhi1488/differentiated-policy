@@ -486,7 +486,7 @@ class PolicyDeliveryWorkerTest {
     }
 
     @Test
-    void queuedOldPurchaseHandoffBecomesPrivateForItsOriginalActiveAssignments() {
+    void onlyFinalApprovalCanGenerateABusinessGroupAnnouncement() {
         jdbc.update("UPDATE policy_review_round SET stage='PURCHASE_REVIEW'");
         workflow.register(
                 "company",
@@ -502,10 +502,12 @@ class PolicyDeliveryWorkerTest {
         jdbc.update("UPDATE policy_review_member SET member_status='REMOVED' WHERE id=5");
         drain();
         assertThat(value("delivery_status", "GROUP_MESSAGE", 0)).isEqualTo("CANCELLED");
-        assertThat(value("delivery_status", "SEND_CARD", 5)).isEqualTo("CANCELLED");
-        assertThat(calls)
-                .extracting(Delivery::action)
-                .containsExactlyInAnyOrder("SEND_CARD", "CREATE_TASK");
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM policy_review_delivery WHERE action_type='SEND_CARD'",
+                                Integer.class))
+                .isZero();
+        assertThat(calls).extracting(Delivery::action).containsExactly("CREATE_TASK");
         assertThat(calls).allMatch(d -> "open-4".equals(d.openId()));
     }
 

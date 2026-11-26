@@ -2318,7 +2318,10 @@ class GoodsSyncIntegrationTest {
                 .andExpect(jsonPath("$.policyCode").value(code));
         mvc.perform(get("/api/policies/mine").session(owner))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].policyCode").value(code));
+                .andExpect(jsonPath("$.items[0].policyCode").value(code))
+                .andExpect(jsonPath("$.items[0].earliestEnd").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.items[0].canExtend").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.items[0].canShorten").doesNotHaveJsonPath());
         mvc.perform(confirmedSubmission("/api/policies/" + id, owner, 1))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.policyCode").value(code));
@@ -4396,6 +4399,11 @@ class GoodsSyncIntegrationTest {
                 .andExpect(status().isNotFound());
         var evidence = uploadChangeFile(owner, "延续证明.pdf");
         attachment.put("id", evidence);
+        var draft = json.createObjectNode().put("perspective", "BILLION");
+        draft.putObject("goodsForm").set("timeAdjustment", change);
+        mvc.perform(policyRequest(post("/api/policies/drafts"), owner).content(draft.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请从调整政策时间入口办理原单改期。"));
         var preview =
                 mvc.perform(
                                 policyRequest(post(endpoint + "/preview"), owner)
@@ -4439,6 +4447,11 @@ class GoodsSyncIntegrationTest {
         mvc.perform(get(url).param("submissionVersion", "1").session(owner))
                 .andExpect(status().isOk());
         mvc.perform(get(url).param("submissionVersion", "1").session(other))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        get("/api/policy-reviews/" + id + "/attachments/" + evidence + "/content")
+                                .param("submissionVersion", "1")
+                                .session(owner))
                 .andExpect(status().isNotFound());
         mvc.perform(policyRequest(delete("/api/attachments/" + evidence), owner))
                 .andExpect(status().isConflict());

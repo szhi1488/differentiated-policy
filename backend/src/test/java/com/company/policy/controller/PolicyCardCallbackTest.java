@@ -11,9 +11,11 @@ import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.PolicyReviewRequest;
 import com.company.policy.mapper.PolicyProductCardMapper;
 import com.company.policy.service.PolicyCardCallback;
+import com.company.policy.service.PolicyFeishuSender;
 import com.company.policy.service.PolicyReviewService;
 import com.company.policy.service.impl.PolicyProductCardBuilder;
 import com.company.policy.support.policy.PolicySnapshotCodec;
+import com.company.policy.support.policy.ProductReviewCardFixture;
 import com.company.policy.vo.CurrentUserResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -70,7 +72,7 @@ class PolicyCardCallbackTest {
     long id, first, second, firstMember, secondMember;
 
     @BeforeEach
-    void prepare() {
+    void prepare() throws Exception {
         id = IDS.incrementAndGet();
         long owner = actor("APPLICANT");
         first = actor("APPLICANT");
@@ -86,18 +88,14 @@ class PolicyCardCallbackTest {
                 TENANT,
                 id,
                 """
-            {"submissionVersion":1,"consent":{"endAdjustments":[{"target":{"policyId":"41","auditLogId":"11","previousEnd":"2026-12-22T00:00:00+08:00"},
+            {"submissionVersion":1,"consent":{"endAdjustments":[{"target":{"policyId":"41","auditLogId":"11","previousEnd":"2026-12-22T00:00:00+08:00","recordVersion":3},
             "endTime":"2026-12-20T00:00:00+08:00","reason":"渠道提前结束"}]}}
             """);
         jdbc.update(
                 "INSERT INTO policy_review_round(tenant_key,policy_id,version,settings_version,stage,route_json) VALUES(?,?,1,1,'PRODUCT_REVIEW',?)",
                 TENANT,
                 id,
-                """
-            {"requiresProductReview":true,"changes":[],"adjustments":[{"policyCode":"ZC-000041",
-            "target":{"policyId":"41","auditLogId":"11","previousEnd":"2026-12-22T00:00:00+08:00"},
-            "endTime":"2026-12-20T00:00:00+08:00","extension":false,"accompanying":true}]}
-            """);
+                json.writeValueAsString(ProductReviewCardFixture.route(id, 1)));
         firstMember = assign(first, "PRODUCT");
         secondMember = assign(second, "PRODUCT");
         assign(actor("ADMIN"), "PURCHASE");
@@ -579,32 +577,11 @@ class PolicyCardCallbackTest {
     }
 
     @Test
-    void previouslyFrozenReplacementCardShowsOriginalTimeProductAndBothPolicyLists()
-            throws Exception {
-        var route =
-                Map.of(
-                        "requiresProductReview",
-                        true,
-                        "changes",
-                        List.of(segment()),
-                        "adjustments",
-                        List.of());
-        jdbc.update(
-                "UPDATE policy_review_round SET route_json=? WHERE policy_id=?",
-                json.writeValueAsString(route),
-                id);
-        assertThat(card(firstMember).toString())
-                .contains(
-                        "京东零售",
-                        "Reno",
-                        "星夜黑",
-                        "12-01",
-                        "12-04",
-                        "退出本段：ZC-000077",
-                        "ZC-000088",
-                        "核销类型：未记录 · 固定金额 25 元/台")
-                .contains("拟执行 · ZC-000088")
-                .doesNotContain("拟叠加执行", "继续叠加执行", "政策叠加初审", "整单选择的商品完全相同");
+    void singleSelectionWithCandidatesCannotCreateAProductCard() throws Exception {
+        var replacement = segment().put("matchingRoundGoods", true);
+        assertThatExceptionOfType(PolicyFeishuSender.Failure.class)
+                .isThrownBy(() -> cardWithSegments(List.of(replacement)))
+                .withMessageContaining("本轮缺少已冻结的产品运营初审依据");
     }
 
     @Test
@@ -641,26 +618,15 @@ class PolicyCardCallbackTest {
     }
 
     @Test
-    void previouslyFrozenMixedRoundCardShowsOnlySegmentsWithMatchingConfigurations()
-            throws Exception {
-        var match = segment().put("kind", "STACK").put("matchingConfigurations", true);
-        match.withArray("after").add(match.at("/before/0").deepCopy());
-        match.withArray("retained").add(match.at("/before/0").deepCopy());
-        match.withArray("removed").removeAll();
-        var partial =
-                match.deepCopy()
-                        .put("from", "2026-12-05T00:00:00")
-                        .put("through", "2026-12-08T23:59:59")
-                        .put("matchingConfigurations", false);
-        jdbc.update(
-                "UPDATE policy_review_round SET route_json=? WHERE policy_id=?",
-                json.writeValueAsString(
-                        Map.of("requiresProductReview", true, "changes", List.of(partial, match))),
-                id);
-
-        assertThat(card(firstMember).toString())
-                .contains("这些政策整单所选的机型配置完全相同", "12-01", "12-04", "ZC-000077", "ZC-000088")
-                .doesNotContain("12-05", "12-08", "整单选择的商品完全相同");
+    void stackWithoutFrozenWholeOrderGoodsMatchCannotCreateAProductCard() {
+        var original = policyForCard(77, fixed("25.00"), null);
+        var current = policyForCard(id, fixed("30.00"), null);
+        var selected = List.of(original, current);
+        var stack = stackedSegment(List.of(original), selected, selected);
+        stack.put("matchingRoundGoods", false);
+        assertThatExceptionOfType(PolicyFeishuSender.Failure.class)
+                .isThrownBy(() -> cardWithSegments(List.of(stack)))
+                .withMessageContaining("本轮缺少已冻结的产品运营初审依据");
     }
 
     @Test

@@ -97,8 +97,6 @@ public final class PolicyChangeDescription {
 
     /** 以该段原、拟实际执行的单据及轮次区分沿用叠加和本轮拟议的叠加。 */
     public static String cardDecision(PolicyExecutionChange change) {
-        if (change.after().isEmpty()) return "本段无拟执行政策";
-        if (change.after().size() == 1) return "拟执行";
         return PolicyExecutionChange.sameMembers(change.before(), change.after())
                 ? "继续叠加执行"
                 : "拟叠加执行";

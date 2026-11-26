@@ -5,7 +5,6 @@ import { readTimelineHistory } from '../../src/utils/policy-timeline'
 import { billionGroupHistory, retailGroupHistory } from '../fixtures/subsidy-history'
 import {
   timelineContainsAt,
-  timelinePlanCaption,
   timelinePlanDetail,
   timelineTimeFromValue,
   timelineTimeValue,
@@ -15,6 +14,21 @@ describe.each([
   ['零售', retailGroupHistory],
   ['百亿', billionGroupHistory],
 ])('%s按原单核对整组和独立商品', (_channel, historyFor) => {
+  it('缺少冻结件数时逐项显示申报商品，即使当前目录件数恰好相同', () => {
+    const sample = historyFor('SPECIFIED')
+    for (const track of sample.tracks) {
+      delete track.policies[0].selections[0].wholeConfigurationGoodsCount
+    }
+    const { rows, segments } = readTimelineHistory(sample)
+    const row = rows.find((item) => item.plan.policyCode === 'ZC-000023')
+    const slice = segments.find((item) => timelineContainsAt(item, '2026-11-14T23:59:59'))
+    for (const scope of [row.segment, slice]) {
+      expect(scope.fullConfiguration).toBe(false)
+      expect(scope.goods).toHaveLength(sample.configurationGoodsCount)
+      expect(scope.label.split('、').sort()).toEqual(['可可棕', '初雪白', '奇遇喵'].sort())
+    }
+  })
+
   it('目录新增或还有下架商品时沿用申报时的整组，单件交叉期间按范围分开，结束后恢复', () => {
     const sample = historyFor('SPECIFIED')
     sample.configurationGoodsCount = 4
@@ -260,14 +274,14 @@ describe('百亿时间轴按原单商品展示，保留配置级审核结果', (
     },
   )
 
-  it('单报部分普通商品显示颜色，数据遗漏配置总数时报告错误', () => {
+  it('单报部分普通商品显示颜色，完整快照可独立判断整组', () => {
     const partial = billionGroupHistory()
     partial.tracks[0].policies[0].selections[0].products.pop()
     const projected = readTimelineHistory(partial)
     expect(projected.rows.some((row) => row.segment.label === '整组配置')).toBe(false)
     expect(projected.segments.some((slice) => slice.label === '整组配置')).toBe(false)
     const { asOf, tracks } = billionGroupHistory()
-    expect(() => readTimelineHistory({ asOf, tracks })).toThrow('配置商品总数')
+    expect(readTimelineHistory({ asOf, tracks }).rows[0].segment.label).toBe('整组配置')
   })
 
   it('原单没有已知时段时仍能看到完整或部分范围，不补画采用时段；无色名的商品按 ID 显示', () => {
@@ -333,12 +347,10 @@ describe('补贴时间轴的展示与联动状态', () => {
       ),
     ).toBe(false)
   })
-  it('比例标题保留计算基数，十进制字符串与固定金额不被修改', () => {
+  it('明细展示比例基数与固定补贴上限，保留原比例和北京时间', () => {
     const plan = { subsidyMode: 'RATIO', ratio: '2.50', priceBase: 'POLICY_PRICE' }
-    expect(timelinePlanCaption(plan)).toBe('2.5% · 政策价')
+    expect(timelinePlanDetail(plan)).toBe('计算基数：政策价')
     expect(plan.ratio).toBe('2.50')
-    expect(timelinePlanCaption({ ...plan, priceBase: 'RETAIL_PRICE' })).toBe('2.5% · 零售价')
-    expect(timelinePlanCaption({ subsidyMode: 'FIXED', fixedAmount: '0.00' })).toBe('固定 0 元')
     expect(timelinePlanDetail({ subsidyMode: 'FIXED', maxSubsidyAmount: '0.00' })).toBe(
       '补贴上限：0 元',
     )

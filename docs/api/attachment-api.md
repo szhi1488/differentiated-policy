@@ -46,7 +46,7 @@ C:/Users/admin/Desktop/differentiated policy/data/
 
 ## 已实现接口
 
-使用现有 HttpSession；写请求需可信 `Origin` 和 `X-Policy-Request: 1`。响应禁止缓存，不暴露磁盘路径和上传者信息。改期证明使用[原单改期增量](../sql/upgrade_policy_time_changes.sql)中的引用。
+使用现有 HttpSession；写请求需可信 `Origin` 和 `X-Policy-Request: 1`。响应禁止缓存，不暴露磁盘路径和上传者信息。生效的改期证明从 `policy_time_change.attachment_json` 读取。[原单改期记录](../sql/database-design.md#在-navicat-核对整单提前结束记录)
 
 页面的文件名使用共用 `AttachmentDownload.vue` 触发下载，通过 `api/request.js` 在当前网页会话读取文件字节，再以 Blob 临时地址保存并释放临时地址。管理员详情、本人申请详情和提交页均使用该入口，下载期间防重复点击。管理员及申请详情的错误显示在文件名下，提交页通过 `popupError` 使用 Message 弹出错误。离开页面时取消未完成的读取。
 

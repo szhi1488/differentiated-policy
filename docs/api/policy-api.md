@@ -55,7 +55,7 @@
 
 每张政策的改期群通知沿用该原单获批的基础信息、商品与补贴明细，标明原政策编号、办理人和办理时间、本次改前及拟定截止和原因。随单获批时注明发起单号。延期另列实际接续起点。提前结束在「截止变更」前列出「调整前政策时段（北京时间）」，从原单获批表单的开始时间到本次调整记录保存的改前截止。先延期再提前时，这里的结束时间是上次延期后的截止。拟定和实际截止不同时另列实际截止。[群公告字段](../architecture/policy-workflow-phase-e.md#终审通过的群公告)
 
-机器人通知已确认统一取消业务跳转，原单改期也适用。当前实现仍有一处待对齐：带 `changeId` 的改期群通知在配置 `FEISHU_POLICY_ERP_URL` 时会附「查看本轮政策」链接。原单改期记录和证明文件由有权限的用户从 ERP 详情查阅。
+原单改期群通知展示原单号、截止变更、原因、政策内容及点名。原单改期记录和证明文件由有权限的用户从 ERP 详情查阅。
 
 申请人、管理员及获批轮次的详情包含 `timeHistory`，其中 `initialEnd` 是原轮获批截止，`currentEnd` 是当前实际截止。`changes` 最近一次在前，每项包含改前、拟定及实际截止、方向、原因、办理人、办理时间、生效时间、证明和随单办理时的来源单号。管理员「差异化政策 → 查看」将该原单的流水放在「当前申请」与「审核记录」之间的「时间调整记录」页签。「当前申请」中的「本轮政策时间调整」来自发起轮次的 `consent.endAdjustments`，逐项展示随单申请调整的目标。下载某次已生效调整的证明使用 `GET /api/policy-reviews/{id}/time-changes/{changeId}/attachments/{attachmentId}/content?submissionVersion={version}`，同时校验原单、轮次及该次调整的附件归属。
 
@@ -197,7 +197,7 @@
 
 关闭自动投递时仍返回本轮的 `reviewStage`。原申请人成功重提时，按原指派结办上轮修改待办。缺设置返回 409 `POLICY_REVIEW_SETTINGS_REQUIRED`，所需组无人合格或无法由两人分别签署返回 409 `POLICY_REVIEW_ASSIGNEES_MISSING`，原状态、轮次和附件保留。[审核设置接口](policy-review-settings.md) · [切换条件](../architecture/policy-workflow-phase-b.md#切换与运行边界)
 
-普通申请无交叉且未选时间调整时，发送 `{ "recordVersion": 3 }` 即可。有随单时间调整时，即使没有交叉也须携带调整预览的 `confirmationToken` 和 `endAdjustments`，此时 `decisions` 可为空数组。独立缩短单的调整内容由服务端从草稿取得，只需回传版本与凭证。有任一交叉段时，送回本次预览的 `confirmationToken`，并按以下格式为每段提交一个决定。将对应的 `scope` 和 `through` 原样送回，零售使用 `selectedPolicyIds` 数组，百亿选一时使用单值 `policyId`。
+普通申请无交叉且未选时间调整时，发送 `{ "recordVersion": 3 }` 即可。有随单时间调整时，即使没有交叉也须携带调整预览的 `confirmationToken` 和 `endAdjustments`，此时 `decisions` 可为空数组。有任一交叉段时，送回本次预览的 `confirmationToken`，并按以下格式为每段提交一个决定。将对应的 `scope` 和 `through` 原样送回，零售使用 `selectedPolicyIds` 数组，百亿选一时使用单值 `policyId`。
 
 确认页合并普通商品只改变展示和操作次数。若零售京东同配置白、黑两件商品在同一时段结果相同，点一次确认要生成两条 `decisions`，分别送回各自的 `scope.goodsId` 和原段 `through`。百亿整段以接口返回的配置 `scope` 提交一个决定，特殊商品的颜色和数量随该段展示。[颜色分组验收](../business/override-engine.md#6-决策表与验收案例)
 
@@ -230,7 +230,7 @@
 
 审核时复核仍可生效的时段、分组和候选。依据发生变化时由管理员驳回，申请人重新确认后提交。
 
-提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照并转 PENDING。新增补贴的申请同时写入商品适用明细，独立缩短申请只保存快照。成功响应示例如下。
+提交接口读取已保存表单并完整校验，状态由后端流转。若保存成功但提交失败，页面保留申请 ID、表单和已保存版本供继续编辑。DRAFT/REJECTED 才可提交，后端在同一事务中递增 `current_version` 和 `record_version`、插入本轮审核快照并转 PENDING。普通申请同时写入商品适用明细，随单改期冻结在本轮快照中。成功响应示例如下。
 
 ```json
 {
@@ -257,7 +257,7 @@
 | `perspective` | 可选，`RETAIL`、`BILLION` |
 | `platformCode` | 可选，具体整单平台编码，例如 `JD` 或 `PDD` |
 
-分页响应形如 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`。列表项含 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`、`perspective`、`selectedPlatforms`、`createdAt` 和 `updatedAt`。时间调整还用到 `endTime`、`sourcePolicyCode`、`adjustmentOnly`、`earliestEnd`、`canShorten` 和 `canExtend`。`adjustmentOnly` 标记独立缩短申请，`canShorten`、`canExtend` 决定该申请是否可作为新的时间调整目标。整单平台按 `policy_apply.platforms` 中的编码精确匹配。
+分页响应形如 `{ "items": [], "total": 0, "page": 1, "pageSize": 20 }`。列表项含 `id`、`policyCode`、`status`、`recordVersion`、`submissionVersion`、`perspective`、`selectedPlatforms`、`createdAt`、`updatedAt`、`endTime` 和 `reviewStage`。打开「调整政策时间」时，页面单独请求 `GET /api/policies/time-adjustments/options`，按当时的平台分工和原单状态取得可调整目标及允许的方向。整单平台按 `policy_apply.platforms` 中的编码精确匹配。
 
 `audit-logs` 使用同样的分页参数和响应外层，按提交轮次倒序。每条含字符串 `id`、`submissionVersion`、`submittedAt`、`auditStatus`、`auditorName`、`auditComment` 和 `auditTime`。审核状态为 `SUBMITTED`、`APPROVED` 或 `REJECTED`，待审轮次的审核信息为 `null`，未提交的草稿返回空页。
 
@@ -271,11 +271,13 @@
 
 一次快照记录某份政策某一轮正式提交时的完整内容。`PolicySnapshotData` 是 Java 的 `record`（记录类），每次提交都有各自的字段值。固定金额、比例这样的有限选项才适合用枚举（`enum`）表达。快照使用现有审核日志的一个 JSON 字段，无需单独建表。[快照模型](../../backend/src/main/java/com/company/policy/entity/PolicySnapshotData.java)
 
-1. **提交。** 服务端校验已保存的表单和在售商品，取得该时点的商品名称、规格和颜色。`PolicySnapshotCodec` 将表单、补贴、附件引用、商品及本轮确认的 `consent` 序列化为 JSON。提交事务将 JSON 写入 MySQL 的 `policy_audit_log.snapshot_data`，同时更新申请状态。新增补贴的申请保存本轮商品明细，独立缩短单保留原申请的商品快照供审核。[快照编解码](../../backend/src/main/java/com/company/policy/support/policy/PolicySnapshotCodec.java)
+1. **提交。** 服务端校验已保存的表单和在售商品，取得该时点的商品名称、规格和颜色。`PolicySnapshotCodec` 将表单、补贴、附件引用、商品及本轮确认的 `consent` 序列化为 JSON。提交事务将 JSON 写入 MySQL 的 `policy_audit_log.snapshot_data`，同时更新申请状态。普通申请保存本轮商品明细及随单调整。独立改期直接写入原单的改期记录。[快照编解码](../../backend/src/main/java/com/company/policy/support/policy/PolicySnapshotCodec.java)
 2. **回读。** 本人已提交详情、管理员审核详情、历轮记录和补贴对照读取所需轮次的快照。当前轮直接读取提交时写入的对外单号、表单、商品与附件。读取器按当前字段解码。例如一轮的表单同时含 `sceneTypes` 和额外的 `sceneType` 时，只使用 `sceneTypes` 展示该轮的实际场景，原快照保持完整。金额与比例保留十进制字符串，数量区分 0 和未填写。[快照往返回归](../../backend/src/test/java/com/company/policy/support/policy/PolicySnapshotCodecTest.java)
 3. **重启和迁移。** 后端重启或更换 JAR 后，连接原 MySQL 数据库即可继续读取历轮政策。快照中的文件 ID 和文件名用于定位附件，原文件及元数据保存在附件目录，迁移时须一并保留。[附件存储和配置](attachment-api.md#存储和配置)
 
 ## 错误与实现要求
+
+申请人政策接口与管理员政策审核接口共用全局异常处理。路径或查询参数类型不匹配时返回 `400 POLICY_VALIDATION_FAILED`，缺少必填查询参数或 JSON 无法解析时返回 `400 INVALID_REQUEST`。数据库悲观锁冲突返回 `409 POLICY_VERSION_CONFLICT`，查询超时或无法建立事务返回 `503 POLICY_STORAGE_UNAVAILABLE`。错误响应均带 `Cache-Control: no-store`。
 
 | HTTP | code | 场景 |
 | --- | --- | --- |

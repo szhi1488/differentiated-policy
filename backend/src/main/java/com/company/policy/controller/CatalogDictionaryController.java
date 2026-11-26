@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.CatalogDictionaryRequest.Create;
 import com.company.policy.dto.CatalogDictionaryRequest.Rename;
 import com.company.policy.dto.CatalogDictionaryRequest.Type;
@@ -13,12 +12,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/admin/catalog/dictionary")
@@ -75,20 +70,5 @@ public class CatalogDictionaryController {
             @RequestParam String expectedName,
             HttpServletRequest request) {
         dictionary.delete(sessions.requireLogin(request).user(), type, id, expectedName);
-    }
-
-    @ExceptionHandler({
-        MethodArgumentTypeMismatchException.class,
-        MissingServletRequestParameterException.class
-    })
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_DICTIONARY_INVALID", "字典类型或参数无效。"));
-    }
-
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ResponseEntity<ApiError> conflict() {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ApiError("CATALOG_DICTIONARY_CONFLICT", "字典项正在更新，请刷新后操作。"));
     }
 }

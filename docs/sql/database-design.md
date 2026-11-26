@@ -1,94 +1,16 @@
 # 数据库设计与字段字典
 
-更新日期 2026-11-25。二十三表空库基线适用于 MySQL 8.0.16+，包含用户头像字段 `avatar_url` 和商品政策名 `policy_name`。公司所有有效管理员共用源商品、清洗结果和标准目录。后端须在建立会话前校验公司飞书租户，并在请求时校验有效身份及权限。政策三表已纳入空库脚本。申请人政策接口和商品引用检查已使用政策三表，目标 MySQL 待联调。2026-11-17 用户管理五个接口直接复用本基线，没有新增字段、表或迁移。
-
-## 已有库升级飞书审核卡投递
-
-2026-11-24 用户确认仅扩展 `policy_review_delivery.ck_review_delivery_recipient`。发卡和更新卡分别按个人指派保存回执。继续使用二十二张表及原有列、外键、唯一键和调度索引。
-
-1. 已完成 B 阶段升级的数据库，在 Navicat 选中目标 MySQL 8.0.16+ 项目库，停止各实例写入并备份。执行[审核卡投递增量脚本](upgrade_policy_review_delivery_cards.sql)的第一段，核对库名及现有约束。
-2. 如个人动作目前仅允许 `CREATE_TASK`、`CLOSE_TASK`，执行第二段替换此约束。已包含 `SEND_CARD`、`UPDATE_CARD` 的库直接核对第三段。首次新建空库可使用本版完整建表脚本，已有十五表库按下节升级会直接取得新约束。
-3. 在同一连接核对前后投递记录数相等、约束 `ENFORCED=YES`，群动作为 0、四种个人动作均要求正指派 ID。结果符合后部署配套后端。已有外部回执的记录需保留至补偿结束。
-
-## 已有库升级政策审核工作流
-
-本次升级保留既有十五表，给每份审核日志增加工作流标记，另建七表保存企业名单、每轮指派、节点决定、改派和待投递动作。新空库直接执行下面的完整建表步骤。
-
-1. 在 Navicat 选中已完成延期、平台分工和零售多场景升级的项目库，确认 MySQL 8.0.16 及以上。停止所有后端实例和后台写入。备份整个数据库及 `POLICY_STORAGE_ROOT` 所指附件目录（含文件和元数据），记录所用版本，核实能还原。保留十五表空库与已有库两条路径。
-2. 已有库使用 [upgrade_policy_review_workflow.sql](upgrade_policy_review_workflow.sql)。先在同一查询窗口执行第 1 段，保存库名、版本、相关列和表清单、三项升级前行数。首次升级应查不到七张工作流表及标记列。临时底稿按主键记录申请、审核和商品行的 SHA-256，包括快照内的逐段选择、附件引用和调整证明。临时表的磁盘空间与既有记录数有关。
-3. 在同一窗口顺序执行第 2 至 5 段，遇错停止。加列时已有轮次取得 0。七表创建成功后，数据库将该列的默认值切到 1。第 5 段的 `changed_or_missing_*`、`added_*` 六项以及 `wrongly_marked_legacy_rounds` 均应为 0。将这些数值与升级前行数一起保存。
-4. 在同一库运行 [verify_policy_review_workflow.sql](verify_policy_review_workflow.sql)。回传七张表的名单、标记列类型/可空/默认值（`tinyint/NO/1`）、版本及状态分布、七表计数与五项一致性核对结果。刚升级时七表均为空，已有轮次全部为 0。五项一致性差异均为 0。结构查询可核对节点唯一主键、个人任务指派唯一键、投递业务唯一键及外键，执行计划留到有代表性数据时复核。
-5. 部署配套服务并保存产品运营与采购名单。普通申请首提和重提都按轮冻结指派和分流依据。办理人须具备当前节点的有效指派及岗位资格。随单改期由发起轮次统一终审；通过时原政策更新截止并记录各次调整。
-6. 核对一笔待审旧单、一笔有驳回重提的旧单及有调整证明的轮次。逐项核对对外单号、当前版本、原申请人、各轮决定与审核时间、改期流水及随单发起轮次、重叠段的原/拟名单，下载原附件、独立调整及随单调整证明。已有引用的附件仍受删除保护。后续阶段检查旧链接只读原轮、采购直审和初审不能越级、全局名单不改历史指派以及历史通知不会在切换时重复投递。
-
-**中断与恢复**　MySQL DDL 会隐式提交。若仍在原连接，保留临时底稿，核对 `SHOW CREATE TABLE` 及标记列默认值，从第一条未完成语句继续。不要把已存在的轮重新设为 0。若原连接已关闭，使用升级前备份在独立核对库还原第 1 段底稿或恢复至升级前一致版本，再重新执行。新连接不能用已变更的库自行生成「升级前」底稿。已有同名却不同结构的对象时停止，保留错误与结构输出。业务回退须停写同时恢复相配套的数据库、附件备份及服务端。已有新轮或已投递动作时先对账，恢复备份可能丢失备份后写入，已送达的外部任务也不会随数据库回退。
-
-### 本轮完整性与并发
-
-- 名单设置以企业为单位，锁定设置行后按用户 ID 升序锁申请人、设置操作人及所选账号（取本动作所需的人员），以配置版本检查并发保存。提交在同一事务读取该版本和所选有效成员，再按政策已有的平台/商品/机型锁定顺序复核交叉依据。整单快照、工作流轮、成员及待投递事件共进退。
-- 节点写入按企业和申请、轮次核对最新状态与业务版本，锁定同一轮和本组成员后检查资格。并发办理及改派必须在相同顺序串行化。每轮每组至多一条决定，其 `member_id` 只能关联本企业、本申请、本轮、本组的指派。其余成员可标记「同组他人已处理」，实际签署人以决定行为准。
-- 成员再次加入同一组时使用新的 `assignment_no` 与指派 ID，旧行保留以对照早期任务及回执。生成列保证同人同组最多一条有效指派。设置版本号和成员姓名部门一起冻结；默认名单修改后可从轮成员和改派前后清单恢复当时的人选。服务端检查两关实际办理人不同，改派必须校验现行资格、记录原因。
-- 相同事件的一条群消息用接收键 0，每个个人动作以实际指派 ID 去重。动作与本地业务在一个事务登记，外部投递在提交后进行。后续投递按状态、下次尝试、租约截止和 ID 领取，按业务唯一键及回执逐项对账。结构升级本身不生成投递记录。退回时可给原申请人建立独立的 REVISION 修改指派，个人投递仍关联该指派。这类修改任务没有审核签署权。并发与重试需在后续目标环境复核。
-
-<a id="已有库升级政策延期"></a>
-
-## 已有库升级原单时间调整
-
-2026-11-25 已确认原单改期。现有二十二表开发库由用户在 Navicat 核对库名、停止后端写入并备份，按顺序执行[原单时间调整增量](upgrade_policy_time_changes.sql)。第一段更新 `ck_apply_time`，允许已通过的原单提前结束到起效前一秒；申请提交继续核对起止顺序。第二段创建 `policy_time_change`，第 3 段核对新表结构，新表行数预期为 0。MySQL DDL 隐式提交，中断时核对已成功部分，再从下一段继续。旧测试单无需处理。全新空库直接运行以下二十三表基线之一。
-
-首次联调时，在两个页面对同一原单同时提交不同调整，预期一笔成功、另一笔收到 409 并要求重新核对；用成功请求的同一提交标识重试，记录数和通知数应各保持一条。在 Navicat 执行[时间调整核对查询](query_policy_end_adjustments.sql)，查看实际截止、逐笔记录及投递状态，核对链路差异和目标库索引计划。回退前停写，恢复备份及配套应用版本。
-
-## 清空政策提交后重新验证
-
-[清空政策提交脚本](clear_policy_submissions.sql) 适用于已完成延期升级的十五表库或采用审核工作流的二十二、二十三表库，仅在另行明确要从头验证提交时使用。执行范围覆盖所选库内**所有申请人**的草稿、待审、已通过和已驳回申请，以及可能存在的早期测试延期单。它同时清空各轮补贴决定、审核记录、已建的时间调整流水和政策商品明细。在工作流库中也清理逐轮成员、节点决定、改派和投递。企业默认审核名单、账号、角色、平台分工、商品目录和磁盘附件保留。
-
-1. 停止后端写入并备份目标库。在 Navicat 同一查询窗口按段执行，先核对库名、ready_to_clear=1、政策三表及适用的工作流记录数。
-2. 运行脚本的事务段，查看结果网格中的 `applications_left`、`audit_rounds_left` 和 `goods_details_left`。三项及工作流记录余量均为 0 且确认清空时，在原窗口单独执行 `COMMIT;`。提交前要取消时，在原窗口执行 `ROLLBACK;`。脚本末尾的提交和回滚命令都已注释，需要手动选择。
-3. 提交后，在同一库的新查询窗口复查适用的全部余量，并刷新已打开的表格页，再恢复写入。此次执行回显为删除 20 条商品明细、6 条审核记录、7 条申请，解除延期引用影响 0 行。该回显只记录事务内执行的行数，最终以提交后的复查为准。
-
-## 已有十四表库升级步骤
-
-2026-11-19 的两项增量适用于已有原始 SKU 一对一基线的十四表库。由用户停止后端写入、备份目标库，在 Navicat 核对库名和当前结构。两项都待升级时，先回填商品名称与政策名，再升级自动排除约束。已完成的步骤通过脚本的核对查询确认。两个差异数均为 0、两处约束均核对通过后启动新版后端。需要整体回退时，在停写期间恢复升级前备份并切回旧版。
-
-### 已有十四表库升级商品名称与政策名
-
-在 Navicat 按段执行[商品名称与政策名增量脚本](upgrade_goods_source_names.sql)。旧结构应为 `goods_name VARCHAR(384)` 且无 `policy_name`。先确认已关联来源的缺失原名清单为空。若有结果，先在吉客云补全原名并重新导入，再停写复核。
-
-脚本将 `goods_name` 扩至 512 字符，新增可空的 `policy_name`（1024 字符），按 `source_goods_item.goods_id = goods.id` 将已关联商品的两项值覆盖为当前来源原文。手工商品及历轮政策快照保留原值。DDL 单独提交，已成功改表、回填中断时，从第 3 段继续。末尾按字节核对 `goods_name_differences` 与 `policy_name_differences`，预期均为 0，尾部空格及 NULL 与空串的差异也计入。
-
-### 已有十四表库升级清洗自动排除
-
-在 Navicat 按段执行[自动排除约束增量脚本](upgrade_catalog_direct_exclusions.sql)。核对 `source_goods_item.ck_source_clean_excluded` 允许记录无人工审核人的规则排除，`catalog_clean_job_item.ck_clean_item_outcome` 允许 `EXCLUDED`，且两项约束均已启用。两条 ALTER 分别提交，中断后核对已完成项并继续。升级保留既往任务结果。新版后端运行清洗后，可用脚本末尾查询核对该任务的自动排除数。
-
-### 已有库升级零售场景多选
-
-1. 使用 MySQL 8.0.16 或以上。停止后端写入并备份，确认所选项目库已有政策主表和审核日志，在 Navicat 同一连接整份运行[零售场景多选升级脚本](upgrade_policy_scene_types.sql)。新建空库直接使用当前基线。
-2. 脚本添加 `policy_apply.scene_types`，按行将旧值转成一个元素的 JSON 数组；旧空值保留 SQL NULL。迁移包含逻辑删除行，并显式保留原更新时间。场景检查限制渠道、数组类型、允许的编码与唯一性。逐行对照通过后才移除旧列。历史提交快照原文、政策轮次及商品明细继续保留。
-3. 在结果集中找到 `upgrade_result = 完成`。首次升级 `scene_differences = 0`，`billion_scene_errors = 0`，政策和快照各自的前后行数相等。已完成的库重跑时，旧列已移除，`scene_differences` 为 NULL。末尾可查看新旧快照字段及管理员场景筛选的执行计划。中断后保持停写，核对错误再重跑；出现非零差异时保留旧列，先核对数据。需要整体回退时在停写期间恢复备份及配套应用版本。
-4. 确认结果后启动配套前后端。若库中已有迁移过的草稿，用该草稿核对转换后的单元素场景数组，再保存一份「国补、地补」申请并重开。正式提交后，管理员分别按国补、地补均可找到该单，自补筛选不命中。驳回后修改场景仅影响草稿，重提后管理员看到新组合，首轮快照仍显示原组合。两个页面同时编辑同一草稿，后保存的旧版本应返回 409。
-
-本次结构变更用于保存零售的实际选择，范围为主表场景列及约束。「全部」保存三个场景编码；百亿的场景为 SQL NULL。逐段决定复用审核日志原有的 `snapshot_data`，旧轮次保留原始 JSON。确认页合并同配置颜色只影响展示，零售商品明细仍按本轮实际选中的平台和商品 ID 保存。[按轮快照回读](../api/policy-api.md#提交快照的存储与回读)
-
-### 已有库升级申请人平台分工
-
-已有项目库须有 `user_info` 表和 `uk_user_id_tenant` 索引。停止后端写入并备份后，在 Navicat 选中项目库，整份运行同一个[平台分工升级脚本](upgrade_user_platform_assignments.sql)。脚本自动识别下列三种情况。
-
-| 执行前的分工表状态 | 脚本处理 |
-| --- | --- |
-| 尚无 `user_platform_assignment` | 按十五表基线创建空表，由管理员首次分配 |
-| 已有分工表，仍有旧唯一索引 `uk_owner_platform` | 核对组合主键和旧索引定义，仅移除跨渠道限制，保留原有分工 |
-| 分工表已是新结构 | 核对现状和行数，可重复执行 |
-
-最后一行 `upgrade_result` 预期为「完成」，`assignments_before` 和 `assignments_after` 相同。首次建表时两者均为 0，原来已有分工时两者为已有记录数。若提示核对结构，请查看脚本输出的 `SHOW CREATE TABLE`。完成后启动新版前后端，在「系统管理 → 用户管理 → 负责平台」配置各渠道的平台负责人。
+本项目使用 MySQL 8.0.16 及以上版本，当前空库基线包含二十三张表。商品目录由公司共用。政策通过申请、提交轮次和已核验的账号关联商品明细、审核决定、改期及飞书投递记录。
 
 ## 1. 在 Navicat 建表
 
-项目未配置 Flyway 或自动建表。新空库由用户在 Navicat 执行以下第 1、3、4 步，最新基线已包含商品清洗、平台分工、原单改期、零售场景及审核工作流历次增量。第 2 步仅用于已明确要清空数据的重建。已有十四表库保留数据的升级见上节。
+项目由用户在 Navicat 建表，后端启动时不会自动创建或更新目标库结构。
 
-1. 停止项目后端，在 Navicat 选中目标库 `differentiated policy`。
-2. 整份执行 [drop_all_tables.sql](drop_all_tables.sql)，刷新表列表。该脚本按外键顺序删除下列二十三张项目表，用户、角色、商品、任务、政策及审核历史随表永久删除。数据库本身和磁盘附件保留。已是空库可直接从下一步开始。
-3. 在同一库整份执行 [schema.sql](schema.sql) 或 [V1__create_policy_tables.sql](V1__create_policy_tables.sql)，任选一份。两份内容相同。执行成功后刷新表列表，应出现下列二十三张空表。若建表中途失败，先查看 Navicat 报错，修正原因后从第 2 步重新开始。
-4. 重启后端，用飞书重新登录，生成默认的申请人账号。在 Navicat 核对该账号并将其 `user_info.role_type` 设为 `ADMIN`，重新进入管理员工作台，从吉客云导入商品并发起清洗。
+1. 核对 Navicat 与后端指向同一目标库，检查 MySQL 版本和现有表。首次建表请选择空库。
+2. 在空库中执行 [schema.sql](schema.sql) 或 [V1__create_policy_tables.sql](V1__create_policy_tables.sql) 其中一份。两份内容相同。刷新后按[二十三表清单](#2-二十三表清单和约束)核对表名。若中途报错，保留错误和已建表的定义，核实原因后从尚未成功的部分继续。
+3. 启动后端，用飞书登录生成默认申请人账号。首次配置管理员时，由用户核对目标账号并在 Navicat 将该账号的 `user_info.role_type` 设为 `ADMIN`，重新进入工作台后按业务需要设置审核名单、分配平台或导入商品。
+
+**已有表的库**先核对实际表结构和需保留的数据。如需整体重建，须另行确认本次目标库及删除范围，先停止后端写入，并备份数据库及同一时点的 `POLICY_STORAGE_ROOT` 附件目录。确认重建后，由用户在选定的库执行 [drop_all_tables.sql](drop_all_tables.sql)，再按上面的空库步骤建表。删表会永久清除项目表中的账号、商品、政策、审核记录及附件引用。磁盘附件和已发出的飞书消息仍在原处。
 
 ## 2. 二十三表清单和约束
 
@@ -131,13 +53,13 @@
 3. 两条不同原始 SKU 即使机型版本、RAM、ROM、颜色相同，也保存两条商品；重复处理同一来源则复用自身商品，不重复建档。
 4. 手工新增没有原始来源，`sku_id` 留空；政策继续按实际选中的 `goods.id` 引用商品。
 
-原始 SKU 约束已包含在两份建表脚本中。[Navicat 重建步骤](#1-在-navicat-建表)
+原始 SKU 约束已包含在两份建表脚本中。[Navicat 建表步骤](#1-在-navicat-建表)
 
 预期 `goods.sku_id` 为可空 VARCHAR(19) ASCII，唯一键为 `uk_goods_sku`；来源 `goods_id` 由 `uk_source_goods` 保证一对一。规格组合使用普通索引 `idx_goods_spu_specs`。目标 MySQL 建表与并发验证由用户执行，本地 H2 仅验证应用逻辑。
 
 ### 商品表关联示例
 
-以下用一条源商品说明十五表基线中的写入路径。示例 ID 和日期仅用于说明。
+以下用一条源商品说明从导入到建档的写入路径。示例 ID 和日期仅用于说明。
 
 | 步骤 | 表 | 示例 |
 | --- | --- | --- |
@@ -210,6 +132,7 @@
 
 | 流水字段 | 含义 |
 | --- | --- |
+| `id` | 本次调整的唯一编号，对应群通知中该次改期事件 |
 | `policy_id, tenant_key, policy_version, audit_log_id, after_record_version` | 原政策、企业、获批轮次和审核行、完成本次变更后的主表版本 |
 | `direction, previous_end, requested_end, actual_end` | 延期或提前结束、变更前实际截止、申请截止、变更后实际截止 |
 | `changed_at, effective_at` | 办理时间与执行区间受影响的第一秒，均为北京时间。延期从原截止下一秒和办理时刻中的较晚者接续，提前结束从实际截止下一秒退出 |
@@ -218,7 +141,14 @@
 | `source_policy_id, source_version` | 随单调整的发起单和轮次，该轮对同一原单仅可批准一次 |
 | `consent_json` | 使用真实原政策 ID 保存本次新增时段的范围、候选和采用选择，对外仍显示原政策编号 |
 
-连续办理时，同一 `policy_id` 后一条的 `previous_end` 应等于前一条的 `actual_end`，最新一条的 `actual_end` 与主表当前截止一致。随单待审、驳回时，发起轮次快照的 `consent.endAdjustments` 保留申请依据，采购终审通过才写目标原单的流水。此前生成的开发测试单无需补录或转换。[原单调整及投递只读查询](query_policy_end_adjustments.sql) · [业务接口](../api/policy-api.md#整单提前结束)
+连续办理时，同一 `policy_id` 后一条的 `previous_end` 应等于前一条的 `actual_end`，最新一条的 `actual_end` 与主表当前截止一致。随单待审、驳回时，发起轮次快照的 `consent.endAdjustments` 保留申请依据，采购终审通过才写目标原单的流水。在 Navicat 按原单的 `policy_id` 和 `after_record_version` 顺序查看改期，按 `source_policy_id, source_version` 可反查同一申请获批的全部随单调整。[业务接口](../api/policy-api.md#整单提前结束)
+
+### 本轮完整性与并发
+
+- 名单设置以企业为单位，锁定设置行后按用户 ID 升序锁申请人、设置操作人及所选账号（取本动作所需的人员），以配置版本检查并发保存。提交在同一事务读取该版本和所选有效成员，再按政策已有的平台/商品/机型锁定顺序复核交叉依据。整单快照、工作流轮、成员及待投递事件共进退。
+- 节点写入按企业和申请、轮次核对最新状态与业务版本，锁定同一轮和本组成员后检查资格。并发办理及改派必须在相同顺序串行化。每轮每组至多一条决定，其 `member_id` 只能关联本企业、本申请、本轮、本组的指派。其余成员可标记「同组他人已处理」，实际签署人以决定行为准。
+- 成员再次加入同一组时使用新的 `assignment_no` 与指派 ID，旧行保留以对照早期任务及回执。生成列保证同人同组最多一条有效指派。设置版本号和成员姓名部门一起冻结；默认名单修改后可从轮成员和改派前后清单恢复当时的人选。服务端检查两关实际办理人不同，改派必须校验现行资格、记录原因。
+- 相同事件的一条群消息用接收键 0，每个个人动作以实际指派 ID 去重。动作与本地业务在一个事务登记，外部投递在提交后进行。后台按状态、下次尝试时间、租约截止和 ID 领取登记，按业务唯一键及回执逐项对账。退回时可给原申请人建立独立的 REVISION 修改指派，个人投递仍关联该指派。这类修改任务没有审核签署权。并发与重试需在目标环境复核。
 
 ### 数据库与服务端校验
 
@@ -231,7 +161,7 @@
 
 ### 权限、历史与任务
 
-登录时须识别停用记录并拒绝登录。申请人只能操作本人申请，审核应校验有效管理员及租户；明细和日志经父政策授权。商品中心的编辑、删除及字典维护须检查历史商品或机型引用。正式提交与商品改规格、删除共享事务锁定约定，提交完成前重新验证目录，具体并发验收见第 5 节。
+登录时须识别停用记录并拒绝登录。申请人编辑自己的草稿，审核节点须校验本企业有效账号及本轮指派，采购另须具备管理员角色。明细和日志经父政策授权。商品中心的编辑、删除及字典维护须检查历史商品或机型引用。正式提交与商品改规格、删除共享事务锁定约定，提交完成前重新验证目录，具体并发验收见第 5 节。
 
 goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式、北京时间日期、查询阶段和当前阶段游标。按修改日先查商品修改，再重置游标查 SKU 修改。终态任务只保留该任务最后位置，日志不保存游标、worker_token 或完整上游响应。active_slot 为自动生成列，调用方不写；QUEUED/RUNNING/PAUSED 占同账套唯一槽。暂停任务可在冷却后恢复，或结束并保留已落库原文。源商品的首次和最近导入任务引用要求同账套和品牌。
 
@@ -489,6 +419,10 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | audit_time | DATETIME | 是 | NULL | 本轮审核时间 |
 | created_at | DATETIME | 否 | CURRENT_TIMESTAMP | 本轮提交时间 |
 
+### policy_time_change
+
+每次改期使用自增 `id` 留痕，`(policy_id, after_record_version)` 唯一。同一独立批次通过企业、办理人、请求键和原单防重，随单获批通过发起单、发起轮次和原单防重。独立办理填写 `request_key, request_hash`，随单办理填写 `source_policy_id, source_version`。原单的获批轮次、办理前后的截止、执行生效时间、附件和选单依据见[时间调整流水字段](#在-navicat-按发起单或原单核对时间调整)。
+
 ### policy_goods_detail
 
 | 字段 | 类型 | 可空 | 默认值/生成 | 说明 |
@@ -511,10 +445,10 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | `policy_review_settings` | `tenant_key` 主键；`version INT` 默认 0；`updated_by BIGINT` 可空，关联同企业本地账号；`updated_at` 默认当前时间 | 未配置为版本 0，更新成功后版本递增 |
 | `policy_review_setting_member` | `tenant_key,group_code VARCHAR(16),user_id BIGINT` 联合主键；组为 PRODUCT 或 PURCHASE，人员关联同企业账号 | 同组同人只保存一次。采购资格、启停及禁止自审由服务端核验 |
 | `policy_review_round` | `policy_id,version` 主键；`tenant_key`；`settings_version INT` 须大于 0；`stage VARCHAR(24)`；`route_json JSON` 对象；`created_at` 默认当前时间 | 阶段为 PRODUCT_REVIEW、PURCHASE_REVIEW 或 FINISHED。整单路由、样本轮次、触发段和展示依据从冻结的 JSON 读取 |
-| `policy_review_member` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code,user_id`；`display_name VARCHAR(64)`、`department VARCHAR(128)`（可空）为指派时快照；`assignment_no INT` 默认 1；`member_status VARCHAR(16)` 默认 ACTIVE；`task_guid VARCHAR(128)` 可空；`active_user_id BIGINT` 生成 | 组为 PRODUCT 或 PURCHASE；REVISION 留作后续退回时给原申请人的修改指派。设置与节点决定只接受前两组。ACTIVE、REMOVED、HANDLED、PEER_HANDLED 分别为有效、移除、本人办理、同组他人处理。未送达可无 GUID，非空 GUID 在企业内唯一 |
+| `policy_review_member` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code,user_id`；`display_name VARCHAR(64)`、`department VARCHAR(128)`（可空）为指派时快照；`assignment_no INT` 默认 1；`member_status VARCHAR(16)` 默认 ACTIVE；`task_guid VARCHAR(128)` 可空；`active_user_id BIGINT` 生成 | 组为 PRODUCT 或 PURCHASE；REVISION 用于退回后给原申请人的修改指派。设置与节点决定只接受前两组。ACTIVE、REMOVED、HANDLED、PEER_HANDLED 分别为有效、移除、本人办理、同组他人处理。未送达可无 GUID，非空 GUID 在企业内唯一 |
 | `policy_review_decision` | `policy_id,version,group_code` 主键；`tenant_key,member_id BIGINT`；`decision VARCHAR(16)` 为 APPROVE 或 REJECT；`reason VARCHAR(512)` 可空，产品运营退回时必填；`decided_at` 默认当前时间 | 保存该节点实际决定人的一次操作，按指派查询姓名部门及节点 |
 | `policy_review_reassignment` | `id BIGINT` 自增；`policy_id,version,tenant_key,group_code`；`operator_id BIGINT` 为同企业操作人；`reason VARCHAR(512)` 须有内容；`before_members,after_members JSON` 数组保存改派前后指派 ID 及人员 ID；`created_at` 默认当前时间 | 按同轮、同组及记录 ID 回看谁何时增减了哪些人 |
-| `policy_review_delivery` | `id BIGINT` 自增；`tenant_key,policy_id,version`；`event_key VARCHAR(128)`；`action_type VARCHAR(16)` 为 GROUP_MESSAGE、SEND_CARD、UPDATE_CARD、CREATE_TASK 或 CLOSE_TASK；`recipient_key BIGINT` 为 0 或指派 ID，`recipient_member_id` 自动映射个人指派；`payload_json JSON` 对象；`created_at` 默认当前时间 | 轮次内事件、动作和接收键联合唯一。独立业务提醒的 policy_id 与 version 同时为空，生成列 notice_key 与企业联合唯一。请求收件人、摘要指纹及人工处理人、依据、时间保存在本条登记的 JSON 中。 |
+| `policy_review_delivery` | `id BIGINT` 自增；`tenant_key,policy_id,version`；`event_key VARCHAR(128)`；`action_type VARCHAR(16)` 为 GROUP_MESSAGE、SEND_CARD、UPDATE_CARD、CREATE_TASK 或 CLOSE_TASK；`recipient_key BIGINT` 为 0 或指派 ID，`recipient_member_id` 自动映射个人指派；`payload_json JSON` 对象；`created_at` 默认当前时间 | 轮次内事件、动作和接收键联合唯一。独立业务提醒的 policy_id 与 version 同时为空，库内 action_type 为 GROUP_MESSAGE、recipient_key 为 0，按企业和生成列 notice_key 去重。请求收件人、摘要指纹及人工处理人、依据、时间保存在本条登记的 JSON 中。 |
 | 同一投递记录的结果 | `delivery_status VARCHAR(24)` 默认 PENDING，可取 SENDING、SENT、RETRY、UNKNOWN、FAILED、CANCELLED；`attempts INT` 默认 0；`next_attempt_at,lease_until,delivered_at`、`lease_owner VARCHAR(128)`、`receipt_id VARCHAR(128)`、`last_error VARCHAR(512)` 均可空 | 保存派发进度、限时领取者、重试时间、外部回执与脱敏错误。结果未知时优先核对本动作 |
 
 ### 群消息投递编号与飞书回执
@@ -528,27 +462,16 @@ goods_sync_job 每条记录只导入一个品牌，并独立保存导入模式�
 | `notice_key` | 独立提醒上等于 `event_key`，与 `tenant_key` 组合对登记去重。按审核轮次登记的行此列为 NULL。 |
 | `receipt_id` | 确认送达时保存的飞书回执。群消息通常为 `om_…`，个人待办为任务 GUID。 |
 
-在 Navicat 选择与后端一致的库，打开投递表，按测试企业及 `action_type = 'GROUP_MESSAGE'` 筛选，按 `delivered_at` 倒序。11 月 24 日群截图中的两类通知可按下面的条件核对，再用 `delivery_status`、送达时间和 `receipt_id` 对照原消息。[已有库投递核对脚本](verify_workflow_execution_notices.sql)
+在 Navicat 中按企业和业务事件定位投递，再对照 `delivery_status`、`delivered_at`、`receipt_id` 与飞书回执。常见的核对方式有三种。
 
-- **零售快手分工变更**。查 `event_key` 以 `PL/RETAIL/KUAISHOU/` 开头的记录。`policy_id`、`version` 均为 NULL，`payload_json` 里有本次的平台和分工变更信息。
-- **历史群消息「ZC-000001 已提交，请采购办理终审」**。查 `policy_id = 1`、对应 `version`、`event_key = 'SUBMITTED'` 的原记录。现行采购提醒是发给本轮采购的私聊卡，登记为 `SEND_CARD`；审核流程的群公告在终审通过时登记为 `GROUP_MESSAGE`，事件键为 `PURCHASE_DECIDED`。终审公告的表单内容来自该轮 `policy_audit_log.snapshot_data`，叠加政策来自同一企业、单号和轮次的 `policy_review_round.route_json`。对外政策单号由 `policy_apply.id` 格式化为 `ZC-` 加至少六位数字。`policy_apply.policy_no` 用于首次创建请求的幂等核对。
+- 平台交接按 `event_key` 前缀查找。例如零售快手以 `PL/RETAIL/KUAISHOU/` 开头，分工的变动保存在 `payload_json`。
+- 终审通过的群公告按 `policy_id`、`version`、`event_key = 'PURCHASE_DECIDED'` 及 `action_type = 'GROUP_MESSAGE'` 查找。表单来自该轮 `policy_audit_log.snapshot_data`，叠加名单来自同轮 `policy_review_round.route_json`。采购办理提醒按采购指派记录为 `SEND_CARD`，收件人可从 `recipient_member_id` 对应的指派核对。
+- 原申请人的临期提醒按 `P/{policyId}/EXPIRY_REMINDER/{reminderDate}` 查找，日期为北京时间的提醒日。`policy_id`、`version` 在这类独立提醒的投递行上均为 NULL，按企业和 `notice_key` 去重。`payload_json.kind` 为 `EXPIRY_REMINDER`，管理员页面显示实际私发动作 `SEND_CARD`。[时间与收件规则](../architecture/policy-workflow-phase-f.md#原申请人的临期私聊)
 
 ## 5. 验证范围
 
-政策审核工作流的两份 H2 初始化脚本已在同一隔离内存库建出 22 表。样例验证同一人同组重复有效指派、同节点第二个决定、串组签署、跨企业个人投递及同一动作重登均被数据库拒绝；移除后以新指派编号加入成功。原申请人的 REVISION 指派可关联修改待办，写入默认审核名单或节点决定均被拒绝。目标 MySQL 的升级前后行级核对、索引计划与实际并发仍待用户在 Navicat 验证。
+建表结果、约束、执行计划及并发行为以用户在目标 MySQL 中的实际核对为准。隔离 H2 测试已覆盖同人同组重复有效指派、同节点第二个决定、跨组签署、跨企业投递、重复登记，以及撤销后再次加入同组取得新指派。
 
-建表后在 Navicat 刷新表列表，与第 2 节的二十三表清单核对。建表与业务数据库验收以实际执行结果为准。
-
-政策联调时，用两份相同 `recordVersion` 的请求并发提交同一草稿，再并发审核同一提交轮次。预期每一组只有一个成功，另一个返回 409，申请仅有一个新增轮次，审定结果和快照仍对应该轮。再用测试商品并发执行正式提交与删除或改规格，预期提交成功后目录变更受引用保护，目录先变更时提交须重新验证并处理失效选品。联调后核对政策三表的关联、商品范围和审核状态。执行计划用实际数据和筛选条件复核。
-
-## 已有库升级执行期与业务提醒
-
-2026-11-24 用户确认保留数据的增量升级。表数仍为 22。审核动作继续受原轮次和成员外键约束。`policy_review_delivery.policy_id` 和 `version` 同时为空时，数据库约束限定 `action_type = GROUP_MESSAGE`、`recipient_key = 0`。生成列 `notice_key` 在这类登记上取 `event_key`，独立唯一索引按企业去重；普通审核登记继续使用原业务键。业务内容与原单、平台、批次和负责人保存在该项的 `payload_json`。原消息和任务继续沿用原 ID、业务标识和回执。
-
-原申请人的临期私聊复用上述独立提醒记录，已具备 F 阶段结构的库无需另执行迁移。核对时按企业及 `event_key = P/{policyId}/EXPIRY_REMINDER/{reminderDate}` 定位，日期为北京时间的提醒日。记录的 `payload_json.kind` 为 `EXPIRY_REMINDER`，飞书实际私发，管理员的业务提醒列表以 `SEND_CARD` 展示，送达的消息 ID 在 `receipt_id`。[时间及收件规则](../architecture/policy-workflow-phase-f.md#原申请人的临期私聊)
-
-1. **已有库**先在 Navicat 单独执行脚本开头的两条只读语句，确认库名与后端一致。完整 E 阶段投递表应有 `SEND_CARD`、`UPDATE_CARD` 及外键 `fk_review_delivery_round`、`fk_review_delivery_member`。确认后停写并备份，在同一查询窗口继续执行升级。脚本先把升级前的行数保存到会话变量，末尾逐行核对时只读取一次临时表，避免 MySQL 报 `Can't reopen table`。预期 `row_difference` 和 `changed_rows` 均为 0，表定义出现 `uk_delivery_notice`、`ck_delivery_subject` 和两条原外键。[执行期增量升级](upgrade_workflow_execution_notices.sql)
-2. **新空库**在 [schema.sql](schema.sql) 和 [V1 基线](V1__create_policy_tables.sql) 中任选一份。这两份已含 F 结构。
-3. **升级后**在 Navicat 运行[完整性、执行计划和双窗口并发核对](verify_workflow_execution_notices.sql)，填写测试企业再查业务行。空队列时业务查询应为空；试点后按原单、实际截止及收件人核对，一项成功登记对应一份回执。两窗口分别领取时不应取得同一行。目标库结果由用户现场核对。[试点及恢复顺序](../architecture/policy-workflow-phase-f.md)
-
-若后端同时报 `Unknown column 'd.notice_key'` 和 `Field 'policy_id' doesn't have a default value`，说明报错时连接的投递表仍缺 F 阶段结构，队列领取和独立提醒登记均受影响。若尝试过升级且外键缺失或已有部分 F 结构，MySQL 的 DDL 可能已分段提交。此时保持停写，保存当前表定义与首次执行错误，定位中断位置并恢复完整约束后再启用服务。已经具备 F 结构的库，隐藏群消息正文投递编号这一展示调整无需另跑迁移。
+- **提交与审核。** 在联调环境并发提交同一草稿或办理同一待审节点，核对只有一个新增轮次或一个有效决定。对照该轮快照、商品明细、冻结的指派及投递记录。改派后可用决定行的 `member_id` 核对实际签署人。
+- **商品引用。** 并发提交政策与编辑规格或删除同一商品。若提交先成功，后续目录操作应保护实际引用。若目录先变更，提交须重新校验选品。
+- **改期与投递。** 对照原单的最新截止、流水及发起轮次，检查对应群消息和原申请人的两次临期私聊。每个已送达事件应有对应回执，并发领取不得让两名执行者同时取得同一条有效租约。查询计划按实际数据量和筛选条件核对。[试点与恢复记录](../architecture/policy-workflow-phase-f.md)

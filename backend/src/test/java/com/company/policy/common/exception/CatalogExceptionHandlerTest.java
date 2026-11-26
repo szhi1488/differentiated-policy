@@ -32,13 +32,13 @@ class CatalogExceptionHandlerTest {
         var mvc =
                 MockMvcBuilders.standaloneSetup(
                                 new CatalogDictionaryController(dictionary, sessions))
-                        .setControllerAdvice(
-                                new GlobalExceptionHandler(), new CatalogExceptionHandler())
+                        .setControllerAdvice(new GlobalExceptionHandler())
                         .build();
 
         mvc.perform(get("/api/admin/catalog/dictionary"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_CONFLICT"));
+                .andExpect(jsonPath("$.code").value("CATALOG_DICTIONARY_CONFLICT"))
+                .andExpect(header().string("Cache-Control", "no-store"));
         mvc.perform(get("/api/admin/catalog/dictionary"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("CATALOG_STORAGE_UNAVAILABLE"))

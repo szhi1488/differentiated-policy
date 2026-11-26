@@ -54,7 +54,7 @@ GET /api/admin/policies/subsidy-timeline?spuId=101&ram=16GB&rom=512GB&dateFrom=2
 | 响应字段 | 含义 |
 | --- | --- |
 | `asOf`、`tracks[]` | 北京时间，精确到秒并带 `+08:00`。两张图共用一份结果。 |
-| `configurationGoodsCount` | 所查机型版本、RAM 和 ROM 对应的标准商品总数，包含下架商品。没有授权范围或配置不存在时为 0。用于缺少整组标记的既有普通卡。新整组卡以获批轮次冻结的配置成员为准。 |
+| `configurationGoodsCount` | 所查机型版本、RAM 和 ROM 对应的标准商品总数，包含下架商品。没有授权范围或配置不存在时为 0。时间轴按各获批轮次冻结的件数和商品 ID 核对整组；缺少冻结件数时列出该轮实际商品。 |
 | `tracks[].perspective`、`platformCode`、`goodsIds[]` | 零售按具体商品判定，完整历史和方案一致的普通商品合并。百亿轨道返回空的 `goodsIds`，表示该平台上同一机型版本、RAM 和 ROM 共用审核决定。两图均从各轮 `selections[].products[]` 展示原单实际申报的商品。 |
 | `tracks[].policies[]` | 每个轮次含字符串 `policyId`、`auditLogId`、对外 `policyCode`、`submissionVersion`、`approvedAt`、`verifyType`、`sceneTypes`、`estimated`。百亿预估字段为空。`policyFrom`、`policyThrough` 保存该轮原单申报的起止时间。`effectiveThrough` 为截至 `asOf` 已获批的最新整单截止时间，计入历次延期和提前结束，包含截止当秒。 |
 | `policies[].matchesQuery` | 为 true 的轮次绘制政策行，包含原单期内整段未被采用的政策。其余轮次为展示完整原单期间的对照数据，可在相应时点的明细中引用。 |

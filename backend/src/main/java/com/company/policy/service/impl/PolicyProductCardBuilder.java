@@ -36,9 +36,8 @@ public class PolicyProductCardBuilder {
         var card = cards.content(tenant, policyId, version, memberId);
         if (card == null) throw new IllegalStateException("未找到初审卡所属轮次与指派。");
         var elements = new ArrayList<Map<String, Object>>();
-        boolean stacked = false;
         if (card.actionable()) {
-            stacked = addEvidence(elements, card, Long.toString(policyId), version);
+            addEvidence(elements, card, Long.toString(policyId), version);
             elements.add(Map.of("tag", "hr"));
             elements.add(decisionForm(card, policyId, version, memberId));
         } else {
@@ -54,7 +53,7 @@ public class PolicyProductCardBuilder {
                         "header",
                         Map.of(
                                 "title",
-                                plain(stacked ? "政策叠加初审" : "政策初审"),
+                                plain(card.actionable() ? "政策叠加初审" : "政策初审"),
                                 "subtitle",
                                 plain(subtitle),
                                 "template",
@@ -65,7 +64,7 @@ public class PolicyProductCardBuilder {
         return result;
     }
 
-    private boolean addEvidence(
+    private void addEvidence(
             List<Map<String, Object>> elements, Content card, String policyId, int version) {
         PolicyRouteSummary route;
         try {
@@ -79,6 +78,9 @@ public class PolicyProductCardBuilder {
                         : route.changes().stream()
                                 .filter(PolicyExecutionChange::requiresProductReview)
                                 .toList();
+        if (segments.isEmpty())
+            throw new PolicyFeishuSender.Failure(
+                    PolicyFeishuSender.Kind.PERMANENT, "本轮缺少已冻结的产品运营初审依据。");
         var groups = PolicyCardConfigurationGroups.group(segments);
         var ambiguousGoodsIds = PolicyChangeDescription.ambiguousCardGoodsIds(segments);
         var visibleGroups = groups.stream().limit(PREVIEW_ITEMS).toList();
@@ -93,16 +95,10 @@ public class PolicyProductCardBuilder {
         }
         if (groups.size() > PREVIEW_ITEMS)
             elements.add(paragraph("其余 " + (groups.size() - PREVIEW_ITEMS) + " 组未展开。"));
-        if (segments.stream()
-                .anyMatch(
-                        change ->
-                                change.matchingRoundGoods() == null
-                                        && Boolean.TRUE.equals(change.matchingConfigurations())))
-            elements.add(paragraph("按该轮提交时的审核规则，这些政策整单所选的机型配置完全相同。"));
         if (route.adjustments() != null && !route.adjustments().isEmpty()) {
             var snapshot = snapshots.read(card.snapshotData());
-            var accompanying = route.adjustments().stream().filter(a -> a.accompanying()).toList();
-            if (!accompanying.isEmpty()) elements.add(styled("随单截止调整", "heading", "default"));
+            var accompanying = route.adjustments();
+            elements.add(styled("随单截止调整", "heading", "default"));
             for (var adjustment : accompanying.stream().limit(PREVIEW_ITEMS).toList()) {
                 String reason =
                         snapshot.consent().endAdjustments().stream()
@@ -115,10 +111,6 @@ public class PolicyProductCardBuilder {
             if (accompanying.size() > PREVIEW_ITEMS)
                 elements.add(paragraph("其余 " + (accompanying.size() - PREVIEW_ITEMS) + " 项调整未展开。"));
         }
-        if (elements.isEmpty())
-            throw new PolicyFeishuSender.Failure(
-                    PolicyFeishuSender.Kind.PERMANENT, "本轮缺少已冻结的产品运营初审依据。");
-        return segments.stream().anyMatch(change -> change.after().size() >= 2);
     }
 
     private void addSegment(
@@ -132,9 +124,10 @@ public class PolicyProductCardBuilder {
         boolean selected =
                 change.after().stream().anyMatch(policy -> policy.isRound(policyId, version));
         var versions = PolicyChangeDescription.policyVersions(change);
-        String selection = PolicyChangeDescription.cardDecision(change);
-        if (!change.after().isEmpty())
-            selection += " · " + limitedPolicyNames(change.after(), versions, " ＋ ", 900);
+        String selection =
+                PolicyChangeDescription.cardDecision(change)
+                        + " · "
+                        + limitedPolicyNames(change.after(), versions, " ＋ ", 900);
         String scope =
                 shorten(
                         PolicyChangeDescription.cardScope(

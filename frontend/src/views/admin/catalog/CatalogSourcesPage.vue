@@ -1,7 +1,7 @@
 <script setup>
 import { ElMessageBox } from 'element-plus'
 import 'element-plus/es/components/message-box/style/css'
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive } from 'vue'
 import AppIcon from '../../../components/AppIcon.vue'
 import WorkspacePageHeading from '../../../components/WorkspacePageHeading.vue'
 import { useSourceGoods } from '../../../composables/useSourceGoods'
@@ -25,6 +25,8 @@ const {
   goods,
   latest,
   activeJob,
+  importOpen,
+  jobsReady,
   configured,
   jobsError,
   actionError,
@@ -46,7 +48,6 @@ const fields = [
   ...SOURCE_GOODS_FIELDS,
   ...RAW_GOODS_FIELDS.slice(2),
 ]
-const importOpen = ref(false)
 const importForm = reactive({ brandName: '', mode: 'FULL', date: null })
 const importModes = ['FULL', 'CREATED']
 const displayedJob = computed(() => activeJob.value ?? latest.value[importForm.brandName])
@@ -55,7 +56,7 @@ const canStart = computed(
     configured.value &&
     !activeJob.value &&
     !action.value &&
-    !jobsError.value &&
+    jobsReady.value &&
     Boolean(importForm.brandName) &&
     (importForm.mode === 'FULL' || Boolean(importForm.date)),
 )
@@ -240,9 +241,11 @@ async function confirmCancel(job) {
       width="min(460px, calc(100vw - 24px))"
       destroy-on-close
     >
-      <el-alert v-if="jobsError" :title="jobsError" type="error" :closable="false" show-icon />
+      <el-alert v-if="jobsError" :title="jobsError" type="error" :closable="false" show-icon>
+        <el-button link type="primary" @click="refreshJobs()">重新获取任务状态</el-button>
+      </el-alert>
       <el-alert
-        v-else-if="!configured"
+        v-else-if="jobsReady && !configured"
         title="请完成吉客云凭证和导入配置后再发起导入。"
         type="info"
         :closable="false"
@@ -318,12 +321,12 @@ async function confirmCancel(job) {
         <div class="source-import-actions">
           <el-button @click="importOpen = false">关闭</el-button>
           <template v-if="activeJob?.status === 'PAUSED'">
-            <el-button :disabled="Boolean(action || jobsError)" @click="confirmCancel(activeJob)">
+            <el-button :disabled="Boolean(action) || !jobsReady" @click="confirmCancel(activeJob)">
               结束任务
             </el-button>
             <el-button
               type="primary"
-              :disabled="!configured || !activeJob.canResume || Boolean(action || jobsError)"
+              :disabled="!configured || !activeJob.canResume || Boolean(action) || !jobsReady"
               @click="resume(activeJob)"
             >
               {{ activeJob.canResume ? '继续导入' : '等待冷却' }}

@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.UserListQuery;
 import com.company.policy.dto.UserPlatformsUpdate;
 import com.company.policy.dto.UserRoleUpdate;
@@ -19,12 +18,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
-import org.springframework.dao.DataAccessException;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.TransactionException;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,7 +27,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/admin/users")
@@ -157,41 +150,5 @@ public class UserManagementController {
             @Valid @RequestBody UserStatusUpdate body,
             HttpServletRequest request) {
         return users.updateStatus(sessions.requireLogin(request).user(), id, body);
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<ApiError> badParameter(
-            MethodArgumentTypeMismatchException error, HttpServletRequest request) {
-        if ("id".equals(error.getName())) {
-            String code = "USER_DETAIL_INVALID_REQUEST";
-            if (request.getRequestURI().endsWith("/platforms")) {
-                code = "USER_PLATFORMS_INVALID";
-            } else if (request.getRequestURI().endsWith("/role")) {
-                code = "USER_ROLE_INVALID_REQUEST";
-            } else if (request.getRequestURI().endsWith("/status")) {
-                code = "USER_STATUS_INVALID_REQUEST";
-            }
-            return ResponseEntity.badRequest().body(new ApiError(code, "用户标识须为有效的正整数。"));
-        }
-        return ResponseEntity.badRequest()
-                .body(new ApiError("USER_LIST_INVALID_REQUEST", "分页参数须为有效整数。"));
-    }
-
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ResponseEntity<ApiError> writeLockConflict(HttpServletRequest request) {
-        String code =
-                request.getRequestURI().endsWith("/status")
-                        ? "USER_STATUS_CONFLICT"
-                        : request.getRequestURI().endsWith("/platforms")
-                                ? "USER_PLATFORMS_CONFLICT"
-                                : "USER_ROLE_CONFLICT";
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ApiError(code, "用户正在被其他操作修改，请重新读取详情后重试。"));
-    }
-
-    @ExceptionHandler({DataAccessException.class, TransactionException.class})
-    ResponseEntity<ApiError> storageUnavailable() {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ApiError("USER_STORAGE_UNAVAILABLE", "用户信息暂不可用，请稍后重试。"));
     }
 }

@@ -1,6 +1,6 @@
 # 系统整体架构
 
-更新日期 2026-11-24。
+更新日期 2026-11-25。
 
 系统处于内部开发阶段。正式提交统一按轮冻结分流与审核名单。本轮确有叠加，且汇总各确认段后所有参与政策的整单商品 ID 集合完全相同时，整轮先由运营在飞书私聊卡办理，其余轮次直接进采购。采购在管理员「差异化政策」终审。开发库以当前表结构和接口契约为准，核对政策时读取当轮提交快照、逐段选单及调整结果。[工作流入口](policy-workflow-phase-e.md) · [提交和快照](../api/policy-api.md#提交快照的存储与回读) · [有效政策查询](../api/admin-api.md)
 
@@ -117,6 +117,8 @@ frontend/src/
   views/admin/users/           用户管理、详情抽屉、分工弹窗及角色和启停确认弹窗
 
 backend/src/main/java/com/company/policy/
+  PolicyApplication.java       Spring Boot 服务及命令行的唯一 main 入口
+  PolicyCardCommand.java       由入口显式调用的一次性单卡投递命令
   controller/                  请求、校验与接口说明
   dto/                         请求对象
   vo/                          响应对象
@@ -146,6 +148,29 @@ backend/src/main/java/com/company/policy/
 - 密钥仅在被忽略的 `backend/.env.local.properties` 或环境变量；用户 token 不存储、不下发。
 
 ## 当前实现与验证边界
+
+### 2026-11-25 按现行业务清理代码
+
+本轮按用户确认的 A、B 清单清理未引用代码和已由现行流程替代的分支。项目尚未上线。开发库中的按轮审核快照、商品明细、改期流水、附件引用及投递回执仍用于办理、查询和核对。
+
+| 范围 | 已执行的变更与现行行为 |
+| --- | --- |
+| 无调用方的代码 | 前端删除五个未用函数（`validateDictionaryEntry`、`dictionaryRemovalReason`、`queryEnum`、`queryPage`、`timelinePlanCaption`），以及 `AppIcon` 的平台徽标分支、`home` 和 `layers` 图标、补贴查询页的未用样式。后端删除改期全量查询 `allThrough` 和场景转换方法 `PolicyScenes.single`。 |
+| 我的提交与原单改期 | 删除列表每次分页时附带的改期资格查询，列表摘要移除 `earliestEnd`、`canExtend`、`canShorten`。打开「调整政策时间」时由 `GET /api/policies/time-adjustments/options` 按当前平台分工返回可操作原单及方向。随单调整从本轮快照的 `consent.endAdjustments` 按原单 ID 和获批轮次回读，独立改期记在原单流水，证明文件按相应记录授权。[政策接口](../api/policy-api.md) · [附件引用](../api/attachment-api.md#政策绑定与历史保护) |
+| 运营初审与飞书通知 | 移除按候选或机型配置推断初审的旧分支。运营初审取本轮冻结的实际叠加和整单商品 ID 比较结果。采购和退回通知按轮私发，采购终审通过后发审核群公告。已移除将旧审核群任务改投个人的分支，以及改期群通知的 ERP 详情跳转和对应配置。已发消息仍可按投递记录核对回执。[通知规则](policy-workflow-phase-e.md#各节点的收件人与回执) |
+| 临期与截止提醒 | 移除旧群临期计划和日末截止的兼容处理。临期私聊按实际截止前第二天和前一天的北京时间 17:00 登记给原申请人，同一原单和提醒日复用登记。截止群通知按原单、获批轮次、目标群及精确截止时刻去重，截止的下一秒起可发送，改期后重算。[提醒与补送](policy-workflow-phase-f.md#原申请人的临期私聊) |
+| 两角色机型补贴查询 | 零售、百亿时间轴均以获批普通卡冻结的件数和商品 ID 判定「整组配置」。缺少冻结件数时展示实际申报商品，避免用当前目录数量推断历史范围。[前端验收](frontend-harness.md#机型补贴查询按获批商品识别整组) |
+| SQL 文件 | `docs/sql/` 仅保留[数据字典](../sql/database-design.md)、[完整建表脚本](../sql/schema.sql)、[V1 基线](../sql/V1__create_policy_tables.sql)和[重建删表脚本](../sql/drop_all_tables.sql)。两份建表脚本逐字节相同，均定义 23 张表，空库任选一份。此次整理只涉及仓库文件。 |
+
+日常启动运行 `PolicyApplication.main`。只有显式传入 `send-review-card`、申请 ID、提交轮次和原投递编号时，入口才调用 `PolicyCardCommand.run` 处理指定初审卡。该命令以无 Web 模式运行，关闭自动投递和商品导入、清洗调度，处理完即退出。[单卡操作说明](policy-workflow-phase-e.md#内网发送一张初审卡)
+
+### 2026-11-25 后端异常处理
+
+8 个 Controller 原有的 15 个局部 `@ExceptionHandler` 已移除。Spring MVC 异常现在统一由 `GlobalExceptionHandler` 映射。商品和用户管理保留各自的业务错误码。处理器生成的响应都带 `Cache-Control: no-store`。[开发规范](ai-development.md) · [商品接口](../api/catalog-api.md#公共规则) · [用户管理接口](../api/user-api.md)
+
+申请人政策接口与管理员采购审核接口遇到同类故障时返回同一结果。路径或查询参数类型不匹配返回 `400 POLICY_VALIDATION_FAILED`，缺少必填查询参数或 JSON 无法解析返回 `400 INVALID_REQUEST`。数据库悲观锁冲突（包括被事务异常包装的锁冲突）返回 `409 POLICY_VERSION_CONFLICT`，查询超时或事务创建失败返回 `503 POLICY_STORAGE_UNAVAILABLE`。[政策错误契约](../api/policy-api.md#错误与实现要求) · [双入口接口回归](../../backend/src/test/java/com/company/policy/common/exception/PolicyExceptionHandlerTest.java)
+
+未处理异常返回 `500 INTERNAL_ERROR` 和通用中文提示。可用响应头 `X-Request-Id` 找到对应的服务端 ERROR 日志，其中有异常类型、抛出点和业务调用行号。首轮排查改动的 Maven 验证为 461 项通过、2 项跳过。集中异常映射后的最终 `mvn verify` 共 474 项，472 项通过，真实 MySQL 和吉客云联调各跳过 1 项。打包与 Spotless 检查通过。[排查步骤](environment-configuration.md#按请求编号排查接口-500) · [日志脱敏与响应回归](../../backend/src/test/java/com/company/policy/common/exception/GlobalExceptionHandlerTest.java)
 
 ### 2026-11-24 审核与政策详情
 

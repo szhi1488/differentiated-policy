@@ -65,17 +65,11 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     public void initialize(LocalDateTime at) {
         String tenant = config.getTenantKey();
         if (!config.hasCompanyTenant()) return;
-        notices.deleteUnsentLegacyNear(tenant);
         long after = 0;
         while (true) {
-            // 当天按旧规则排在午夜的截止提醒可能还在等待，启动时也要将它归到实际截止秒。
-            var page = notices.activePage(tenant, after, at.toLocalDate().atStartOfDay());
+            var page = notices.activePage(tenant, after, at);
             for (var p : page) {
-                var end = p.endTime();
-                if (!end.isBefore(at)) plan(tenant, p, end, at, false);
-                else if (StringUtils.hasText(config.getPolicyChatId())) {
-                    retainDeadline(tenant, p, end, groupPrefix(p, config.getPolicyChatId()));
-                }
+                plan(tenant, p, at, false);
                 after = p.id();
             }
             if (page.size() < 200) return;
@@ -111,11 +105,11 @@ class ExecutionNoticesImpl implements ExecutionNotices {
         if (!enabled
                 && notices.hasSchedule(tenant, "P/" + p.id() + "/" + p.version() + "/") == 0
                 && notices.hasSchedule(tenant, reminderPrefix(p)) == 0) return;
-        plan(tenant, p, p.endTime(), at, true);
+        plan(tenant, p, at, true);
     }
 
-    private void plan(
-            String tenant, Policy p, LocalDateTime end, LocalDateTime at, boolean changed) {
+    private void plan(String tenant, Policy p, LocalDateTime at, boolean changed) {
+        var end = p.endTime();
         // 截止变更前后若共用某一提醒日，沿用该日登记和回执，到期天数在发送时重算。
         var reminderPrefix = reminderPrefix(p);
         var lastReminder = end.toLocalDate().minusDays(1);
@@ -149,10 +143,8 @@ class ExecutionNoticesImpl implements ExecutionNotices {
                     p.startTime());
         }
         String endKey = prefix + "END/" + end;
-        var retained = retainDeadline(tenant, p, end, prefix);
-        if (changed)
-            notices.cancelOld(tenant, prefix + "END/", retained == null ? endKey : retained);
-        if (retained == null && !end.equals(LocalDateTime.of(9999, 12, 31, 23, 59, 59)))
+        if (changed) notices.cancelOld(tenant, prefix + "END/", endKey);
+        if (!end.equals(LocalDateTime.of(9999, 12, 31, 23, 59, 59)))
             registerSchedule(
                     tenant,
                     endKey,
@@ -175,16 +167,6 @@ class ExecutionNoticesImpl implements ExecutionNotices {
                 + "/"
                 + UUID.nameUUIDFromBytes(chat.getBytes(StandardCharsets.UTF_8))
                 + "/";
-    }
-
-    private String retainDeadline(String tenant, Policy p, LocalDateTime end, String prefix) {
-        if (p.lastChange() != null) return null;
-        var dayEnd = end.toLocalDate().atTime(23, 59, 59);
-        if (end.equals(dayEnd)) return null;
-        var endPrefix = prefix + "END/";
-        var previous = notices.laterDeadlinePlan(tenant, endPrefix + end, endPrefix + dayEnd);
-        if (previous != null) notices.advanceUnsentDeadline(tenant, previous, end.plusSeconds(1));
-        return previous;
     }
 
     private static String reminderPrefix(Policy p) {
@@ -309,7 +291,6 @@ class ExecutionNoticesImpl implements ExecutionNotices {
     @Override
     public Message message(String tenant, JsonNode body, LocalDateTime at) {
         String kind = body.path("kind").asText();
-        if (kind.equals("NEAR")) throw stale("临期群提醒已改为到期前两天逐日私聊原申请人。");
         if (body.has("chat") && !body.path("chat").asText().equals(config.getPolicyChatId()))
             throw stale("目标业务群已更换。");
         if (kind.equals("PLATFORM")) return platformMessage(tenant, body);
@@ -345,10 +326,6 @@ class ExecutionNoticesImpl implements ExecutionNotices {
         }
         if (!kind.equals("END")) throw new Failure(Kind.PERMANENT, "无法识别业务提醒类型。");
         var registeredEnd = LocalDateTime.parse(body.path("end").asText());
-        // 没有改期的单据可能留有上一版的日末登记，继续用该次投递的原回执。
-        if (p.lastChange() == null
-                && registeredEnd.isAfter(end)
-                && registeredEnd.toLocalDate().equals(end.toLocalDate())) registeredEnd = end;
         if (!end.equals(registeredEnd)) throw stale("政策实际截止已变更。");
         if (!at.isAfter(end)) throw stale("尚未到达截止的下一秒。");
         var detail = "SHORTEN".equals(p.lastChange()) ? "政策已按获批调整提前结束。" : "政策自然结束。";

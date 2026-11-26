@@ -18,7 +18,6 @@ final class PolicyReviewContinuations {
         if (adjustments == null || parentId == null) return Map.of();
         var result = new HashMap<String, Adjustment>();
         for (var adjustment : adjustments) {
-            if (!adjustment.accompanying()) continue;
             var id = adjustment.target().policyId();
             var key =
                     adjustment.extension() ? PolicyBatchExtensions.extensionKey(parentId, id) : id;

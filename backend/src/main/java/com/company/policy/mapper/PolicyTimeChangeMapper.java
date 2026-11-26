@@ -37,9 +37,6 @@ public interface PolicyTimeChangeMapper {
     @Select(VISIBLE + " AND c.actor_id=#{actorId} AND c.request_key=#{requestKey} ORDER BY c.id")
     List<PolicyTimeChange> byRequest(String tenant, long actorId, String requestKey);
 
-    @Select(VISIBLE + " AND c.changed_at<=#{asOf} ORDER BY c.changed_at,c.id")
-    List<PolicyTimeChange> allThrough(String tenant, LocalDateTime asOf);
-
     @Select(
             "<script>"
                     + VISIBLE

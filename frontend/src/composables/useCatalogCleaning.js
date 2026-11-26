@@ -12,6 +12,7 @@ import {
 } from '../api/catalog'
 import { createRequestId } from '../utils/request-id'
 import { useLatestQuery } from './useLatestQuery'
+import { useVisibleTaskPolling } from './useVisibleTaskPolling'
 
 const emptyFilters = { brandName: '', dateMode: 'ALL', createdDate: null, keyword: '' }
 const previewDefaults = {
@@ -55,12 +56,13 @@ export function useCatalogCleaning() {
   const detail = useLatestQuery()
   const reviewError = ref('')
   const reviewConflict = ref(false)
-  let timer
-  let readProgress
   let write
   let disposed = false
   let startRequest
   let retryRequest
+  const { refresh: pollProgress } = useVisibleTaskPolling(readProgress, () =>
+    active.value || submittedJob.value?.status === 'RUNNING' ? 2500 : 0,
+  )
 
   function loadResults() {
     const { brandName, dateMode, createdDate, keyword } = applied.value
@@ -125,6 +127,7 @@ export function useCatalogCleaning() {
     submittedJob.value = null
     actionError.value = ''
     startOpen.value = true
+    void pollProgress('dialog')
   }
 
   function loadPreview() {
@@ -178,50 +181,41 @@ export function useCatalogCleaning() {
 
   function openHistory() {
     historyOpen.value = true
-    void pollProgress()
+    void pollProgress('dialog')
   }
 
-  async function pollProgress() {
-    clearTimeout(timer)
-    readProgress?.abort()
-    const read = new AbortController()
-    readProgress = read
+  async function readProgress(signal, reason) {
     try {
       const previous = active.value
-      const current = await readActiveCleaningJob(read.signal)
-      if (disposed || read.signal.aborted) {
+      const current = await readActiveCleaningJob(signal)
+      if (signal.aborted) {
         return
       }
-      active.value = current
       const shown = submittedJob.value
-      if (shown && shown.status === 'RUNNING') {
-        const next =
-          current?.id === shown.id ? current : await readCleaningJob(shown.id, read.signal)
-        if (disposed || read.signal.aborted) {
+      if (shown?.status === 'RUNNING') {
+        const next = current?.id === shown.id ? current : await readCleaningJob(shown.id, signal)
+        if (signal.aborted) {
           return
         }
-        if (submittedJob.value?.id === shown.id) {
-          submittedJob.value = next
-        }
+        submittedJob.value = next
       }
+      active.value = current
       if (
-        (previous?.id && previous.id !== current?.id) ||
+        reason === 'visible' ||
+        reason === 'dialog' ||
+        previous?.id !== current?.id ||
         previous?.processed !== current?.processed
       ) {
         void loadResults()
-        void loadHistory()
+        // 打开清洗记录时，弹窗已按当前页单独读取历史。
+        if (reason !== 'dialog') {
+          void loadHistory()
+        }
       }
       progressError.value = ''
     } catch (error) {
-      if (!disposed && !read.signal.aborted) {
+      if (!signal.aborted) {
         progressError.value = error.message
-      }
-    } finally {
-      if (!disposed && !read.signal.aborted) {
-        timer = setTimeout(
-          pollProgress,
-          active.value || historyOpen.value || startOpen.value ? 2500 : 10000,
-        )
       }
     }
   }
@@ -370,8 +364,6 @@ export function useCatalogCleaning() {
 
   onScopeDispose(() => {
     disposed = true
-    clearTimeout(timer)
-    readProgress?.abort()
     write?.abort()
   })
 

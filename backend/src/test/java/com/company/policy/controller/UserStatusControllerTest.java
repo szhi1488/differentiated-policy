@@ -195,6 +195,7 @@ class UserStatusControllerTest {
     void rejectsInvalidId(String id) throws Exception {
         mvc.perform(change(id, "DISABLED", "APPLICANT", "ENABLED").session(admin))
                 .andExpect(status().isBadRequest())
+                .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$.code").value("USER_STATUS_INVALID_REQUEST"));
     }
 
@@ -218,6 +219,7 @@ class UserStatusControllerTest {
         doThrow(new DataAccessResourceFailureException("测试异常")).when(users).detail(COMPANY, 2);
         mvc.perform(change("2", "DISABLED", "APPLICANT", "ENABLED").session(admin))
                 .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$.code").value("USER_STORAGE_UNAVAILABLE"));
         assertThat(
                         jdbc.queryForObject(
@@ -230,6 +232,7 @@ class UserStatusControllerTest {
         doThrow(new CannotAcquireLockException("测试锁等待")).when(users).lockUser(COMPANY, 2);
         mvc.perform(change("2", "DISABLED", "APPLICANT", "ENABLED").session(admin))
                 .andExpect(status().isConflict())
+                .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$.code").value("USER_STATUS_CONFLICT"));
     }
 

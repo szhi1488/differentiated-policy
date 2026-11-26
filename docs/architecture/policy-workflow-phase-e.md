@@ -26,7 +26,7 @@ P23–P26 已使用隔离数据库和模拟飞书服务验证。执行期提醒�
 
 ### 运营在卡上核对什么
 
-有实际叠加的待办卡标题为「政策叠加初审」，副标题给出单号和轮次。每组先用浅蓝色区块列出「拟叠加执行」或「继续叠加执行」及对应单号，下方列手机型号、容量、商品范围和该平台的北京时间起止。历史轮按当时的依据展示，若该段只采用一单，摘要显示「拟执行」和该单号。
+有实际叠加的待办卡标题为「政策叠加初审」，副标题给出单号和轮次。每组先用浅蓝色区块列出「拟叠加执行」或「继续叠加执行」及对应单号，下方列手机型号、容量、商品范围和该平台的北京时间起止。卡片读取本轮冻结的整单商品 ID 比较结果，仅列出实际叠加的时段。
 
 整组范围按同一平台、同一时段核对。至少一张参与政策的普通机型卡须有提交时冻结的整组商品数，有记录的数量须一致。各张拟采用政策都覆盖这组相同的商品 ID，且每张政策内部各商品的补贴和申报数量分别一致时，卡上显示「整组配置」。其他政策即使逐件指定申报，或旧轮未记录整组商品数，也可按实际商品 ID 核对。只覆盖部分商品、同一张单各商品条件有差异，或缺少整组依据时，按实际商品范围列颜色。相同配置、同色的不同商品需要区分时，颜色旁附商品 ID。
 
@@ -79,11 +79,11 @@ ZC-000002（原政策）
 
 超长的商品或调整明细按完整条目截断，并注明省略数量。常规群公告省略「逐段采用名单：N 个确认时段」「其他信息」和「附件及链接」等行，主表附件、外部链接和各时段完整决定留在 ERP 按轮详情中，由有权人员查阅。
 
-**改期群通知待对齐。** 当前发送代码对带 `changeId` 的独立或随单改期群通知，仍会在配置了 `FEISHU_POLICY_ERP_URL` 时追加「查看本轮政策」。该分支也适用上述取消业务跳转的要求，尚待移除和验证。[改期通知的发送条件](../../backend/src/main/java/com/company/policy/service/impl/PolicyFeishuSenderImpl.java)
+独立改期和随单改期的群通知都只展示业务正文和点名。历史已发消息仍按首次发送的内容核对回执。[改期通知的发送逻辑](../../backend/src/main/java/com/company/policy/service/impl/PolicyFeishuSenderImpl.java)
 
 ## 投递与恢复
 
-- 已有 F 阶段表结构可直接使用。启动新版后端后，后台领取升级前排队的审核过程群通知时，按同一事件的原指派登记私聊卡；实际发送前重新核对账号和指派。原群请求结果未知时保留原回执核对记录。
+- 审核过程直接按本轮指派登记个人卡片和待办。采购终审通过时登记该轮的群公告。发送前核对账号及指派，外发结果未知时按首次请求核对回执。
 - 业务事务登记每个动作。后台用限时租约领取，HTTP 往返期间释放数据库锁，最多尝试五次。私聊卡和群消息保存各自的消息 ID，个人待办保存任务 GUID。所有重试沿用企业、单据、轮次、事件、动作和指派派生的同一个幂等标识。
 - 创建前记录实际目标与请求摘要。结果未知时，群消息和卡片最多在首次尝试后 55 分钟内自动重试，建任务为 4 分钟，各自给平台的幂等窗口预留余量。超窗、内容或目标变化会转人工核对。核对旧投递时沿用首次尝试登记的链接、正文、群及时间，旧消息仍可按发送时的普通网址匹配。进程中断或租约过期后可处理迟到的确定回执。
 - 结束节点的创建动作会重新核验。已送达的卡按原消息更新，任务按原 GUID 结办；结果未知时，后继更新等待本人原创建回执。已结束的轮次保留决定和快照。
@@ -91,7 +91,7 @@ ZC-000002（原政策）
 
 ## 环境配置与目标库
 
-1. 已有 B 阶段二十二表库先停写备份，由用户在 Navicat 执行[单条收件人约束升级](../sql/upgrade_policy_review_delivery_cards.sql)，核对前后行数相等、检查约束启用并包含两种个人卡片动作。新空库使用本版基线。[数据库核对步骤](../sql/database-design.md#已有库升级飞书审核卡投递)
+1. 新空库由用户在 Navicat 执行一份完整基线。核对投递表的收件人约束 `ck_review_delivery_recipient` 已启用，且允许按个人指派登记 `SEND_CARD` 和 `UPDATE_CARD`。[空库建表步骤](../sql/database-design.md#1-在-navicat-建表)
 2. 在同一企业自建应用配置机器人、可用人员及 IM 发送与消息读取权限。启用群通知时配置 `FEISHU_POLICY_CHAT_ID`、机器人群成员资格和 `im:chat.members:read`。群 ID 可留空用于单卡验证，此时需要发群的登记会提示配置问题。使用个人待办时配置 Task V2 任务读写权限。在应用的「网页应用」能力配置桌面端和移动端主页，发布给目标人员。采购和原申请人从工作台进入该应用处理对应政策。个人待办保留业务摘要与收件人，ERP 按原任务 GUID 结办。[环境参数](environment-configuration.md) · [发送消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/create) · [群成员读取](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/chat-members/get) · [Task V2](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/task-v2/task/overview)
 3. 在飞书开发者后台订阅 `card.action.trigger`。内网运行可选择下节的长连接。选用加密 HTTP 回调时，配置 `FEISHU_CALLBACK_VERIFICATION_TOKEN`、`FEISHU_CALLBACK_ENCRYPT_KEY`，将公网 HTTPS 的 `POST /callbacks/feishu/policy-review` 精确转发到后端，并保留原始正文及 `X-Lark-Request-Timestamp`、`X-Lark-Request-Nonce`、`X-Lark-Signature` 请求头。旧卡超过平台可交互或更新期限时，管理员可在 ERP 查看本轮审核状态和投递记录，核对仍待处理的指派。[飞书回调接收](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks) · [卡片交互](https://open.feishu.cn/document/feishu-cards/configuring-card-interactions)
 4. 每次提交与重提均按轮分流。`POLICY_REVIEW_DELIVERY_ENABLED` 控制外部投递调度，默认关闭。轮询间隔 `POLICY_REVIEW_DELIVERY_POLL_MS` 默认 3000 毫秒。改动部署配置后重启相应实例。当前可由用户按下文验证指定的一张私聊卡。P32 的全流程联调另行核对试点成员、测试群、目标 MySQL、实际群通知与手机工作台办理。

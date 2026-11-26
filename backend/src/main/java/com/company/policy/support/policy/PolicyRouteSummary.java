@@ -11,7 +11,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /** 同一申请整轮共用的路由结果。保留全部核对依据，短摘要只列前几项。 */
@@ -159,9 +158,7 @@ public record PolicyRouteSummary(
                                         && continuations.sameBaselineAtHandoff(previousRaw, raw)))
                         && previous.after().equals(next.after())
                         && previous.candidates().equals(next.candidates())
-                        && Objects.equals(
-                                previous.matchingConfigurations(), next.matchingConfigurations())
-                        && Objects.equals(previous.matchingRoundGoods(), next.matchingRoundGoods())
+                        && previous.matchingRoundGoods() == next.matchingRoundGoods()
                         && !next.from().isAfter(previous.through().plusSeconds(1))) {
                     if (next.through().isAfter(previous.through())) {
                         previous = previous.withThrough(next.through());

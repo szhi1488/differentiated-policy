@@ -10,13 +10,10 @@ public interface PolicyAttachmentMapper {
 
     String FORM_FILE =
             "COALESCE(JSON_CONTAINS(JSON_EXTRACT(a.snapshot_data, '$.form.attachmentInfo'), #{reference.file}), 0)";
-    String TIME_CHANGE_FILE =
-            "COALESCE(JSON_CONTAINS(JSON_EXTRACT(a.snapshot_data, '$.form.goodsForm.timeAdjustment'), #{reference.adjustment}), 0)";
-    String DRAFT_FILE =
-            "COALESCE(JSON_CONTAINS(p.attachment_urls, #{reference.file}), 0) OR COALESCE(JSON_CONTAINS(JSON_EXTRACT(p.goods_form_json, '$.timeAdjustment'), #{reference.adjustment}), 0)";
+    String DRAFT_FILE = "COALESCE(JSON_CONTAINS(p.attachment_urls, #{reference.file}), 0)";
     String ADJUSTMENT_FILE =
             "COALESCE(JSON_CONTAINS(JSON_EXTRACT(a.snapshot_data, '$.consent.endAdjustments'), #{reference.adjustment}), 0)";
-    String HISTORICAL_FILE = FORM_FILE + " OR " + TIME_CHANGE_FILE + " OR " + ADJUSTMENT_FILE;
+    String HISTORICAL_FILE = FORM_FILE + " OR " + ADJUSTMENT_FILE;
 
     // 保留父申请行，供服务区分申请不可见、轮次不存在和该轮没有此文件。
     String HISTORY =
@@ -38,8 +35,6 @@ public interface PolicyAttachmentMapper {
                     + DRAFT_FILE
                     + " ELSE "
                     + FORM_FILE
-                    + " OR "
-                    + TIME_CHANGE_FILE
                     + " END OR "
                     + ADJUSTMENT_FILE
                     + """

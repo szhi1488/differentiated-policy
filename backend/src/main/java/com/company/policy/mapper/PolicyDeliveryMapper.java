@@ -1,8 +1,6 @@
 package com.company.policy.mapper;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -44,16 +42,6 @@ public interface PolicyDeliveryMapper {
                     + DUE
                     + " FOR UPDATE SKIP LOCKED")
     Long nextTrialCard(String tenant, PolicyDeliveryAdminMapper.Row target, LocalDateTime now);
-
-    record LegacyMember(long recipientKey, String actionType) {}
-
-    @Select(
-            """
-        SELECT recipient_key, action_type FROM policy_review_delivery WHERE tenant_key=#{tenant}
-          AND policy_id=#{policyId} AND version=#{version} AND event_key=#{event}
-          AND (action_type='CREATE_TASK' OR (action_type='CLOSE_TASK' AND event_key LIKE 'REASSIGNED%'))
-        """)
-    List<LegacyMember> legacyNoticeMembers(String tenant, long policyId, int version, String event);
 
     record Item(
             long id,
@@ -113,11 +101,6 @@ public interface PolicyDeliveryMapper {
               lease_owner=NULL, lease_until=NULL, next_attempt_at=NULL WHERE id=#{id}
             """)
     int stopLocked(long id, String status, String reason);
-
-    @Delete(
-            "DELETE FROM policy_review_delivery WHERE tenant_key=#{tenant} AND id=#{id} AND "
-                    + ExecutionNoticeMapper.UNSENT_LEGACY_NEAR)
-    int deleteUnsentLegacyNear(String tenant, long id);
 
     @Update(
             """

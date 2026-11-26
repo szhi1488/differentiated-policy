@@ -136,7 +136,9 @@ export function retailGroupHistory(cardType = 'COMMON') {
     { goodsId: '63', colorName: '奇遇喵' },
   ]
   const groupPolicy = (products) =>
-    policy('23', [{ ...common(fixed), products }], { policyThrough: at('20T23:59:59') })
+    policy('23', [{ ...common(fixed), products, wholeConfigurationGoodsCount: 3 }], {
+      policyThrough: at('20T23:59:59'),
+    })
   return {
     asOf: history.asOf,
     configurationGoodsCount: 3,

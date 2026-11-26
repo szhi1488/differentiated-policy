@@ -746,7 +746,7 @@ it('十二月的已通过百亿政策定位到计划首日，展示原单金额�
       used: true,
       open: false,
       mixed: false,
-      scopes: [{ used: true, scope: { planned: true, label: '整组配置' } }],
+      scopes: [{ used: true, scope: { planned: true, label: '浮光白' } }],
     },
   ])
   expect(row.plan.usePeriods).toEqual([])

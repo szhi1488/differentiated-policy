@@ -1,12 +1,14 @@
 # 商品管理接口契约
 
-更新日期 2026-11-24。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护均使用当前二十二表基线中的商品目录。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
+更新日期 2026-11-25。源商品导入、清洗、审核、技术重试以及标准商品查询、新增、编辑、删除和数据字典维护均使用当前二十三表基线中的商品目录。政策三表已纳入空库脚本，商品编辑、删除和系列维护均通过 `policy_goods_detail` 检查政策引用。清洗记录按成员展示任务进度与结果统计。[数据字典](../sql/database-design.md) · [商品方案](../architecture/catalog-admin-design.md) · [清洗细则](../business/catalog-cleaning.md)
 
 ## 公共规则
 
 沿用项目 Session、Origin、X-Policy-Request、DTO/VO 规范。每次管理操作重新检查有效 ADMIN 和公司飞书租户。账套来自服务端配置，所有有效管理员访问同一套数据。新基线的商品相关表不保存租户字段。ID 按字符串，recordVersion 为整数。客户端不指定操作者、账套、租户、游标或分页请求频率。
 
-列表默认每页 20、上限 100，排序和枚举白名单；不一次把全库返回浏览器。错误统一 400/401/403/404/409/503；上游错误以脱敏类别和本地 jobId 表示，不返回凭证或原始报文。
+列表默认每页 20 条，上限 100 条，排序和枚举使用白名单。常见业务错误返回 400、401、403、404、409 或 503。上游错误以脱敏类别和本地 jobId 表示。
+
+数据库锁冲突统一返回 HTTP 409。商品中心使用 `CATALOG_GOODS_CHANGED`，字典使用 `CATALOG_DICTIONARY_CONFLICT`，其余商品入口使用 `CATALOG_CONFLICT`。数据库连接失败和查询超时返回 `503 CATALOG_STORAGE_UNAVAILABLE`。
 
 ## 已实现：原始导入与来源查询
 

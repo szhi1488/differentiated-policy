@@ -67,7 +67,7 @@ function partsForScopes(scopes) {
   return parts
 }
 
-export function policyTimelineRows(declarations, segments, configurationGoodsCount) {
+export function policyTimelineRows(declarations, segments) {
   const groups = new Map()
   for (const { scope, plan, matchesQuery } of declarations) {
     const key = declarationKey(scope, plan)
@@ -129,7 +129,7 @@ export function policyTimelineRows(declarations, segments, configurationGoodsCou
     const { key } = group
     const parts = partsForScopes(group.scopes)
     const plan = { ...group.plan, key, goods, usePeriods: parts.filter((p) => p.used && !p.status) }
-    const scope = timelineGoodsScope(goods, [plan], configurationGoodsCount)
+    const scope = timelineGoodsScope(goods, [plan])
     if (plan.cardType === 'SPECIFIED') {
       scope.label = '独立商品 · ' + timelineGoodsLabel(goods)
     }

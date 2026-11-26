@@ -4,8 +4,8 @@
 
 | 编号 | 已实现的行为 | 核对入口 |
 | --- | --- | --- |
-| P06 | 新增七表，保存两组全局设置、本轮阶段与分流依据、指派、节点决定、改派及通知。按本轮、本组唯一记录实际签署人，群事件和个人指派各自去重。 | [字段、外键和锁顺序](../sql/database-design.md#已有库升级政策审核工作流) |
-| P07 | 已有十五表结构增量升级，逐行核对原有政策、审核快照、附件引用和商品明细。空库使用同内容的两份基线之一。 | [增量升级](../sql/upgrade_policy_review_workflow.sql) · [升级后核对](../sql/verify_policy_review_workflow.sql) |
+| P06 | 新增七表，保存两组全局设置、本轮阶段与分流依据、指派、节点决定、改派及通知。按本轮、本组唯一记录实际签署人，群事件和个人指派各自去重。 | [本轮完整性与并发](../sql/database-design.md#本轮完整性与并发) |
+| P07 | B 阶段为当时的十五表开发库交付了政策、审核快照、附件引用及商品明细的核对方案。现行工作流结构已纳入空库基线。 | [空库建表步骤](../sql/database-design.md#1-在-navicat-建表) |
 | P08 | 有效管理员可分页查候选，以本地 ID 保存两份多人名单，按版本防止覆盖他人修改。采购只允许本企业有效管理员。 | [三个管理接口](../api/policy-review-settings.md) |
 | P09 | 首提和重提在事务内锁名单和相关账号，按本轮分流筛选人员，排除自审并为两节点保留不同签署人。将配置版本、姓名、部门、前后名单及路由理由冻结。缺配置或缺合格人选时，本单保持可编辑。 | [提交事务](../../backend/src/main/java/com/company/policy/service/impl/PolicyApplyServiceImpl.java) · [本轮冻结](../../backend/src/main/java/com/company/policy/service/impl/PolicyReviewWorkflowImpl.java) |
 | P10 | B 阶段在提交事务内登记一条群事件和首节点每名成员的一条待办，回滚时一并撤销。终审成功后分别记录实际签署人及同组其他人的结办原因。E 阶段沿用逐事件、逐指派去重，调整了初审发卡和群通知的时点。 | [现行通知登记](../../backend/src/main/java/com/company/policy/service/impl/PolicyReviewNotificationsImpl.java) · [各节点收件人与回执](policy-workflow-phase-e.md#各节点的收件人与回执) |
@@ -23,4 +23,4 @@
 
 已覆盖缺配置、无人合格、同名、跨企业、旧版本并发保存、提交事务回滚、新轮异常缺节点、越级终审、同组竞办、同组其他人结办。[提交与登记测试](../../backend/src/test/java/com/company/policy/service/PolicyReviewSubmissionIntegrationTest.java) · [设置接口测试](../../backend/src/test/java/com/company/policy/controller/PolicyReviewSettingsControllerTest.java) · [采购办理测试](../../backend/src/test/java/com/company/policy/controller/PolicyPurchaseReviewTest.java)
 
-2026-11-23 后端 `mvn verify` 构建及格式检查通过。293 项测试中 291 项通过，2 项外部环境测试跳过。两份空库基线逐字节相同，均定义 22 张表，增量脚本内的七张新表与空库基线定义一致。目标库升级结果及真实飞书投递仍待对应环境验证。
+2026-11-23 后端 `mvn verify` 构建及格式检查通过。293 项测试中 291 项通过，2 项外部环境测试跳过。当时的两份空库基线逐字节相同，均定义 22 张表，增量脚本内的七张新表与当时基线定义一致。该次验收未覆盖目标 MySQL 或真实飞书投递。

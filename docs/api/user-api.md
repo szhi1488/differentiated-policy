@@ -211,6 +211,7 @@ id 为本地用户正整数 ID，范围与详情接口一致。须有当前应�
 | 403 | USER_SCOPE_DENIED | 已核验账号不属于配置的公司 |
 | 403 | REQUEST_ORIGIN_DENIED | 写请求缺少可信 Origin 或 X-Policy-Request 请求头 |
 | 404 | USER_NOT_FOUND | 目标不存在或不在当前公司可见范围，统一响应 |
+| 409 | USER_CONFLICT | 读取用户信息时遇到数据库锁冲突，可稍后重试 |
 | 409 | USER_ROLE_CONFLICT | 角色／状态旧值不匹配、条件更新未命中，或写入锁冲突 |
 | 409 | USER_ROLE_SELF_FORBIDDEN | 试图调整自己的角色 |
 | 409 | USER_STATUS_CONFLICT | 启停操作的角色／状态旧值不匹配、条件更新未命中或锁冲突 |
@@ -239,7 +240,7 @@ id 为本地用户正整数 ID，范围与详情接口一致。须有当前应�
 
 ## 目标环境联调
 
-- 已有项目库由用户在 Navicat 整份执行平台分工统一升级脚本，核对完成状态和分工行数后，再验证同一渠道平台的并发分配、公司隔离及事务回滚。[升级与核对](../sql/database-design.md#已有库升级申请人平台分工)
+- 目标库按 `user_platform_assignment` 的唯一约束核对同渠道平台分配，并验证并发分配、公司隔离及事务回滚。[平台分工表](../sql/database-design.md#user_platform_assignment)
 - 真实飞书会话待验证停用期间的登录及旧会话访问限制、重新启用后的登录，以及按当前角色进入工作台。
 
 ## 负责平台

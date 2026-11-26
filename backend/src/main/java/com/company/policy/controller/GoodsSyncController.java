@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.GoodsSyncRequest;
 import com.company.policy.service.GoodsSyncService;
 import com.company.policy.service.LoginSessionService;
@@ -16,8 +15,6 @@ import jakarta.validation.Valid;
 import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,7 +23,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -100,11 +96,5 @@ public class GoodsSyncController {
             HttpServletRequest request) {
         return service.sources(
                 sessions.requireLogin(request).user(), brandName, keyword, createdDate, page, size);
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("INVALID_REQUEST", "任务 ID、建档日或分页参数无效。"));
     }
 }

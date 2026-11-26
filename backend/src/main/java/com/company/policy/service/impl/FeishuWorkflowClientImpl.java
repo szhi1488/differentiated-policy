@@ -99,18 +99,7 @@ public class FeishuWorkflowClientImpl implements FeishuWorkflowClient {
             List<String> mentionOpenIds,
             String idempotencyKey,
             Runnable beforePost) {
-        return sendGroupWithDetail(chatId, summary, mentionOpenIds, "", idempotencyKey, beforePost);
-    }
-
-    @Override
-    public String sendGroupWithDetail(
-            String chatId,
-            String summary,
-            List<String> mentionOpenIds,
-            String detailsUrl,
-            String idempotencyKey,
-            Runnable beforePost) {
-        var content = FeishuGroupPost.content(json, summary, mentionOpenIds, detailsUrl);
+        var content = FeishuGroupPost.content(json, summary, mentionOpenIds);
         if (!mentionOpenIds.isEmpty()) verifyGroupMembers(chatId, mentionOpenIds);
         return sendMessage("chat_id", chatId, "post", content, idempotencyKey, beforePost);
     }

@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.common.exception.ApiException;
 import com.company.policy.dto.CatalogGoodsQuery;
 import com.company.policy.dto.CatalogGoodsQuery.Configuration;
@@ -16,13 +15,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/catalog")
@@ -111,11 +107,5 @@ public class ApplicantCatalogController {
         } catch (IllegalArgumentException error) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "CATALOG_INVALID_FILTER", "商品配置筛选参数无效。");
         }
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_INVALID_FILTER", "商品查询参数无效。"));
     }
 }

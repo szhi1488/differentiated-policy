@@ -21,7 +21,7 @@ final class FeishuGroupPost {
             String summary,
             List<String> mentionOpenIds,
             String uuid) {
-        var content = content(json, summary, mentionOpenIds, "");
+        var content = content(json, summary, mentionOpenIds);
         try {
             return json.writeValueAsBytes(messageRequest(chatId, "post", content, uuid)).length
                     <= MAX_MESSAGE_BYTES;
@@ -30,8 +30,7 @@ final class FeishuGroupPost {
         }
     }
 
-    static JsonNode content(
-            ObjectMapper json, String summary, List<String> mentionOpenIds, String detailsUrl) {
+    static JsonNode content(ObjectMapper json, String summary, List<String> mentionOpenIds) {
         var content = json.createObjectNode();
         var rows = content.putObject("zh_cn").putArray("content");
         for (String section : summary.split("\n\n(?=【)", -1))
@@ -42,12 +41,6 @@ final class FeishuGroupPost {
                 people.addObject().put("tag", "at").put("user_id", id);
             }
         }
-        if (!detailsUrl.isEmpty())
-            rows.addArray()
-                    .addObject()
-                    .put("tag", "a")
-                    .put("text", "查看本轮政策")
-                    .put("href", detailsUrl);
         return content;
     }
 

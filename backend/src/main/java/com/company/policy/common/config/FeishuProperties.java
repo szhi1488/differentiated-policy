@@ -19,7 +19,6 @@ public class FeishuProperties {
     private String appSecret = "";
     private List<String> allowedOrigins = new ArrayList<>();
     private String policyChatId = "";
-    private String policyErpUrl = "";
     private PolicyCallbackMode policyCallbackMode = PolicyCallbackMode.HTTP;
 
     public enum PolicyCallbackMode {

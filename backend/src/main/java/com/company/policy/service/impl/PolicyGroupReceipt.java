@@ -63,7 +63,7 @@ final class PolicyGroupReceipt {
         }
         String url = "";
         if (nextRow < rows.size()) {
-            // 改期通知和已有群公告按首次发送的详情链接核对指纹。
+            // 已发送的历史群消息须按首次发送时的详情链接核对指纹。
             var linkRow = rows.path(nextRow++);
             var link = linkRow.path(0);
             url = link.path("href").asText("");

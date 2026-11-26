@@ -259,7 +259,6 @@ class PolicyDeliveryRecoveryImpl implements PolicyDeliveryRecovery {
         String label =
                 switch (body.path("kind").asText()) {
                     case "START" -> "开始执行";
-                    case "NEAR" -> "临期（旧群提醒）";
                     case ExecutionNotices.EXPIRY_REMINDER ->
                             "原申请人临期提醒 " + body.path("reminderDate").asText();
                     case "END" -> "截止";

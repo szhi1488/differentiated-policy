@@ -54,8 +54,30 @@ class PolicySnapshotCodecTest {
         ((com.fasterxml.jackson.databind.node.ObjectNode) stored.path("form"))
                 .put("sceneType", "LOCAL_SUB")
                 .put("otherExplanation", "附加说明");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) stored)
+                .put("sourcePolicyCode", "ZC-000001");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) stored.at("/form/goodsForm"))
+                .putObject("timeAdjustment")
+                .put("reason", "不属于本轮随单调整");
         var codec = new PolicySnapshotCodec();
         var detail = codec.read(stored.toString());
         assertThat(json.readTree(codec.write(detail))).isEqualTo(original);
+    }
+
+    @Test
+    void pendingAdjustmentUsesTheOriginalPolicyAndItsApprovedRound() {
+        var stored =
+                """
+                [
+                  {"target":{"policyId":"5","auditLogId":"9","executionPolicyId":"7","executionAuditLogId":"8"},"reason":"本轮原单"},
+                  {"target":{"policyId":"5","auditLogId":"8"},"reason":"不同轮次"},
+                  {"target":{"policyId":"7","auditLogId":"9"},"reason":"不同原单"}
+                ]
+                """;
+        var codec = new PolicySnapshotCodec();
+        assertThat(codec.readEndAdjustments(stored, 5, 9))
+                .singleElement()
+                .satisfies(change -> assertThat(change.reason()).isEqualTo("本轮原单"));
+        assertThat(codec.readEndAdjustments(stored, 7, 8)).isEmpty();
     }
 }

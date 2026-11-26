@@ -9,10 +9,6 @@ public final class PolicyScenes {
 
     private PolicyScenes() {}
 
-    public static String single(List<String> scenes) {
-        return scenes != null && scenes.size() == 1 ? scenes.get(0) : null;
-    }
-
     public static List<String> read(ObjectMapper json, String stored) {
         if (stored == null) return null;
         try {

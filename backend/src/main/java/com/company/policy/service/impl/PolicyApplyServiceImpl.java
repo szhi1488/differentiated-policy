@@ -433,21 +433,13 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         validateFilter(query.perspective(), PERSPECTIVES, "渠道");
         validateFilter(query.platformCode(), PolicyFormValidation.RETAIL, "平台");
         long total = policies.countMine(owner.getTenantKey(), owner.getId(), query);
-        var applicant = new PolicyApply();
-        applicant.setApplicantId(owner.getId());
-        applicant.setTenantKey(owner.getTenantKey());
-        var options = new HashMap<String, PolicyApplicability.AdjustmentOption>();
-        if (offset < total) {
-            for (var option : coverage.adjustableFor(applicant, now()))
-                options.put(option.target().policyId(), option);
-        }
         var items =
                 offset >= total
                         ? List.<Summary>of()
                         : policies
                                 .listMine(owner.getTenantKey(), owner.getId(), query, offset)
                                 .stream()
-                                .map(entry -> summary(entry, options.get(entry.getId().toString())))
+                                .map(this::summary)
                                 .toList();
         return new Page<>(items, total, query.page(), query.pageSize());
     }
@@ -481,8 +473,7 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
         return new AuditDetail(auditSummary(log), snapshots.read(log.getSnapshotData()));
     }
 
-    private Summary summary(PolicyApply entry, PolicyApplicability.AdjustmentOption option) {
-
+    private Summary summary(PolicyApply entry) {
         return new Summary(
                 entry.getId().toString(),
                 policyNumber(entry.getId()),
@@ -494,9 +485,6 @@ class PolicyApplyServiceImpl implements PolicyApplyService {
                 formatTime(entry.getCreatedAt()),
                 formatTime(entry.getUpdatedAt()),
                 formatTime(entry.getEndTime()),
-                option == null ? null : option.earliestEnd(),
-                option != null && option.canExtend(),
-                option != null && option.canShorten(),
                 entry.getReviewStage());
     }
 

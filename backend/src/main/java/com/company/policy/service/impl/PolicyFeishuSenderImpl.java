@@ -11,7 +11,6 @@ import com.company.policy.service.PolicyFeishuSender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.net.URI;
 import java.time.ZoneId;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -211,40 +210,16 @@ class PolicyFeishuSenderImpl implements PolicyFeishuSender {
     private String sendNotice(Delivery item) {
         var content = noticeContent(item);
         String chat = feishu.getPolicyChatId();
-        String url = adjustmentDetails(item.payload());
-        Runnable beforePost =
+        return client.sendGroup(
+                chat,
+                content.summary(),
+                content.openIds(),
+                item.idempotencyKey(),
                 () -> {
                     if (!content.equals(noticeContent(item)))
                         throw new Failure(Kind.RETRYABLE, "业务情况或收件人已变化，重新核对。");
-                    prepare(item, chat, List.of(content.summary(), content.openIds(), url));
-                };
-        if (url.isEmpty())
-            return client.sendGroup(
-                    chat, content.summary(), content.openIds(), item.idempotencyKey(), beforePost);
-        return client.sendGroupWithDetail(
-                chat, content.summary(), content.openIds(), url, item.idempotencyKey(), beforePost);
-    }
-
-    private String adjustmentDetails(JsonNode payload) {
-        if (!payload.has("changeId") || !StringUtils.hasText(feishu.getPolicyErpUrl())) return "";
-        var configured = feishu.getPolicyErpUrl().strip();
-        try {
-            URI uri = URI.create(configured);
-            if ((!"https".equalsIgnoreCase(uri.getScheme())
-                            && !"http".equalsIgnoreCase(uri.getScheme()))
-                    || uri.getHost() == null
-                    || uri.getUserInfo() != null
-                    || uri.getRawQuery() != null
-                    || uri.getRawFragment() != null) throw new IllegalArgumentException();
-            return configured
-                    + (configured.endsWith("/") ? "" : "/")
-                    + "#/reviews/"
-                    + payload.path("policy").asLong()
-                    + "?round="
-                    + payload.path("version").asInt();
-        } catch (IllegalArgumentException invalid) {
-            throw failed("请核对 FEISHU_POLICY_ERP_URL 的前端根地址后重试改期通知。");
-        }
+                    prepare(item, chat, List.of(content.summary(), content.openIds(), ""));
+                });
     }
 
     private String sendExpiryReminder(Delivery item) {

@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.ChannelPlatform;
 import com.company.policy.dto.PolicyDraftRequest;
 import com.company.policy.dto.PolicyDraftRequest.Submission;
@@ -25,15 +24,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDate;
 import java.util.List;
-import org.springframework.dao.DataAccessException;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,7 +38,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/policies")
@@ -235,23 +228,5 @@ public class PolicyApplyController {
     public AuditDetail auditDetail(
             @PathVariable long id, @PathVariable long logId, HttpServletRequest request) {
         return policies.auditDetail(sessions.requireLogin(request).user(), id, logId);
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("POLICY_VALIDATION_FAILED", "申请、审核记录 ID 或分页参数格式无效。"));
-    }
-
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ResponseEntity<ApiError> concurrentChange() {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ApiError("POLICY_VERSION_CONFLICT", "申请或商品正在更新，请保留输入并稍后重试。"));
-    }
-
-    @ExceptionHandler({DataAccessException.class, TransactionException.class})
-    ResponseEntity<ApiError> storageUnavailable() {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ApiError("POLICY_STORAGE_UNAVAILABLE", "政策存储暂不可用，请稍后重试。"));
     }
 }

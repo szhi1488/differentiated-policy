@@ -80,7 +80,6 @@ public final class PolicySnapshotCodec {
                         storeForm(snapshot.form()),
                         map(snapshot.goods(), PolicySnapshotCodec::storeGoods),
                         snapshot.consent(),
-                        snapshot.sourcePolicyCode(),
                         snapshot.wholeConfigurationSelection());
         try {
             return json.writeValueAsString(stored);
@@ -89,29 +88,20 @@ public final class PolicySnapshotCodec {
         }
     }
 
-    public List<EndAdjustment> readEndAdjustments(String value, Long targetId, Long targetAuditId) {
+    public List<EndAdjustment> readEndAdjustments(String value, long targetId, long targetAuditId) {
         try {
-            if (targetId == null)
-                return json.readValue(
-                        value, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            String policyId = Long.toString(targetId);
+            String auditId = Long.toString(targetAuditId);
             var matched = new ArrayList<EndAdjustment>();
             for (var item : json.readTree(value)) {
                 var target = item.path("target");
-                var policy =
-                        target.hasNonNull("executionPolicyId")
-                                ? target.get("executionPolicyId")
-                                : target.path("policyId");
-                var audit =
-                        target.hasNonNull("executionAuditLogId")
-                                ? target.get("executionAuditLogId")
-                                : target.path("auditLogId");
-                if (targetId.toString().equals(policy.textValue())
-                        && targetAuditId.toString().equals(audit.textValue()))
+                if (policyId.equals(target.path("policyId").textValue())
+                        && auditId.equals(target.path("auditLogId").textValue()))
                     matched.add(json.treeToValue(item, EndAdjustment.class));
             }
             return matched;
         } catch (JsonProcessingException error) {
-            throw new IllegalStateException("无法读取已通过的整单提前结束记录。", error);
+            throw new IllegalStateException("无法读取随单时间调整。", error);
         }
     }
 
@@ -133,7 +123,7 @@ public final class PolicySnapshotCodec {
                     readForm(stored.form()),
                     map(stored.goods(), PolicySnapshotCodec::readGoods),
                     stored.consent(),
-                    stored.sourcePolicyCode(),
+                    null,
                     stored.wholeConfigurationSelection());
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("无法读取政策提交快照。", error);
@@ -190,16 +180,14 @@ public final class PolicySnapshotCodec {
         if (value == null) {
             return null;
         }
-        return new PolicySnapshotData.GoodsForm(
-                map(value.cards(), PolicySnapshotCodec::storeCard), value.timeAdjustment());
+        return new PolicySnapshotData.GoodsForm(map(value.cards(), PolicySnapshotCodec::storeCard));
     }
 
     private static PolicyDraftRequest.GoodsForm readGoodsForm(PolicySnapshotData.GoodsForm value) {
         if (value == null) {
             return null;
         }
-        return new PolicyDraftRequest.GoodsForm(
-                map(value.cards(), PolicySnapshotCodec::readCard), value.timeAdjustment());
+        return new PolicyDraftRequest.GoodsForm(map(value.cards(), PolicySnapshotCodec::readCard));
     }
 
     private static PolicySnapshotData.Card storeCard(PolicyDraftRequest.Card value) {

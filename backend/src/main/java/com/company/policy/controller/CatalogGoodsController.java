@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.CatalogGoodsQuery;
 import com.company.policy.dto.CatalogGoodsUpdate;
 import com.company.policy.dto.CatalogGoodsWrite;
@@ -15,11 +14,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,7 +25,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/admin/catalog/goods")
@@ -135,17 +130,5 @@ public class CatalogGoodsController {
     @ApiResponse(responseCode = "404", description = "商品不存在")
     public CatalogGoodsResponse detail(@PathVariable long id, HttpServletRequest request) {
         return goods.detail(sessions.requireLogin(request).user(), id);
-    }
-
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_INVALID_FILTER", "商品 ID、状态或分页参数无效。"));
-    }
-
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ResponseEntity<ApiError> concurrentChange() {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ApiError("CATALOG_GOODS_CHANGED", "商品目录正在更新，请稍后重试。"));
     }
 }

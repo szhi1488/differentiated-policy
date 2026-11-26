@@ -41,7 +41,7 @@ function duplicateProductColors(tracks) {
   return duplicates
 }
 
-function trackHistory(track, trackId, asOf, duplicateColors, configurationGoodsCount) {
+function trackHistory(track, trackId, asOf, duplicateColors) {
   const rounds = new Map()
   const products = new Map()
   for (const policy of track.policies) {
@@ -112,7 +112,7 @@ function trackHistory(track, trackId, asOf, duplicateColors, configurationGoodsC
             : '跨组叠加'
     return {
       ...scope,
-      ...timelineGoodsScope(goods, [...policies, ...excluded], configurationGoodsCount),
+      ...timelineGoodsScope(goods, [...policies, ...excluded]),
       startAt,
       endAt,
       open: segment.endAt === null,
@@ -141,9 +141,6 @@ export function readTimelineHistory(response) {
   const asOf = beijingTime(response.asOf)
   const declarations = []
   const segments = []
-  if (!Number.isInteger(response.configurationGoodsCount) || response.configurationGoodsCount < 0) {
-    throw new Error('补贴历史缺少有效的配置商品总数。')
-  }
   if (
     !Array.isArray(response.tracks) ||
     response.tracks.some(
@@ -157,21 +154,13 @@ export function readTimelineHistory(response) {
     if (track.perspective === 'BILLION' && track.goodsIds.length) {
       throw new Error('百亿补贴的审核范围必须是整组配置。')
     }
-    const source = trackHistory(
-      track,
-      index,
-      asOf,
-      duplicateColors,
-      response.configurationGoodsCount,
-    )
+    const source = trackHistory(track, index, asOf, duplicateColors)
     declarations.push(...source.declarations)
     const scopeSegments =
-      track.perspective === 'BILLION'
-        ? billionDisplaySegments(source, response.configurationGoodsCount)
-        : source.segments
+      track.perspective === 'BILLION' ? billionDisplaySegments(source) : source.segments
     segments.push(...scopeSegments)
   }
-  const rows = policyTimelineRows(declarations, segments, response.configurationGoodsCount)
+  const rows = policyTimelineRows(declarations, segments)
   return { asOf, rows, segments }
 }
 

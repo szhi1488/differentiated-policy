@@ -1,6 +1,5 @@
 package com.company.policy.controller;
 
-import com.company.policy.common.api.ApiError;
 import com.company.policy.dto.CatalogCleaningRequest.Retry;
 import com.company.policy.dto.CatalogCleaningRequest.Review;
 import com.company.policy.dto.CatalogCleaningRequest.Start;
@@ -21,8 +20,6 @@ import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.MissingServletRequestParameterException;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,7 +28,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -155,14 +151,5 @@ public class CatalogCleaningController {
             @PathVariable long id, @Valid @RequestBody Retry body, HttpServletRequest request) {
         return service.retrySource(
                 sessions.requireLogin(request).user(), id, body.recordVersion(), body.requestKey());
-    }
-
-    @ExceptionHandler({
-        MethodArgumentTypeMismatchException.class,
-        MissingServletRequestParameterException.class
-    })
-    ResponseEntity<ApiError> invalidParameter() {
-        return ResponseEntity.badRequest()
-                .body(new ApiError("CATALOG_CLEAN_INVALID_REQUEST", "请检查品牌、ID、日期、状态和分页参数。"));
     }
 }

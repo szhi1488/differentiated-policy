@@ -2,7 +2,7 @@ import { timelineGoodsScope } from './subsidy-timeline'
 import { subsidySignature } from './policy-coverage'
 
 // 百亿各商品共用该配置的审核决定，明细仍可分别核对每一组商品的原单分配。
-export function billionDisplaySegments(source, configurationGoodsCount) {
+export function billionDisplaySegments(source) {
   const result = []
   for (const segment of source.segments) {
     const products = new Map()
@@ -33,7 +33,7 @@ export function billionDisplaySegments(source, configurationGoodsCount) {
       groups.set('', { goods: [], plans: unspecified })
     }
     for (const { goods, plans } of groups.values()) {
-      const scope = timelineGoodsScope(goods, plans, configurationGoodsCount)
+      const scope = timelineGoodsScope(goods, plans)
       result.push({
         ...segment,
         ...scope,

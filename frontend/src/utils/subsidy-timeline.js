@@ -32,19 +32,13 @@ export function timelinePartStatus(part) {
   return part.status ?? (part.mixed ? '部分采用' : part.used ? '采用' : '未采用')
 }
 
-// 新普通卡以当轮确认的商品总数和申报 ID 为准；早期普通卡按原有目录口径识别。
-export function timelineGoodsScope(goods, plans, configurationGoodsCount) {
+// 以获批轮次冻结的件数和商品 ID 核对整组。
+export function timelineGoodsScope(goods, plans) {
   const fullConfiguration =
     goods.length > 0 &&
     plans.length > 0 &&
     plans.every((plan) => {
-      if (plan.cardType !== 'COMMON') {
-        return false
-      }
-      if (plan.wholeConfigurationGoodsCount === null) {
-        return goods.length === configurationGoodsCount
-      }
-      if (goods.length !== plan.wholeConfigurationGoodsCount) {
+      if (plan.cardType !== 'COMMON' || goods.length !== plan.wholeConfigurationGoodsCount) {
         return false
       }
       const declared = new Set(plan.goods.map((g) => g.id))
@@ -79,12 +73,6 @@ export function timelinePlanDetail(segment) {
     return `补贴上限：${amount}`
   }
   return `计算基数：${PRICE_BASE_LABELS[segment.priceBase] ?? '未填写'}`
-}
-
-export function timelinePlanCaption(segment) {
-  return segment.subsidyMode === 'RATIO'
-    ? `${timelineDecimal(segment.ratio)}% · ${PRICE_BASE_LABELS[segment.priceBase] ?? '基数未填写'}`
-    : timelinePlanText(segment)
 }
 
 /** 时点按左闭右开区间匹配。 */

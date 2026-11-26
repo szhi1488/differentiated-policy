@@ -25,9 +25,6 @@ public record PolicyResponse(
             String createdAt,
             String updatedAt,
             String endTime,
-            String earliestEnd,
-            boolean canExtend,
-            boolean canShorten,
             String reviewStage) {}
 
     public record Detail(

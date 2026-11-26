@@ -6,7 +6,6 @@
   display: grid;
   gap: 16px;
   min-width: 0;
-  --subsidy-muted: #71819a;
   --subsidy-line: #e2eaf5;
 }
 .model-subsidy-header {
@@ -222,14 +221,6 @@
   margin: 0;
   color: #344c69;
   font-variant-numeric: tabular-nums;
-}
-.model-subsidy-decision-note {
-  border-left: 2px solid #8cace1;
-  padding-left: 9px;
-  margin: 12px 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: #536981;
 }
 .model-subsidy-source-heading,
 .model-subsidy-upcoming h3 {
